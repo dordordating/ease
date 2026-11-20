@@ -40,7 +40,8 @@ const enginePicker = `
 
 export function renderTranslator(container, {
   locale, t, icon, settingsButton, preferences: initialPreferences, folders: initialFolders = [],
-  accountId: initialAccountId = null, draft = {}, onPreferences, onCopy, onSave, onFlashcard, onShortcut, onSignIn
+  accountId: initialAccountId = null, historyEnabled: initialHistoryEnabled = false,
+  draft = {}, onPreferences, onCopy, onSave, onFlashcard, onShortcut, onSignIn, onHistory, onHistoryToggle
 }) {
   const names = new Intl.DisplayNames([locale], { type: "language" });
   const numbers = new Intl.NumberFormat(locale);
@@ -52,6 +53,8 @@ export function renderTranslator(container, {
   if (!translatorEngines.includes(preferences.engine)) preferences.engine = defaultTranslator.engine;
   let folders = initialFolders;
   let accountId = initialAccountId;
+  let historyEnabled = initialHistoryEnabled;
+  let writingHistory = false;
   let needsCloudSignIn = false;
   let signingIn = false;
   let showSettings = false;
@@ -126,6 +129,12 @@ export function renderTranslator(container, {
         <span data-label="translatorFolder"></span>
         <select class="translator-select" data-translator-folder></select>
       </label>
+      <div class="translator-inline-sites translator-history-setting" hidden>
+        <button type="button" class="secondary-button translator-inline-switch" role="switch" aria-describedby="translation-history-hint">
+          <span data-label="translationHistoryEnabled"></span><span class="translator-inline-switch-indicator" aria-hidden="true"></span>
+        </button>
+        <p id="translation-history-hint" data-label="translationHistoryHint"></p>
+      </div>
       <div class="translator-shortcut-controls" hidden>
         <p data-label="translatorShortcutHint"></p>
         <button type="button" class="secondary-button translator-shortcut">${icon("keyboard")}<span data-label="manageActivationShortcut"></span></button>
@@ -158,6 +167,8 @@ export function renderTranslator(container, {
   const layoutSelect = settingsView.querySelector("[data-translator-layout]");
   const folderSelect = settingsView.querySelector("[data-translator-folder]");
   const settingsFeedback = settingsView.querySelector("[data-translator-settings-feedback]");
+  const historySetting = settingsView.querySelector(".translator-history-setting");
+  const historySwitch = historySetting.querySelector("[role=switch]");
   const engineControls = Array.from(container.querySelectorAll("input[name=engine]"));
   const cloudDetails = Array.from(container.querySelectorAll(".translator-cloud-details"));
   const cloudSignInButtons = Array.from(container.querySelectorAll(".translator-cloud-sign-in"));
@@ -177,6 +188,7 @@ export function renderTranslator(container, {
   swapButton.title = t("translatorSwap");
   progress.setAttribute("aria-label", t("translatorPreparing"));
   settingsButton?.setAttribute("aria-controls", settingsView.id);
+  historySetting.hidden = !onHistoryToggle;
   if (onShortcut) {
     settingsView.querySelector(".translator-shortcut-controls").hidden = false;
     settingsView.querySelector(".translator-shortcut").addEventListener("click", onShortcut);
@@ -249,6 +261,8 @@ export function renderTranslator(container, {
     targetSelect.value = preferences.target;
     layoutSelect.value = preferences.layout;
     folderSelect.value = folders.some(folder => folder.id === preferences.folderId) ? preferences.folderId : "";
+    historySwitch.setAttribute("aria-checked", String(historyEnabled));
+    historySwitch.disabled = writingHistory;
 
     for (const control of engineControls) {
       control.checked = control.value === preferences.engine;
@@ -294,8 +308,10 @@ export function renderTranslator(container, {
     for (const folder of folders) folderSelect.add(new Option(folder.name, folder.id));
   }
 
-  function update({ preferences: nextPreferences, folders: nextFolders, accountId: nextAccountId } = {}) {
+  function update({ preferences: nextPreferences, folders: nextFolders, accountId: nextAccountId,
+    historyEnabled: nextHistoryEnabled } = {}) {
     if (disposed) return;
+    if (typeof nextHistoryEnabled === "boolean") historyEnabled = nextHistoryEnabled;
     if (nextPreferences) {
       const priorSource = preferences.source;
       const priorTarget = preferences.target;
@@ -387,6 +403,7 @@ export function renderTranslator(container, {
     resetResult(false);
     const opener = document.activeElement;
     const pending = new AbortController();
+    const record = historyEnabled && onHistory;
     request = pending;
     const current = () => !disposed && request === pending && !pending.signal.aborted;
     setFeedback(online() ? undefined : "translatorWorking");
@@ -419,6 +436,10 @@ export function renderTranslator(container, {
       draft.result = translated.text;
       draft.learning = translated.learning;
       if (preferences.source === "auto" && translated.source) draft.detectedSource = selectableLanguage(translated.source);
+      if (record) {
+        const entry = translationEntry(text);
+        Promise.resolve().then(() => record(entry)).catch(() => {});
+      }
       showOriginal = false;
       setFeedback();
       return true;
@@ -448,6 +469,13 @@ export function renderTranslator(container, {
     setText(typeof text === "string" ? text : "");
     if (auto) return translate();
     return validText(input.value);
+  }
+
+  function translationEntry(text = input.value) {
+    return {
+      text, translation: draft.result, source: sourceLanguage(), target: preferences.target,
+      engine: preferences.engine, learning: draft.learning, notesLanguage: locale
+    };
   }
 
   async function useResult(action) {
@@ -517,6 +545,22 @@ export function renderTranslator(container, {
   for (const button of cloudSignInButtons) button.addEventListener("click", signIn);
   layoutSelect.addEventListener("change", () => changePreferences({ layout: layoutSelect.value }));
   folderSelect.addEventListener("change", () => changePreferences({ folderId: folderSelect.value || null }));
+  historySwitch.addEventListener("click", async () => {
+    if (writingHistory || !onHistoryToggle) return;
+    const enabled = !historyEnabled;
+    writingHistory = true;
+    setFeedback(undefined, "info", {}, settingsFeedback);
+    render();
+    try {
+      if (await onHistoryToggle(enabled)) historyEnabled = enabled;
+      else setFeedback("translationHistoryFailed", "error", {}, settingsFeedback);
+    } catch {
+      setFeedback("translationHistoryFailed", "error", {}, settingsFeedback);
+    } finally {
+      writingHistory = false;
+      if (!disposed) render();
+    }
+  });
   originalToggle.addEventListener("click", () => {
     showOriginal = !showOriginal;
     render();
@@ -535,10 +579,7 @@ export function renderTranslator(container, {
   saveButton.addEventListener("click", () => useResult("save"));
   flashcardButton.addEventListener("click", () => {
     if (!draft.result || request || writingPreferences) return;
-    onFlashcard?.({
-      text: input.value, translation: draft.result, source: sourceLanguage(), target: preferences.target,
-      learning: draft.learning, notesLanguage: locale
-    });
+    onFlashcard?.(translationEntry());
   });
 
   if (draft.engine !== preferences.engine || draft.source !== preferences.source || draft.target !== preferences.target) resetResult();

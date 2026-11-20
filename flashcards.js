@@ -64,6 +64,7 @@ export function renderFlashcards(container, {
   let view = "study";
   let showingSettings = false;
   let query = "";
+  let browseLanguage;
   let currentReview;
   let revealed = false;
   let busy = false;
@@ -135,11 +136,34 @@ export function renderFlashcards(container, {
   }
 
   function switchView(nextView) {
-    if (nextView === view) return;
+    if (nextView === view && !browseLanguage) return;
     stopSpeaking();
     view = nextView;
+    if (browseLanguage) query = "";
+    browseLanguage = undefined;
     feedback();
     render();
+  }
+
+  function browseRow(id) {
+    return Array.from(pane.querySelectorAll(".flashcards-list-row")).find((row) => row.dataset.flashcardId === id);
+  }
+
+  function openCard(id) {
+    if (disposed) return false;
+    const card = state.cards.find((item) => item.id === id);
+    if (!card) return false;
+    stopSpeaking();
+    showingSettings = false;
+    view = "browse";
+    query = "";
+    browseLanguage = card.language === state.language ? undefined : card.language;
+    feedback();
+    render();
+    const row = browseRow(id);
+    row?.focus({ preventScroll: true });
+    row?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    return Boolean(row);
   }
 
   function reflectSettings() {
@@ -347,8 +371,10 @@ export function renderFlashcards(container, {
   }
 
   function showBrowse(cards) {
+    if (browseLanguage) pane.append(element("p", "flashcards-direction", names.of(browseLanguage)));
     if (!cards.length) {
-      pane.append(emptyState("flashcardsEmpty", "flashcardsEmptyHint", true));
+      if (browseLanguage) pane.append(element("p", "flashcards-no-results", t("flashcardsBrowseEmpty")));
+      else pane.append(emptyState("flashcardsEmpty", "flashcardsEmptyHint", true));
       return;
     }
     const filter = element("input", "flashcards-filter");
@@ -366,6 +392,8 @@ export function renderFlashcards(container, {
         .some(text => text && normalize(text).includes(needle)));
       list.replaceChildren(...matches.map(card => {
         const row = element("li", "flashcards-list-row");
+        row.dataset.flashcardId = card.id;
+        row.tabIndex = -1;
         const copy = element("div", "flashcards-list-text");
         const term = textInLanguage(element("strong", undefined, card.term), card.language);
         term.id = `flashcard-term-${card.id}`;
@@ -440,7 +468,8 @@ export function renderFlashcards(container, {
     pronunciation = undefined;
     module.hidden = showingSettings;
     settingsView.hidden = !showingSettings;
-    if (addButton) addButton.hidden = showingSettings;
+    languageField.hidden = Boolean(browseLanguage);
+    if (addButton) addButton.hidden = showingSettings || Boolean(browseLanguage);
     reflectSettings();
     if (showingSettings) {
       if (!settingsPane.childElementCount) renderSettingsForm();
@@ -450,10 +479,11 @@ export function renderFlashcards(container, {
     }
     module.append(status);
     const focusedFilter = pane.querySelector(".flashcards-filter:focus");
+    const focusedCard = pane.querySelector(".flashcards-list-row:focus")?.dataset.flashcardId;
     const selection = focusedFilter && [focusedFilter.selectionStart, focusedFilter.selectionEnd];
     language.value = state.language;
     for (const [name, control] of Object.entries(nav)) control.setAttribute("aria-pressed", String(name === view));
-    const cards = state.cards.filter(card => card.language === state.language);
+    const cards = state.cards.filter(card => card.language === (browseLanguage ?? state.language));
     pane.replaceChildren();
     if (view === "browse") showBrowse(cards);
     else showStudy(cards);
@@ -463,15 +493,18 @@ export function renderFlashcards(container, {
       nextFilter.focus({ preventScroll: true });
       nextFilter.setSelectionRange(...selection);
     }
+    if (focusedCard) browseRow(focusedCard)?.focus({ preventScroll: true });
   }
 
   synthesis?.addEventListener("voiceschanged", updatePronunciation);
   render();
   return {
+    openCard,
     update({ state: nextState }) {
       if (disposed || nextState === state) return;
       if (nextState.language !== state.language) {
         query = "";
+        browseLanguage = undefined;
         stopSpeaking();
       }
       state = nextState;

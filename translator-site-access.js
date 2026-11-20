@@ -1,6 +1,7 @@
 import { handleEaseTranslationMessage, maxOnlineTranslationLength } from "./ease-api.js";
 import { isRtl, translate } from "./locales.js";
 import { maxTranslationLength, translatorLanguages } from "./translator-engine.js";
+import { readTranslationHistory, recordTranslationHistory } from "./translation-history-store.js";
 import { defaultTranslator, readWorkspace, translatorEngines } from "./workspace-data.js";
 
 const legacyScriptPrefix = "ease-translator-site-";
@@ -10,6 +11,7 @@ const httpsPattern = "https://*/*";
 const httpsPermission = { origins: [httpsPattern] };
 const inlineSettingsMessage = "ease-translator-inline-settings";
 const inlineOnlineMessage = "ease-translator-inline-online";
+const inlineHistoryMessage = "ease-translator-inline-history";
 const requestIdPattern = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu;
 const inlineLabels = [
   "translatorRun", "translatorChrome", "translatorEconomy", "translatorStandard", "translatorPremium",
@@ -143,9 +145,43 @@ async function activeSiteSettings(sender, page) {
   const limit = new Intl.NumberFormat(locale).format(engine === "chrome" ? maxTranslationLength : maxOnlineTranslationLength);
   return {
     ...settings,
+    historyEnabled: engine === "chrome" && await historyEnabled(),
     dir: isRtl(locale) ? "rtl" : "ltr",
     strings: Object.fromEntries(inlineLabels.map((label) => [label, translate(locale, label, { limit })]))
   };
+}
+
+async function historyEnabled() {
+  try {
+    return (await readTranslationHistory()).enabled;
+  } catch {
+    return false;
+  }
+}
+
+function sameSettings(latest, expected) {
+  return latest?.engine === expected.engine && latest.source === expected.source
+    && latest.target === expected.target && latest.locale === expected.locale;
+}
+
+function recordResult(text, translated, settings, isCurrent) {
+  const source = settings.source === "auto" ? translated.source : settings.source;
+  if (typeof source === "string" && source.toLowerCase() === settings.target.toLowerCase()) return;
+  return recordTranslationHistory({
+    text, translation: translated.text, source, target: settings.target, engine: settings.engine,
+    learning: translated.learning, notesLanguage: settings.locale
+  }, { isCurrent });
+}
+
+async function handleInlineHistory(message, sender, page) {
+  if (typeof sender.documentId !== "string" || !sender.documentId) return;
+  const settings = await activeSitePreferences(sender, page);
+  const expected = message.settings;
+  if (settings?.engine !== "chrome" || !expected
+    || settings.source !== expected.source || settings.target !== expected.target || settings.locale !== expected.locale) return;
+  await recordResult(message.text, { text: message.translation, source: message.source }, settings, async () => (
+    sameSettings(await activeSitePreferences(sender, page), settings)
+  ));
 }
 
 function cancelInlineRequest(pending) {
@@ -188,16 +224,26 @@ function handleInlineOnline(message, sender, page, respond) {
     if (!settings || settings.engine === "chrome" || pending.cancelled) {
       return { ok: false, code: "translatorOnlineUnavailable" };
     }
+    const saveHistory = await historyEnabled();
+    if (pending.cancelled) return { ok: false, code: "translatorOnlineUnavailable" };
     pending.started = true;
     const answer = await new Promise((resolve) => handleEaseTranslationMessage({
       requestId: pending.id, text, source: settings.source, target: settings.target, engine: settings.engine
     }, resolve));
     const latest = await activeSitePreferences(sender, page);
-    if (pending.cancelled || !latest
-      || latest.engine !== settings.engine || latest.source !== settings.source || latest.target !== settings.target) {
+    if (pending.cancelled || !sameSettings(latest, settings)) {
       return { ok: false, code: "translatorOnlineUnavailable" };
     }
-    if (answer?.ok && typeof answer.result?.text === "string") return { ok: true, text: answer.result.text };
+    if (answer?.ok && typeof answer.result?.text === "string") {
+      if (saveHistory) {
+        await Promise.resolve(recordResult(text, answer.result, settings, async () => {
+          const current = await activeSitePreferences(sender, page);
+          return !pending.cancelled && sameSettings(current, settings);
+        })).catch(() => {});
+      }
+      if (pending.cancelled) return { ok: false, code: "translatorOnlineUnavailable" };
+      return { ok: true, text: answer.result.text };
+    }
     const code = onlineErrorKeys.has(answer?.code) ? answer.code : "translatorFailed";
     return { ok: false, code };
   }
@@ -216,10 +262,14 @@ export function registerTranslatorSiteHandlers() {
     if (change.status === "loading") cancelInlineTab(tabId);
   });
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
-    if (message?.type !== inlineSettingsMessage && message?.type !== inlineOnlineMessage) return;
+    if (message?.type !== inlineSettingsMessage && message?.type !== inlineOnlineMessage && message?.type !== inlineHistoryMessage) return;
     const page = contentSenderPage(sender);
     if (!page) return;
     if (message.type === inlineOnlineMessage) return handleInlineOnline(message, sender, page, respond);
+    if (message.type === inlineHistoryMessage) {
+      handleInlineHistory(message, sender, page).then(() => respond({ ok: true }), () => respond({ ok: false }));
+      return true;
+    }
     activeSiteSettings(sender, page).then((settings) => respond({ settings }), () => respond({ settings: null }));
     return true;
   });

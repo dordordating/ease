@@ -5,6 +5,7 @@
 
   const editableSelector = "input, textarea, select, [role='textbox'], [role='searchbox'], [contenteditable]:not([contenteditable='false' i])";
   const onlineMessage = "ease-translator-inline-online";
+  const historyMessage = "ease-translator-inline-history";
   const engineLabels = {
     chrome: "translatorChrome", economy: "translatorEconomy", standard: "translatorStandard", premium: "translatorPremium"
   };
@@ -148,6 +149,18 @@
   function loadEngine() {
     engine ??= import(chrome.runtime.getURL("translator-engine.js"));
     return engine;
+  }
+
+  function recordHistory(job, translated) {
+    const { source, target, locale } = job.settings;
+    if (job.settings.historyEnabled !== true || typeof translated.text !== "string" || !translated.text.trim()) return;
+    Promise.resolve().then(() => chrome.runtime.sendMessage({
+      type: historyMessage,
+      text: job.sample.text,
+      translation: translated.text,
+      source: translated.source,
+      settings: { source, target, locale }
+    })).catch(() => {});
   }
 
   async function translateOnline(text, signal) {
@@ -328,7 +341,8 @@
     };
     try {
       let translated;
-      if (job.settings.engine && job.settings.engine !== "chrome") {
+      const online = job.settings.engine && job.settings.engine !== "chrome";
+      if (online) {
         translated = await translateOnline(job.sample.text, controller.signal);
       } else {
         const { chromeTranslate } = await loadEngine();
@@ -346,6 +360,7 @@
       job.status.hidden = true;
       job.result.textContent = translated.text;
       job.result.hidden = false;
+      if (!online) recordHistory(job, translated);
     } catch (error) {
       if (current !== job || controller.signal.aborted || error?.name === "AbortError") return;
       const code = error?.code ?? "translatorFailed";

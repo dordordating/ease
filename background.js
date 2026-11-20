@@ -10,6 +10,7 @@ import { translatorLanguages } from "./translator-engine.js";
 import { easeTranslationMessage, handleEaseTranslationMessage } from "./ease-api.js";
 import { changeFlashcardPreferences, FlashcardError, removeFlashcard, reviewFlashcard, saveFlashcard } from "./flashcard-store.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
+import { registerTranslationHistoryHandlers } from "./translation-history-store.js";
 import { registerWorkspaceSyncHandlers } from "./workspace-sync.js";
 import {
   configureInlineTranslator, injectInlineTranslatorOnActiveTab, registerTranslatorSiteHandlers,
@@ -27,6 +28,7 @@ import {
 let pendingWrite = Promise.resolve();
 registerGoogleProviderHandlers();
 registerTranslatorSelectionHandlers();
+registerTranslationHistoryHandlers();
 registerTranslatorSiteHandlers();
 registerCalendarReminderHandlers();
 registerWorkspaceSyncHandlers(queueWorkspace);

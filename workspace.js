@@ -5,6 +5,9 @@ import { flashcardFieldLimits } from "./flashcard-store.js";
 import { translatorLanguages } from "./translator-engine.js";
 import { takeTranslatorSelection, translatorSelectionKey } from "./translator-selection.js";
 import { renderTranslatorSites } from "./translator-sites-ui.js";
+import { readTranslationHistory, translationHistoryKey, translationHistoryMessage } from "./translation-history-store.js";
+import { renderTranslationHistory } from "./translation-history-view.js";
+import { searchWorkspaceModules } from "./workspace-search.js";
 import { renderModuleLibrary } from "./module-library.js";
 import { workspaceSyncMessage, workspaceSyncStorageKey } from "./workspace-sync.js";
 import { renderWorkspaceSync } from "./workspace-sync-ui.js";
@@ -52,6 +55,9 @@ let calendarLocale;
 let translatorController;
 let translatorSiteController;
 let translatorLocale;
+let translatorHistoryOpen = false;
+let translatorHistoryController;
+let translationHistory = { enabled: false, entries: [] };
 let flashcardController;
 let flashcardLocale;
 const translatorDraft = {};
@@ -163,8 +169,9 @@ async function mutate(action, data, onError = reportError) {
   return false;
 }
 
-function switchTo(page, focus = true) {
+function switchTo(page, focus = true, showHistory = false) {
   activePage = page;
+  translatorHistoryOpen = page === "translate" && showHistory;
   query = "";
   search.value = "";
   render();
@@ -789,34 +796,82 @@ function sendWorkspaceSync(action, passphrase) {
   return chrome.runtime.sendMessage({ type: workspaceSyncMessage, action, ...(passphrase === undefined ? {} : { passphrase }) });
 }
 
-function searchable(text) {
-  return text.toLocaleLowerCase(workspace.locale).normalize("NFD").replace(/\p{Mark}/gu, "")
-    .replace(/ي/gu, "ی").replace(/ك/gu, "ک").replace(/\u200c/gu, " ");
-}
-
-function renderEventResults(results) {
-  const heading = node("div", "collection-heading");
-  heading.append(node("h2", "", t("calendarEvents")));
-  const list = node("div", "command-list");
+function calendarSearchSource() {
   const dateFormat = new Intl.DateTimeFormat(workspace.locale, {
     calendar: calendarSystemFor(workspace.locale, workspace.calendar?.system),
     dateStyle: "medium",
     timeZone: "UTC"
   });
-  for (const event of results) {
-    const result = node("button", "command-item search-event-result");
+  const events = calendarEvents().sort((left, right) => left.date.localeCompare(right.date)
+    || (left.start || left.end || "").localeCompare(right.start || right.end || ""));
+  return {
+    label: "calendarEvents",
+    entries: events.map((event) => {
+      const date = new Date(`${event.date}T00:00:00Z`);
+      return {
+        id: `event-result-${event.id}`,
+        title: event.title || t("calendarEventTitle"),
+        detail: Number.isFinite(date.getTime()) ? dateFormat.format(date) : event.date,
+        keywords: [event.title, event.date, event.location, event.notes],
+        open() {
+          switchTo("calendar", false);
+          calendarController?.openEvent(event.id);
+        }
+      };
+    })
+  };
+}
+
+const moduleSearchSources = {
+  clipboard: () => ({
+    label: "snippets",
+    entries: workspace.snippets.filter(snippetReadable).map((snippet) => ({
+      snippet, keywords: [snippet.title, snippet.text, folderFor(snippet.folderId)?.name]
+    })),
+    render: (entries) => snippetList(t("snippets"), entries.map(({ snippet }) => snippet), true)
+  }),
+  calendar: calendarSearchSource,
+  translate: () => ({
+    label: "translationHistory", icon: "history",
+    entries: translationHistory.entries.map((entry) => ({
+      id: `history-result-${entry.id}`, title: entry.translation, detail: entry.text,
+      keywords: [entry.text, entry.translation, entry.learning?.usage, entry.learning?.example, entry.learning?.exampleTranslation],
+      open: () => openTranslationHistory(entry.id)
+    }))
+  }),
+  flashcards: () => ({
+    label: "flashcards",
+    entries: (workspace.flashcards?.cards ?? []).map((card) => ({
+      id: `flashcard-result-${card.id}`, title: card.term, detail: card.answer,
+      keywords: [card.term, card.answer, card.usage, card.example, card.exampleTranslation],
+      open() {
+        switchTo("flashcards", false);
+        flashcardController?.openCard(card.id);
+      }
+    }))
+  })
+};
+
+function renderSearchGroup({ id, label, icon: symbol, entries, render: renderEntries }) {
+  if (renderEntries) return renderEntries(entries);
+  const heading = node("div", "collection-heading");
+  heading.append(node("h2", "", t(label)));
+  const list = node("div", "command-list");
+  for (const entry of entries) {
+    const result = node("button", id === "calendar" ? "command-item search-event-result" : "command-item search-module-result");
     result.type = "button";
-    result.id = `event-result-${event.id}`;
+    if (entry.id) result.id = entry.id;
     const copy = node("span", "search-event-copy");
-    const title = node("strong", "", event.title || t("calendarEventTitle"));
+    const title = node("strong", "", entry.title);
     title.dir = "auto";
-    const date = new Date(`${event.date}T00:00:00Z`);
-    copy.append(title, node("small", "", dateFormat.format(date)));
-    result.append(glyph("calendar"), copy);
-    result.addEventListener("click", () => {
-      switchTo("calendar", false);
-      calendarController?.openEvent(event.id);
-    });
+    copy.append(title);
+    if (entry.detail) {
+      const detail = node("small", "", entry.detail);
+      detail.dir = "auto";
+      copy.append(detail);
+    }
+    result.append(glyph(entry.icon ?? symbol), copy);
+    result.addEventListener("click", entry.open);
     list.append(result);
   }
   view.append(heading, list);
@@ -824,45 +879,23 @@ function renderEventResults(results) {
 
 function renderSearch() {
   section(t("searchResults"));
-  const searchText = searchable(query);
-  const matches = (text) => searchable(text).includes(searchText);
-  const snippets = workspace.snippets.filter((snippet) => {
-    const { title, text, folderId } = snippet;
-    const folder = folderFor(folderId);
-    return snippetReadable(snippet) && matches(`${title} ${text} ${folder?.name ?? ""}`);
+  const sources = modules.filter(({ id, released }) => released && Object.hasOwn(moduleSearchSources, id))
+    .map(({ id, icon }) => ({ id, icon, ...moduleSearchSources[id]() }));
+  const commands = destinations.filter((page) => page === library || page === settings || workspace.tabs.includes(page.id))
+    .map((page) => ({ title: t(page.id), icon: page.icon, keywords: [t(page.id), translate("en", page.id)], open: () => switchTo(page.id) }));
+  commands.push({
+    title: t("newSnippet"), icon: "plus", keywords: [t("newSnippet"), translate("en", "newSnippet")],
+    open() {
+      switchTo("clipboard", false);
+      editSnippet();
+    }
   });
-  const events = workspace.tabs.includes("calendar")
-    ? calendarEvents().filter(({ title, date, location, notes }) => matches([title, date, location, notes].join(" ")))
-      .sort((left, right) => left.date.localeCompare(right.date)
-        || (left.start || left.end || "").localeCompare(right.start || right.end || ""))
-    : [];
-  const commands = destinations.filter((page) => (page === library || page === settings || workspace.tabs.includes(page.id))
-    && matches(`${t(page.id)} ${translate("en", page.id)}`));
-  const newSnippet = matches(`${t("newSnippet")} ${translate("en", "newSnippet")}`);
-  if (!snippets.length && !events.length && !commands.length && !newSnippet) {
+  const results = searchWorkspaceModules(query, workspace.locale, [...sources, { id: "commands", label: "commands", entries: commands }]);
+  if (!results.length) {
     emptyState(t("emptySearch"), t("emptySearchHint"), "search");
     return;
   }
-  if (snippets.length) snippetList(t("snippets"), snippets, true);
-  if (events.length) renderEventResults(events);
-  if (commands.length || newSnippet) {
-    const heading = node("div", "collection-heading");
-    heading.append(node("h2", "", t("commands")));
-    const list = node("div", "command-list");
-    for (const page of commands) {
-      list.append(button(t(page.id), "command-item", { symbol: page.icon, onClick: () => switchTo(page.id) }));
-    }
-    if (newSnippet) {
-      list.append(button(t("newSnippet"), "command-item", {
-        symbol: "plus",
-        onClick: () => {
-          switchTo("clipboard", false);
-          editSnippet();
-        }
-      }));
-    }
-    view.append(heading, list);
-  }
+  results.forEach(renderSearchGroup);
 }
 
 function render() {
@@ -890,13 +923,18 @@ function render() {
   labelButton(panelButton, t("openPanel"), "panel");
   labelButton(settingsButton, t("settings"), "settings");
   settingsButton.setAttribute("aria-pressed", String(activePage === "settings" && !query));
-  if (![library.id, settings.id, "translate", ...workspace.tabs].includes(activePage)) activePage = clipboard.id;
+  if (![library.id, settings.id].includes(activePage)
+    && !modules.some(({ id, released }) => released && id === activePage)) activePage = clipboard.id;
   renderTabs();
   if (!query && activePage === "calendar" && calendarController && calendarLocale === workspace.locale) {
     calendarController.update({ preferences: workspace.calendar, events: calendarEvents(), holidays: workspace.holidays });
     return;
   }
-  if (!query && activePage === "translate" && translatorController && translatorLocale === workspace.locale) {
+  if (!query && activePage === "translate" && translatorHistoryOpen && translatorHistoryController && translatorLocale === workspace.locale) {
+    translatorHistoryController.update(translationHistory);
+    return;
+  }
+  if (!query && activePage === "translate" && !translatorHistoryOpen && translatorController && translatorLocale === workspace.locale) {
     translatorController.update(translatorOptions());
     translatorSiteController?.update(inlineTranslatorEnabled());
     return;
@@ -908,6 +946,7 @@ function render() {
   translatorController?.dispose?.();
   translatorController = undefined;
   translatorSiteController = undefined;
+  translatorHistoryController = undefined;
   flashcardController?.dispose();
   flashcardController = undefined;
   calendarController = undefined;
@@ -954,10 +993,29 @@ function render() {
       }
     });
     refreshCalendarEvents();
+  } else if (activePage === "translate" && translatorHistoryOpen) {
+    const close = button(t("close"), "icon-button", { symbol: "close", iconOnly: true, onClick: () => switchTo("translate", false) });
+    close.id = "translator-history-button";
+    section(t("translationHistory"), undefined, close);
+    const body = node("div");
+    view.append(body);
+    translatorLocale = workspace.locale;
+    translatorHistoryController = renderTranslationHistory(body, {
+      locale: workspace.locale, t, icon, state: translationHistory,
+      onCopy: (entry) => copyTranslation(entry.translation),
+      onDelete: (entry) => updateTranslationHistory("remove", { id: entry.id }),
+      onFlashcard: (entry) => editFlashcard(undefined, entry)
+    });
   } else if (activePage === "translate") {
     const translatorSettings = button(t("translatorConfig"), "icon-button", { symbol: "translate-settings", iconOnly: true });
     translatorSettings.id = "translator-settings-button";
-    section(t("translate"), undefined, translatorSettings);
+    const history = button(t("translationHistory"), "icon-button", {
+      symbol: "history", iconOnly: true, onClick: () => openTranslationHistory()
+    });
+    history.id = "translator-history-button";
+    const actions = node("div", "module-title-actions");
+    actions.append(history, translatorSettings);
+    section(t("translate"), undefined, actions);
     const body = node("div");
     view.append(body);
     translatorLocale = workspace.locale;
@@ -968,6 +1026,8 @@ function render() {
       onCopy: copyTranslation,
       onSave: saveTranslation,
       onFlashcard: (translation) => editFlashcard(undefined, translation),
+      onHistory: (entry) => updateTranslationHistory("record", entry),
+      onHistoryToggle: (enabled) => updateTranslationHistory("set-enabled", { enabled }),
       onShortcut: openChromeShortcuts,
       onSignIn: signInForTranslation
     });
@@ -1012,8 +1072,25 @@ function translatorOptions() {
   return {
     preferences: { ...defaultTranslator, ...workspace.translator },
     accountId: translatorAccountId,
+    historyEnabled: translationHistory.enabled,
     folders: workspace.folders.map((folder) => ({ ...folder, locked: folderLocked(folder) }))
   };
+}
+
+function openTranslationHistory(entryId) {
+  switchTo("translate", false, true);
+  if (!entryId || !translatorHistoryController?.focus(entryId)) document.getElementById("translator-history-button")?.focus();
+}
+
+async function updateTranslationHistory(action, data) {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: translationHistoryMessage, action, data });
+    if (response?.history) return true;
+  } catch {
+    // A failed history write leaves the translation and existing records available.
+  }
+  if (action === "remove") reportError("translationHistoryFailed");
+  return false;
 }
 
 function inlineTranslatorEnabled() {
@@ -1074,7 +1151,7 @@ async function receiveTranslationSelection() {
 }
 
 function showTranslationSelection(selectedText) {
-  if (activePage !== "translate" || query) switchTo("translate", false);
+  if (activePage !== "translate" || query || translatorHistoryOpen) switchTo("translate", false);
   translatorController?.setSelection(selectedText, { auto: Boolean(selectedText.trim()) });
 }
 
@@ -1865,6 +1942,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "session" && changes[vaultSessionStorageKey]) refreshWorkspace();
   if (area === "session" && changes[translatorSelectionKey]?.newValue) receiveTranslationSelection();
   if (area !== "local") return;
+  if (changes[translationHistoryKey]) {
+    translationHistory = changes[translationHistoryKey].newValue ?? { enabled: false, entries: [] };
+    if (query || activePage === "translate") render();
+  }
   if (changes[vaultPinAttemptsStorageKey]) refreshWorkspace();
   if (changes[workspaceSyncStorageKey]) workspaceSyncRefresh?.();
   if (changes[storageKey]) refreshWorkspace({ ...defaultWorkspace, ...changes[storageKey].newValue });
@@ -1882,7 +1963,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
 if (inPanel) chrome.tabs?.onActivated?.addListener(receiveTranslationSelection);
 const initialTranslationSelection = await takeTranslatorSelection();
 if (initialTranslationSelection !== null) activePage = "translate";
-translatorAccountId = (await getGoogleAccount().catch(() => null))?.id ?? null;
+const [initialAccount, initialHistory] = await Promise.all([getGoogleAccount().catch(() => null), readTranslationHistory().catch(() => null)]);
+translatorAccountId = initialAccount?.id ?? null;
+if (initialHistory) translationHistory = initialHistory;
 await refreshWorkspace();
 workspaceInitialized = true;
 sendWorkspaceSync("wake").catch(() => {});
