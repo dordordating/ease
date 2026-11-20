@@ -20,7 +20,7 @@ Use the final release manifest as the source of truth when entering these answer
 
 | Permission | Justification |
 | --- | --- |
-| `storage` | Saves the user’s snippets, shortcut choices, appearance and language settings, local events, and optional account and calendar connection data in this browser profile. |
+| `storage` | Saves the user’s snippets, shortcut choices, appearance and language settings, local events, flashcards and study progress, and optional account and calendar connection data in this browser profile. |
 | `sidePanel` | Opens the same workspace next to the current page when the user selects the side panel control. |
 | `clipboardWrite` | Copies saved snippets, completed template text, and translations when the user chooses to copy them. |
 | `identity` | Uses Chrome’s identity API for optional Google sign-in and requests separate read-only consent for Google Calendar. |
@@ -43,7 +43,8 @@ Use this inventory to match the final ZIP to the Dashboard’s data categories, 
 | Data | Storage and transmission |
 | --- | --- |
 | Snippets and template text entered by the user | Saved in `chrome.storage.local`. Filled-in template values are used to copy the output on the user’s request. Ease writes to the system clipboard and does not collect clipboard history. Snippets are not uploaded by Ease. |
-| Translation input and results | Chrome processes on-device translations locally. For an online tier, Ease sends the translation text and language pair to its API and OpenRouter, and keeps the result in the panel unless the user saves it. The Ease database stores usage counts. Selected text can be held briefly in `chrome.storage.session` to open the translator. |
+| Translation input and results | Chrome processes on-device translations locally. For an online tier, Ease sends the translation text, language pair, and learning-notes language to its API and OpenRouter, and keeps the result in the panel unless the user saves it to a snippet or flashcard. The Ease database stores usage counts. Selected text can be held briefly in `chrome.storage.session` to open the translator. |
+| Flashcards and study progress | Saved in this browser profile. A card can include a phrase, a translation, a usage note, and an example. Review ratings determine the next study time. Pronunciation uses an available on-device speech voice. |
 | Workspace settings and locally created calendar events | Saved in `chrome.storage.local`, including event dates, times, titles, locations, and notes. This data remains in the browser profile. |
 | Google account identifier, name, and verified email address | Fetched from Google after sign-in and stored in `chrome.storage.local`. For online translation, Ease API uses a Google access token to verify the account, records the verified profile and account timestamps, and returns a short-lived Ease token held in service worker memory. |
 | Connected calendar event data | Retrieved directly from Google or iCloud and cached in the browser. Includes event identifiers, dates, times, titles, locations, and notes that the provider supplies. The calendar connection stores its latest refresh time. |
@@ -61,7 +62,7 @@ Ease is a Chrome workspace for reusable text, translation, and calendars. You ca
 
 When you choose to copy a saved snippet, Ease writes the text to your system clipboard. Copying a template uses the temporary values you enter to fill its fields. The extension does not read clipboard history.
 
-Chrome processes on-device translations locally and may download language models. A text selection can be held briefly in browser session storage to open the workspace. For websites explicitly enabled for Ctrl-selection translation, Chrome processes the selection on the page. If you choose an online engine, the Ease service sends your translation text and language pair to OpenRouter for processing. Ease stores daily usage counts in its database. You can save a translation to your local snippets.
+Chrome processes on-device translations locally and may download language models. A text selection can be held briefly in browser session storage to open the workspace. For websites explicitly enabled for Ctrl-selection translation, Chrome processes the selection on the page. If you choose an online engine, the Ease service sends your translation text and language pair to OpenRouter for processing. For eligible words and phrases, it also requests a learning note and example in the languages in use. Ease stores daily usage counts in its database. You can save a translation to your local snippets or flashcards. Flashcards, their notes, and study progress stay in the browser profile.
 
 If you choose to sign in with Google in an OAuth-enabled build, Ease uses Chrome’s identity service to request your account identifier, name, and verified email address from Google. Ease saves these profile details locally and registers the verified profile with the Ease service when you use an online engine. If you separately connect Google Calendar, Ease requests read-only access to display events from your primary calendar. If you connect Apple Calendar, Ease uses the published iCloud calendar link that you enter. Anyone who has that link can access the published calendar.
 

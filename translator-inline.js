@@ -228,7 +228,7 @@
     const title = document.createElement("strong");
     title.textContent = label;
     const subtitle = document.createElement("small");
-    subtitle.textContent = localized(job, "translatorChrome", "Chrome · On device");
+    subtitle.textContent = localized(job, "translatorChrome", "On-device");
     heading.append(title, subtitle);
     const close = document.createElement("button");
     close.type = "button";

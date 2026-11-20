@@ -7,6 +7,7 @@ import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
 import { deleteFolder, hasFolder, moveSnippet, pinFolder, reorderFolder, saveFolder } from "./clipboard-store.js";
 import { translatorLanguages } from "./translator-engine.js";
 import { easeTranslationMessage, handleEaseTranslationMessage } from "./ease-api.js";
+import { changeFlashcardPreferences, FlashcardError, removeFlashcard, reviewFlashcard, saveFlashcard } from "./flashcard-store.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
 import {
   configureTranslatorSite, injectTranslatorOnActiveSite, normalizeTranslatorSite, registerTranslatorSiteHandlers,
@@ -320,6 +321,22 @@ async function updateWorkspace(workspace, action, data, transaction) {
       workspace.translator = { ...settings, inlineSites: [...sites] };
       break;
     }
+    case "flashcard-preferences":
+      workspace.flashcards = changeFlashcardPreferences(workspace.flashcards, data);
+      break;
+    case "save-flashcard":
+      workspace.flashcards = saveFlashcard(workspace.flashcards, data);
+      if (data.showModule === true && !workspace.tabs.includes("flashcards")) {
+        workspace.tabs.push("flashcards");
+        workspace.flashcards = changeFlashcardPreferences(workspace.flashcards, { language: data.language });
+      }
+      break;
+    case "remove-flashcard":
+      workspace.flashcards = removeFlashcard(workspace.flashcards, data.id);
+      break;
+    case "review-flashcard":
+      workspace.flashcards = reviewFlashcard(workspace.flashcards, data);
+      break;
     case "calendar-holiday":
       setCalendarHoliday(workspace, data);
       break;
@@ -488,6 +505,9 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     }
     return { workspace: await hydrateWorkspace(workspace, sessions) };
   });
-  result.then(respond, (error) => respond({ error: error instanceof VaultLockedError ? "vaultLocked" : "saveFailed" }));
+  result.then(respond, (error) => {
+    const code = error instanceof VaultLockedError ? "vaultLocked" : error instanceof FlashcardError ? error.code : "saveFailed";
+    respond({ error: code });
+  });
   return true;
 });

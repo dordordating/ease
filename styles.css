@@ -887,6 +887,10 @@ body[data-surface="popup"] .folder-bar {
   --module-color: var(--translate);
 }
 
+[data-module="flashcards"] {
+  --module-color: var(--positive);
+}
+
 [data-module="assistant"] {
   --module-color: var(--ai);
 }
@@ -2662,9 +2666,13 @@ button.calendar-event-content:hover {
 }
 
 .translator-engine-option > input + span {
-  display: grid;
+  display: flex;
   flex: 1;
-  place-items: center;
+  flex-wrap: wrap;
+  align-content: center;
+  align-items: center;
+  justify-content: center;
+  gap: 2px 4px;
   min-inline-size: 0;
   min-block-size: var(--control-height);
   padding: 4px 5px;
@@ -2677,6 +2685,26 @@ button.calendar-event-content:hover {
   line-height: 1.25;
   text-align: center;
   overflow-wrap: anywhere;
+}
+
+.translator-engine-name {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.translator-ai-badge {
+  flex: none;
+  padding: 1px 3px;
+  border: 1px solid color-mix(in srgb, var(--ai) 28%, var(--stroke-subtle));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ai) 11%, var(--surface));
+  color: var(--ai);
+  font-family: var(--system-text);
+  font-size: 9px;
+  font-weight: 760;
+  line-height: 1;
+  white-space: nowrap;
+  unicode-bidi: isolate;
 }
 
 .translator-engine-option:hover > input:enabled:not(:checked) + span {
@@ -2708,29 +2736,21 @@ button.calendar-event-content:hover {
     background: Highlight;
     color: HighlightText;
   }
+
+  .translator-ai-badge {
+    border-color: currentColor;
+    background: transparent;
+    color: inherit;
+  }
 }
 
 .translator-cloud-details {
-  display: grid;
-  justify-items: start;
-  gap: 5px;
+  display: flex;
+  justify-content: flex-start;
   min-inline-size: 0;
-  padding: 6px 7px;
-  border: 1px solid color-mix(in srgb, var(--translate) 18%, var(--stroke-subtle));
-  border-radius: 7px;
-  background: var(--translator-wash);
-}
-
-.translator-cloud-note {
-  min-inline-size: 0;
-  color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
 }
 
 .translator-cloud-sign-in {
-  justify-self: start;
   max-inline-size: 100%;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -2793,6 +2813,47 @@ button.calendar-event-content:hover {
   font-weight: 680;
 }
 
+.translator-input-header,
+.translator-result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.translator-input-header .translator-submit {
+  flex: 0 1 auto;
+  min-inline-size: 0;
+  max-inline-size: 64%;
+  min-block-size: 26px;
+  padding: 3px 7px;
+}
+
+.translator-submit span {
+  min-inline-size: 0;
+}
+
+.translator-result-header .translator-copy {
+  inline-size: 26px;
+  block-size: 26px;
+  border-color: color-mix(in srgb, var(--translate) 22%, var(--stroke-subtle));
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--translate);
+}
+
+.translator-result-header .translator-copy:hover:not(:disabled) {
+  border-color: var(--translate);
+  background: var(--translator-wash);
+}
+
+.translator-copy svg {
+  inline-size: 14px;
+  block-size: 14px;
+}
+
 .translator-textarea {
   inline-size: 100%;
   min-inline-size: 0;
@@ -2836,6 +2897,36 @@ button.calendar-event-content:hover {
   overflow-wrap: anywhere;
 }
 
+.translator-learning {
+  padding-block-start: 6px;
+  border-block-start: 1px solid var(--stroke-subtle);
+  overflow-wrap: anywhere;
+}
+
+.translator-learning summary {
+  color: var(--translate);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.translator-learning dl {
+  display: grid;
+  gap: 6px;
+  margin: 6px 0 0;
+}
+
+.translator-learning dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.translator-learning dd {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+}
+
 .translator.is-result-only .translator-result {
   padding-block: 9px;
 }
@@ -2844,7 +2935,6 @@ button.calendar-event-content:hover {
   justify-self: start;
 }
 
-.translator-toolbar,
 .translator-actions {
   display: flex;
   flex-wrap: wrap;
@@ -2853,11 +2943,7 @@ button.calendar-event-content:hover {
   min-inline-size: 0;
 }
 
-.translator-toolbar {
-  justify-content: space-between;
-}
-
-.translator-toolbar button,
+.translator-actions button,
 .translator-show-original {
   max-inline-size: 100%;
   overflow-wrap: anywhere;
@@ -3002,4 +3088,375 @@ html[dir="rtl"] .translator-site-form input:placeholder-shown {
     transition: none !important;
     animation: none !important;
   }
+}
+
+.flashcards {
+  --flashcards-ink: var(--folder-violet);
+  --flashcards-wash: color-mix(in srgb, var(--flashcards-ink) 8%, var(--surface));
+  container-type: inline-size;
+  display: grid;
+  align-content: start;
+  gap: var(--section-gap);
+  min-inline-size: 0;
+}
+
+.flashcards-nav {
+  display: flex;
+  align-items: center;
+  justify-self: start;
+  gap: 4px;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  padding: 2px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 9px;
+  background: var(--subtle);
+}
+
+.flashcards-nav-button {
+  display: grid;
+  place-items: center;
+  min-inline-size: 0;
+  min-block-size: calc(var(--control-height) - 4px);
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.flashcards-nav-button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.flashcards-nav-button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--flashcards-ink) 32%, var(--stroke-subtle));
+  background: var(--surface);
+  color: var(--flashcards-ink);
+}
+
+.flashcards-nav-button svg,
+.flashcards-pronounce svg {
+  inline-size: 14px;
+  block-size: 14px;
+}
+
+.flashcards-pane,
+.flashcards-preferences,
+.flashcards-field {
+  display: grid;
+  gap: var(--list-gap);
+  min-inline-size: 0;
+}
+
+.flashcards-field {
+  align-items: start;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 640;
+  overflow-wrap: anywhere;
+}
+
+.flashcards-language {
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.flashcards-language > span {
+  max-inline-size: 11em;
+}
+
+.flashcards :is(.flashcards-select, .flashcards-limit, .flashcards-filter) {
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: var(--control-height);
+  padding: 4px 7px;
+  border: 1px solid var(--stroke);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 520;
+  text-overflow: ellipsis;
+}
+
+.flashcards-filter::placeholder {
+  color: var(--quiet);
+  opacity: 1;
+}
+
+.flashcards-limits,
+.flashcards-stats,
+.flashcards-ratings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.flashcards-preferences {
+  gap: 9px;
+}
+
+.flashcards-preferences > button {
+  justify-self: start;
+}
+
+.flashcards-stats {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.flashcards-stat {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  min-inline-size: 0;
+  padding: 5px 6px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 7px;
+  background: var(--subtle);
+}
+
+.flashcards-stat dt,
+.flashcards-caption,
+.flashcards-card-details dt {
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 640;
+  overflow-wrap: anywhere;
+}
+
+.flashcards-stat dd {
+  order: -1;
+  margin: 0;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+.flashcards-study-card {
+  display: grid;
+  gap: 8px;
+  min-inline-size: 0;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--flashcards-ink) 22%, var(--stroke-subtle));
+  border-radius: 12px;
+  background: linear-gradient(145deg, var(--flashcards-wash), var(--surface) 85%);
+  overflow-wrap: anywhere;
+}
+
+.flashcards-direction {
+  justify-self: start;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--flashcards-ink) 25%, var(--stroke-subtle));
+  border-radius: 6px;
+  background: var(--flashcards-wash);
+  color: var(--flashcards-ink);
+  font-size: 10.5px;
+  font-weight: 720;
+}
+
+.flashcards-prompt,
+.flashcards-answer {
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  min-inline-size: 0;
+}
+
+.flashcards-prompt {
+  min-block-size: 58px;
+}
+
+.flashcards-study-card[data-revealed="true"] .flashcards-prompt {
+  min-block-size: 0;
+}
+
+.flashcards-answer {
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--positive) 20%, var(--stroke-subtle));
+  border-radius: 8px;
+  background: var(--positive-wash);
+}
+
+.flashcards-answer:focus-visible {
+  outline-offset: 1px;
+}
+
+.flashcards-caption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+}
+
+.flashcards-pronounce {
+  flex: none;
+  inline-size: 25px;
+  block-size: 25px;
+  color: var(--flashcards-ink);
+}
+
+.flashcards-card-text {
+  color: var(--text);
+  font-size: 19px;
+  font-weight: 720;
+  line-height: 1.32;
+  text-align: start;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.flashcards-study-card[data-revealed="true"] .flashcards-prompt .flashcards-card-text {
+  font-size: 14px;
+}
+
+.flashcards-answer .flashcards-card-text {
+  font-size: 16px;
+}
+
+.flashcards-card-details {
+  display: grid;
+  gap: 3px;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 2px;
+}
+
+.flashcards-card-details dt:not(:first-child) {
+  margin-block-start: 3px;
+}
+
+.flashcards-card-details dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@container (min-width: 280px) {
+  .flashcards-ratings {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.flashcards-rating {
+  --rating-ink: var(--flashcards-ink);
+  min-inline-size: 0;
+  border-color: color-mix(in srgb, var(--rating-ink) 30%, var(--stroke));
+  background: color-mix(in srgb, var(--rating-ink) 7%, var(--surface));
+  color: var(--rating-ink);
+  overflow-wrap: anywhere;
+}
+
+.flashcards-rating:hover {
+  background: color-mix(in srgb, var(--rating-ink) 16%, var(--surface));
+}
+
+.flashcards-rating[data-rating="again"] { --rating-ink: var(--danger); }
+.flashcards-rating[data-rating="hard"] { --rating-ink: var(--mail); }
+.flashcards-rating[data-rating="easy"] { --rating-ink: var(--positive); }
+
+.flashcards-empty {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  min-inline-size: 0;
+  padding: 13px 9px;
+  border: 1px dashed color-mix(in srgb, var(--flashcards-ink) 27%, var(--stroke));
+  border-radius: 11px;
+  background: var(--flashcards-wash);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.flashcards-empty-icon {
+  display: grid;
+  place-items: center;
+  inline-size: 30px;
+  block-size: 30px;
+  border: 1px solid color-mix(in srgb, var(--flashcards-ink) 24%, var(--stroke-subtle));
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--flashcards-ink);
+}
+
+.flashcards-empty h2 {
+  font-size: 14px;
+}
+
+.flashcards-empty p,
+.flashcards-no-results {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.flashcards-next {
+  font-weight: 650;
+}
+
+.flashcards-empty .primary-button {
+  margin-block-start: 2px;
+}
+
+.flashcards-list {
+  display: grid;
+  gap: var(--list-gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.flashcards-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 3px;
+  min-inline-size: 0;
+  padding: 5px;
+  padding-inline-start: 7px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 8px;
+}
+
+.flashcards-list-text {
+  display: grid;
+  gap: 1px;
+  min-inline-size: 0;
+}
+
+.flashcards-list-text > * {
+  overflow: hidden;
+  font-size: 11.5px;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flashcards-list-text > span {
+  color: var(--muted);
+}
+
+.flashcards-delete:hover {
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--danger);
+}
+
+.flashcards-feedback {
+  padding: 5px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--danger);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
 }

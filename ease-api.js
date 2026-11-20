@@ -10,6 +10,8 @@ const errorCodes = new Set([
   "translatorOnlineBusy", "translatorTooLong", "translatorFailed"
 ]);
 const languageCode = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/u;
+const maxUsageLength = 360;
+const maxExampleLength = 280;
 const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu;
 const sessionFormat = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u;
 const maxResultLength = maxOnlineTranslationLength * 12;
@@ -103,6 +105,41 @@ async function decodeResponse(response) {
   }
 }
 
+function supportedLanguage(value) {
+  if (typeof value !== "string" || !languageCode.test(value)) return undefined;
+  try {
+    const [language] = Intl.getCanonicalLocales(value);
+    if (languageCode.test(language) && !["und", "mul", "zxx"].includes(language.split("-")[0])) return language;
+  } catch {
+    // Ignore malformed optional language metadata.
+  }
+  return undefined;
+}
+
+function learningText(value, limit, { allowEmpty = false } = {}) {
+  if (typeof value !== "string" || value.length > limit * 2 || !value.isWellFormed()
+    || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u.test(value)) return undefined;
+  const trimmed = value.trim();
+  if ((!trimmed && !allowEmpty) || Array.from(trimmed).length > limit) return undefined;
+  return trimmed;
+}
+
+function readLearning(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const usage = learningText(value.usage, maxUsageLength);
+  const example = learningText(value.example, maxExampleLength);
+  const exampleTranslation = learningText(value.example_translation, maxExampleLength, { allowEmpty: true });
+  const exampleLanguage = supportedLanguage(value.example_language);
+  const sourceLanguage = supportedLanguage(value.source_language);
+  const learning = {};
+  if (usage !== undefined) learning.usage = usage;
+  if (example !== undefined) learning.example = example;
+  if (exampleTranslation !== undefined) learning.exampleTranslation = exampleTranslation;
+  if (exampleLanguage !== undefined) learning.exampleLanguage = exampleLanguage;
+  if (sourceLanguage !== undefined) learning.sourceLanguage = sourceLanguage;
+  return Object.keys(learning).length ? learning : undefined;
+}
+
 function sessionExpiration(data, email) {
   if (data?.token_type !== "bearer" || typeof data.access_token !== "string"
     || data.access_token.length > 8192 || !sessionFormat.test(data.access_token)
@@ -167,32 +204,42 @@ function invalidateSession(session) {
   if (cachedSession === session) cachedSession = undefined;
 }
 
-async function requestTranslation(text, { source = "auto", target, engine, signal }) {
+async function requestTranslation(text, { source = "auto", target, engine, signal, notesLanguage }) {
   validateInput(text, source, target, engine);
   const account = await accountSnapshot();
   signal.throwIfAborted();
   if (source.toLowerCase() === target.toLowerCase()) return { text, source: target };
 
   const payload = { text, source, target, tier: engine };
+  let learningLanguage = supportedLanguage(notesLanguage);
   let session = await sessionFor(account);
-  await requireAccount(account);
-  let response = await apiPost("/v1/translate", payload, { token: session.token, signal });
-  if (response.status === 401) {
-    invalidateSession(session);
+  let refreshedSession = false;
+  let response;
+  let data;
+  while (true) {
+    await requireAccount(account);
+    const body = learningLanguage ? { ...payload, notes_language: learningLanguage } : payload;
+    response = await apiPost("/v1/translate", body, { token: session.token, signal });
+    if (response.status === 401) {
+      invalidateSession(session);
+      if (refreshedSession) throw new EaseTranslationError("translatorOnlineSignIn");
+      signal.throwIfAborted();
+      await requireAccount(account);
+      session = await sessionFor(account);
+      refreshedSession = true;
+      continue;
+    }
+    data = await decodeResponse(response);
     signal.throwIfAborted();
     await requireAccount(account);
-    session = await sessionFor(account);
-    await requireAccount(account);
-    response = await apiPost("/v1/translate", payload, { token: session.token, signal });
-  }
-  if (response.status === 401) {
-    invalidateSession(session);
-    throw new EaseTranslationError("translatorOnlineSignIn");
+    // Older servers reject unknown fields during input validation, before reserving quota.
+    if (learningLanguage && response.status === 422 && data?.detail === "invalid_request") {
+      learningLanguage = undefined;
+      continue;
+    }
+    break;
   }
 
-  const data = await decodeResponse(response);
-  signal.throwIfAborted();
-  await requireAccount(account);
   if (response.status === 429) throw new EaseTranslationError("translatorOnlineLimit");
   if (response.status === 503 && data?.detail === "translation_busy") throw new EaseTranslationError("translatorOnlineBusy");
   if (response.status === 413 || (response.status === 422 && data?.detail === "invalid_translation_text")) {
@@ -206,7 +253,10 @@ async function requestTranslation(text, { source = "auto", target, engine, signa
     throw new EaseTranslationError("translatorFailed");
   }
 
-  return { text: data.text, source: source === "auto" ? undefined : source };
+  const learning = readLearning(data.learning);
+  const result = { text: data.text, source: source === "auto" ? learning?.sourceLanguage : source };
+  if (learning) result.learning = learning;
+  return result;
 }
 
 export function handleEaseTranslationMessage(message, sendResponse) {
@@ -228,8 +278,8 @@ export function handleEaseTranslationMessage(message, sendResponse) {
   observeAccount();
   const controller = new AbortController();
   activeRequests.set(requestId, controller);
-  const { text, source, target, engine } = message;
-  requestTranslation(text, { source, target, engine, signal: controller.signal })
+  const { text, source, target, engine, notesLanguage } = message;
+  requestTranslation(text, { source, target, engine, signal: controller.signal, notesLanguage })
     .then((result) => sendResponse({ ok: true, result }), (error) => {
       sendResponse({ ok: false, code: safeErrorCode(error) });
     })
@@ -237,13 +287,16 @@ export function handleEaseTranslationMessage(message, sendResponse) {
   return true;
 }
 
-export async function translateOnline(text, { source = "auto", target, engine, signal } = {}) {
+export async function translateOnline(text, { source = "auto", target, engine, signal, notesLanguage } = {}) {
   signal?.throwIfAborted();
   validateInput(text, source, target, engine);
   const requestId = crypto.randomUUID();
   let abort;
   try {
-    const pending = chrome.runtime.sendMessage({ type: easeTranslationMessage, requestId, text, source, target, engine });
+    const message = { type: easeTranslationMessage, requestId, text, source, target, engine };
+    const learningLanguage = supportedLanguage(notesLanguage);
+    if (learningLanguage) message.notesLanguage = learningLanguage;
+    const pending = chrome.runtime.sendMessage(message);
     const response = signal ? await Promise.race([
       pending,
       new Promise((_, reject) => {

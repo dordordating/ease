@@ -42,6 +42,8 @@ PostgreSQL stores the user's Google subject, email, display name, account timest
 | `GET /v1/translation-tiers` | Send the Ease access token to get the tier IDs and active models. |
 | `POST /v1/translate` | Send the Ease access token and `{"text":"Hello, {name}","source":"en","target":"fa","tier":"standard"}` as JSON. The response contains `text`, `tier`, and `model`. `source` defaults to `auto` and `tier` defaults to `standard`. |
 
+Include `"notes_language":"fa"` to request learning notes in Persian. For an eligible short word or phrase, the response can include `learning.usage`, `learning.example`, `learning.example_translation`, `learning.example_language`, and `learning.source_language`. The example is in the target language by default. If the notes language is the target language, the example is in the source language. The translation and notes use the same provider request.
+
 Use a Google access token with the `openid`, `email`, and `profile` scopes to start a session. The Ease token expires after 30 minutes by default. For `429` responses, the `Retry-After` header gives the seconds until the quota resets.
 
 ## Run locally

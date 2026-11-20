@@ -36,6 +36,7 @@ class TranslationRequest(BaseModel):
     source: str = Field(default="auto", max_length=30)
     target: str = Field(min_length=2, max_length=30)
     tier: Tier = "standard"
+    notes_language: str | None = Field(default=None, min_length=2, max_length=30)
 
 
 class RequestBodyLimit:
@@ -180,6 +181,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             or payload.source.lower() == payload.target.lower()
         ):
             raise HTTPException(422, "invalid_language_pair")
+        if payload.notes_language is not None and (
+            not language_code.fullmatch(payload.notes_language)
+            or payload.notes_language.lower().split("-")[0] in {"auto", "und", "mul", "zxx"}
+        ):
+            raise HTTPException(422, "invalid_learning_language")
 
         slots = request.app.state.translation_slots
         try:
@@ -195,6 +201,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             result = await translate_with_openrouter(
                 request.app.state.http, settings.openrouter_api_key.get_secret_value(),
                 model, payload.source, payload.target, payload.text, settings.max_output_tokens,
+                notes_language=payload.notes_language,
             )
         except QuotaExceeded as error:
             raise HTTPException(429, f"{error.scope}_daily_limit", headers={"Retry-After": retry_after_midnight()}) from None
@@ -205,6 +212,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             slots.release()
 
-        return {"text": result.text, "tier": payload.tier, "model": model}
+        response: dict[str, object] = {"text": result.text, "tier": payload.tier, "model": model}
+        if result.learning is not None:
+            response["learning"] = result.learning
+        return response
 
     return app

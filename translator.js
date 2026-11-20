@@ -12,6 +12,14 @@ const translationErrors = new Set([
   "translatorOnlineUnavailable", "translatorOnlineLimit", "translatorOnlineBusy"
 ]);
 
+function selectableLanguage(code) {
+  if (!code || languages.has(code)) return code;
+  const locale = new Intl.Locale(code).maximize();
+  const scripted = `${locale.language}-${locale.script}`;
+  if (languages.has(scripted)) return scripted;
+  return languages.has(locale.language) ? locale.language : undefined;
+}
+
 const enginePicker = `
   <fieldset class="translator-engines">
     <legend data-label="translatorEngine"></legend>
@@ -19,18 +27,20 @@ const enginePicker = `
       ${translatorEngines.map((engine) => `
         <label class="translator-engine-option">
           <input type="radio" name="engine" value="${engine}">
-          <span data-label="${engineLabels[engine]}"></span>
+          <span>
+            <span class="translator-engine-name" data-label="${engineLabels[engine]}"></span>
+            ${engine === defaultTranslator.engine ? "" : '<span class="translator-ai-badge" lang="en">AI</span>'}
+          </span>
         </label>`).join("")}
     </div>
   </fieldset>
   <div class="translator-cloud-details" hidden>
-    <p class="translator-cloud-note" data-label="translatorOnlineDisclosure"></p>
     <button type="button" class="secondary-button translator-cloud-sign-in" data-label="translatorOnlineSignInAction" hidden></button>
   </div>`;
 
 export function renderTranslator(container, {
   locale, t, icon, settingsButton, preferences: initialPreferences, folders: initialFolders = [],
-  accountId: initialAccountId = null, draft = {}, onPreferences, onCopy, onSave, onShortcut, onSignIn
+  accountId: initialAccountId = null, draft = {}, onPreferences, onCopy, onSave, onFlashcard, onShortcut, onSignIn
 }) {
   const names = new Intl.DisplayNames([locale], { type: "language" });
   const numbers = new Intl.NumberFormat(locale);
@@ -68,21 +78,32 @@ export function renderTranslator(container, {
       <button type="button" class="secondary-button translator-show-original" aria-controls="translator-original" hidden></button>
       <div class="translator-panels">
         <div id="translator-original" class="translator-original">
-          <label for="translator-text" data-label="translatorInput"></label>
+          <div class="translator-input-header">
+            <label for="translator-text" data-label="translatorInput"></label>
+            <button type="submit" class="primary-button translator-submit">${icon("translate")}<span data-label="translatorRun"></span></button>
+          </div>
           <textarea id="translator-text" class="translator-textarea" dir="auto" rows="4"></textarea>
           <p class="translator-detected" hidden></p>
         </div>
         <section class="translator-result" aria-labelledby="translator-output-label">
-          <h3 id="translator-output-label" data-label="translatorOutput"></h3>
+          <div class="translator-result-header">
+            <h3 id="translator-output-label" data-label="translatorOutput"></h3>
+            <button type="button" class="icon-button translator-copy">${icon("copy")}</button>
+          </div>
           <div class="translator-output" dir="auto"></div>
+          <details class="translator-learning" hidden>
+            <summary data-label="translatorLearning"></summary>
+            <dl>
+              <div data-learning="usage"><dt data-label="flashcardUsage"></dt><dd dir="auto"></dd></div>
+              <div data-learning="example"><dt data-label="flashcardExample"></dt><dd dir="auto"></dd></div>
+              <div data-learning="exampleTranslation"><dt data-label="flashcardExampleTranslation"></dt><dd dir="auto"></dd></div>
+            </dl>
+          </details>
         </section>
       </div>
-      <div class="translator-toolbar">
-        <button type="submit" class="primary-button translator-submit">${icon("translate")}<span data-label="translatorRun"></span></button>
-        <div class="translator-actions">
-          <button type="button" class="secondary-button translator-copy">${icon("copy")}<span data-label="translatorCopy"></span></button>
-          <button type="button" class="secondary-button translator-save">${icon("folder")}<span data-label="translatorSave"></span></button>
-        </div>
+      <div class="translator-actions" hidden>
+        <button type="button" class="secondary-button translator-save">${icon("folder")}<span data-label="translatorSave"></span></button>
+        <button type="button" id="translator-flashcard" class="secondary-button translator-flashcard" hidden>${icon("flashcards")}<span data-label="translatorAddFlashcard"></span></button>
       </div>
       <progress class="translator-progress" max="1" aria-describedby="translator-feedback" hidden></progress>
       <p class="translator-feedback" id="translator-feedback" role="status" hidden></p>
@@ -123,6 +144,10 @@ export function renderTranslator(container, {
   const translateButton = form.querySelector(".translator-submit");
   const copyButton = form.querySelector(".translator-copy");
   const saveButton = form.querySelector(".translator-save");
+  const flashcardButton = form.querySelector(".translator-flashcard");
+  const resultActions = form.querySelector(".translator-actions");
+  const learningDetails = form.querySelector(".translator-learning");
+  const learningRows = Array.from(learningDetails.querySelectorAll("[data-learning]"));
   const feedback = form.querySelector(".translator-feedback");
   const progress = form.querySelector(".translator-progress");
   const layoutSelect = settingsView.querySelector("[data-translator-layout]");
@@ -141,6 +166,8 @@ export function renderTranslator(container, {
   input.placeholder = t("translatorInputPlaceholder");
   input.value = typeof draft.text === "string" ? draft.text : "";
   translateButton.setAttribute("aria-keyshortcuts", "Control+Enter Meta+Enter");
+  copyButton.title = t("translatorCopy");
+  copyButton.setAttribute("aria-label", copyButton.title);
   swapButton.setAttribute("aria-label", t("translatorSwap"));
   swapButton.title = t("translatorSwap");
   progress.setAttribute("aria-label", t("translatorPreparing"));
@@ -187,6 +214,8 @@ export function renderTranslator(container, {
     request?.abort();
     request = undefined;
     draft.result = "";
+    draft.learning = undefined;
+    learningDetails.open = false;
     if (clearDetection) draft.detectedSource = undefined;
     draft.engine = preferences.engine;
     draft.source = preferences.source;
@@ -220,7 +249,7 @@ export function renderTranslator(container, {
       control.checked = control.value === preferences.engine;
       control.disabled = writingPreferences;
     }
-    for (const details of cloudDetails) details.hidden = !online();
+    for (const details of cloudDetails) details.hidden = !online() || !showSignIn() || !onSignIn;
     for (const signIn of cloudSignInButtons) {
       signIn.hidden = !showSignIn() || !onSignIn;
       signIn.disabled = signingIn;
@@ -230,16 +259,26 @@ export function renderTranslator(container, {
     }
     const source = sourceLanguage();
     swapButton.disabled = writingPreferences || !languages.has(source) || source === preferences.target;
-    translateButton.hidden = resultOnly && !showOriginal;
     translateButton.disabled = (online() ? showSignIn() : !nativeSupported()) || !input.value.trim() || !!request || writingPreferences;
     const canUseResult = Boolean(draft.result) && !actionInProgress && !request && !writingPreferences;
+    resultActions.hidden = !draft.result;
     copyButton.disabled = !canUseResult;
     saveButton.disabled = !canUseResult;
+    flashcardButton.hidden = !onFlashcard || !draft.result;
+    flashcardButton.disabled = !canUseResult;
     result.hidden = !draft.result && !request;
     result.setAttribute("aria-busy", String(Boolean(request)));
     if (output.textContent !== (draft.result ?? "")) output.textContent = draft.result ?? "";
     output.tabIndex = draft.result ? 0 : -1;
     output.lang = preferences.target;
+    for (const row of learningRows) {
+      const value = draft.learning?.[row.dataset.learning] ?? "";
+      const definition = row.querySelector("dd");
+      if (definition.textContent !== value) definition.textContent = value;
+      row.hidden = !value;
+      definition.lang = row.dataset.learning === "example" ? draft.learning?.exampleLanguage ?? preferences.target : locale;
+    }
+    learningDetails.hidden = !draft.result || learningRows.every((row) => row.hidden);
     input.lang = source ?? locale;
     detected.hidden = preferences.source !== "auto" || !source;
     if (!detected.hidden) detected.textContent = t("translatorCurrentSource", { language: names.of(source) });
@@ -352,6 +391,7 @@ export function renderTranslator(container, {
         source: preferences.source,
         target: preferences.target,
         engine: preferences.engine,
+        notesLanguage: locale,
         signal: pending.signal,
         detectedSource: draft.detectedSource,
         onDetected: (language) => {
@@ -372,6 +412,8 @@ export function renderTranslator(container, {
         return false;
       }
       draft.result = translated.text;
+      draft.learning = translated.learning;
+      if (preferences.source === "auto" && translated.source) draft.detectedSource = selectableLanguage(translated.source);
       showOriginal = false;
       setFeedback();
       return true;
@@ -454,7 +496,7 @@ export function renderTranslator(container, {
   settingsButton?.addEventListener("click", toggleSettings);
   input.addEventListener("input", () => setText(input.value));
   input.addEventListener("keydown", (event) => {
-    if (event.key !== "Enter" || event.isComposing || !(event.ctrlKey || event.metaKey)) return;
+    if (event.key !== "Enter" || event.isComposing || event.keyCode === 229 || !(event.ctrlKey || event.metaKey)) return;
     event.preventDefault();
     translate();
   });
@@ -486,6 +528,13 @@ export function renderTranslator(container, {
   });
   copyButton.addEventListener("click", () => useResult("copy"));
   saveButton.addEventListener("click", () => useResult("save"));
+  flashcardButton.addEventListener("click", () => {
+    if (!draft.result || request || writingPreferences) return;
+    onFlashcard?.({
+      text: input.value, translation: draft.result, source: sourceLanguage(), target: preferences.target,
+      learning: draft.learning, notesLanguage: locale
+    });
+  });
 
   if (draft.engine !== preferences.engine || draft.source !== preferences.source || draft.target !== preferences.target) resetResult();
   else if (!online() && !nativeSupported()) setFeedback("translatorUnavailable");

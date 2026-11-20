@@ -1,5 +1,8 @@
 import { renderCalendar } from "./calendar.js";
 import { renderTranslator } from "./translator.js";
+import { renderFlashcards } from "./flashcards.js";
+import { flashcardFieldLimits } from "./flashcard-store.js";
+import { translatorLanguages } from "./translator-engine.js";
 import { takeTranslatorSelection, translatorSelectionKey } from "./translator-selection.js";
 import { renderTranslatorSites } from "./translator-sites-ui.js";
 import { paintBrand } from "./brand.js";
@@ -44,6 +47,8 @@ let calendarLocale;
 let translatorController;
 let translatorSiteController;
 let translatorLocale;
+let flashcardController;
+let flashcardLocale;
 const translatorDraft = {};
 let translatorAccountId = null;
 let workspaceInitialized = false;
@@ -894,9 +899,15 @@ function render() {
     translatorSiteController?.update(workspace.translator?.inlineSites ?? []);
     return;
   }
+  if (!query && activePage === "flashcards" && flashcardController && flashcardLocale === workspace.locale) {
+    flashcardController.update({ state: workspace.flashcards });
+    return;
+  }
   translatorController?.dispose?.();
   translatorController = undefined;
   translatorSiteController = undefined;
+  flashcardController?.dispose();
+  flashcardController = undefined;
   calendarController = undefined;
   calendarConnectionsRefresh = undefined;
   accountRefresh = undefined;
@@ -941,7 +952,7 @@ function render() {
     });
     refreshCalendarEvents();
   } else if (activePage === "translate") {
-    const translatorSettings = button(t("translatorConfig"), "icon-button", { symbol: "settings", iconOnly: true });
+    const translatorSettings = button(t("translatorConfig"), "icon-button", { symbol: "translate-settings", iconOnly: true });
     translatorSettings.id = "translator-settings-button";
     section(t("translate"), undefined, translatorSettings);
     const body = node("div");
@@ -953,6 +964,7 @@ function render() {
       onPreferences: (patch) => mutate("translator-preferences", patch),
       onCopy: copyTranslation,
       onSave: saveTranslation,
+      onFlashcard: (translation) => editFlashcard(undefined, translation),
       onShortcut: openChromeShortcuts,
       onSignIn: signInForTranslation
     });
@@ -961,6 +973,21 @@ function render() {
       requestInWorker: inToolbarPopup,
       onUpdate: (site, enabled, onError, requestPermission) =>
         mutate("translator-inline-site", { site, enabled, requestPermission }, onError)
+    });
+  } else if (activePage === "flashcards") {
+    const add = button(t("flashcardAdd"), "primary-button", { symbol: "plus", onClick: () => editFlashcard() });
+    add.id = "new-flashcard";
+    section(t("flashcards"), undefined, add);
+    const body = node("div");
+    view.append(body);
+    flashcardLocale = workspace.locale;
+    flashcardController = renderFlashcards(body, {
+      locale: workspace.locale, t, icon, state: workspace.flashcards,
+      onPreferences: (patch) => mutate("flashcard-preferences", patch),
+      onAdd: () => editFlashcard(),
+      onEdit: editFlashcard,
+      onDelete: confirmFlashcardDeletion,
+      onReview: (review) => mutate("review-flashcard", review)
     });
   } else if (activePage === "library") renderLibrary();
   else if (activePage === "settings") renderSettings();
@@ -1093,6 +1120,95 @@ function field(container, { label, value = "", placeholder, multiline = false, m
   wrapper.append(node("span", "", label), input);
   container.append(wrapper);
   return input;
+}
+
+function editFlashcard(card, translation) {
+  if (editor.open) return;
+  const studying = workspace.flashcards.language;
+  const pair = translation ? [translation.source, translation.target] : [];
+  const initialLanguage = card?.language ?? (pair.includes(studying) ? studying : translation?.target ?? studying);
+  const labelByField = {
+    term: "flashcardTerm", answer: "flashcardAnswer", usage: "flashcardUsage",
+    example: "flashcardExample", exampleTranslation: "flashcardExampleTranslation"
+  };
+  const inputs = {};
+  const fields = openEditor(t(card ? "flashcardEdit" : "flashcardAdd"), t("save"), async () => {
+    const values = Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value]));
+    const saved = await mutate("save-flashcard", {
+      ...values, id: card?.id, language: language.value, showModule: Boolean(translation)
+    });
+    if (saved) showToast(t("flashcardSaved"));
+    return saved;
+  });
+
+  const languageRow = node("label", "field");
+  const language = node("select", "translator-select");
+  const names = new Intl.DisplayNames([workspace.locale], { type: "language" });
+  const languages = translatorLanguages.map((code) => [code, names.of(code)]);
+  languages.sort((a, b) => a[1].localeCompare(b[1], workspace.locale));
+  for (const [code, name] of languages) language.add(new Option(name, code));
+  language.value = initialLanguage;
+  languageRow.append(node("span", "", t("flashcardLanguage")), language);
+  fields.append(languageRow);
+
+  const notes = node("details", "snippet-advanced");
+  const noteFields = node("div", "snippet-advanced-fields");
+  notes.append(node("summary", "", t("translatorLearning")), noteFields);
+  let initial = translation ? flashcardTranslationFields(translation, initialLanguage) : card ?? {};
+  for (const [key, label] of Object.entries(labelByField)) {
+    const required = key === "term" || key === "answer";
+    const input = field(required ? fields : noteFields, {
+      label: t(label), value: initial[key], multiline: true, required, maxLength: flashcardFieldLimits[key]
+    });
+    input.rows = 2;
+    inputs[key] = input;
+  }
+  fields.append(notes);
+  notes.open = Boolean(initial.usage || initial.example || initial.exampleTranslation);
+  inputs.term.lang = inputs.example.lang = language.value;
+  language.addEventListener("change", () => {
+    inputs.term.lang = inputs.example.lang = language.value;
+    if (!pair.includes(language.value)) return;
+    const updated = flashcardTranslationFields(translation, language.value);
+    for (const [key, input] of Object.entries(inputs)) {
+      if (input.value === (initial[key] ?? "")) input.value = updated[key] ?? "";
+    }
+    initial = updated;
+  });
+  editor.showModal();
+  inputs.term.focus();
+}
+
+function flashcardTranslationFields({ text, translation, source, target, learning, notesLanguage }, language) {
+  const reverse = language === source;
+  const exampleLanguage = learning?.exampleLanguage ?? target;
+  const exampleMatches = sameLearningLanguage(exampleLanguage, language);
+  const glossMatches = sameLearningLanguage(notesLanguage, language) && Boolean(learning?.exampleTranslation);
+  return {
+    term: reverse ? text : translation,
+    answer: reverse ? translation : text,
+    usage: learning?.usage,
+    example: exampleMatches ? learning?.example : glossMatches ? learning?.exampleTranslation : undefined,
+    exampleTranslation: exampleMatches ? learning?.exampleTranslation : glossMatches ? learning?.example : undefined
+  };
+}
+
+function sameLearningLanguage(left, right) {
+  if (!left || !right) return false;
+  const first = new Intl.Locale(left);
+  const second = new Intl.Locale(right);
+  return first.language === second.language && (!first.script || !second.script || first.script === second.script);
+}
+
+function confirmFlashcardDeletion(card) {
+  if (editor.open) return;
+  const fields = openEditor(t("flashcardDelete"), t("remove"), async () => {
+    const removed = await mutate("remove-flashcard", { id: card.id });
+    if (removed) showToast(t("flashcardRemoved"));
+    return removed;
+  });
+  fields.append(node("p", "", t("flashcardDeleteConfirm", { term: card.term })));
+  editor.showModal();
 }
 
 function editSnippet(snippet) {
