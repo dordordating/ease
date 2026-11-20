@@ -13,6 +13,7 @@ Ease uses Manifest V3 and requires Chrome 116 or newer. It has no build step or 
 ## Use the workspace
 
 - Select **New snippet** to save a phrase or link. Click its row to copy it. Open the row’s **More actions** menu to edit, pin, or delete it.
+- Use **New folder** in Clipboard to organize snippets. New snippets default to the folder you're viewing. Use **More actions → Move to folder** on a snippet to move it, with an option to undo. Pin up to two folders for direct access. Deleting a folder keeps its snippets in **Unfiled**. Search includes snippets from every folder and shows the folder with each result.
 - Add a named placeholder such as `{name}` to make a reusable template. Ease asks for its value when you copy the snippet.
 - Press **Alt+Shift+E** to open the popup and **/** inside Ease to search. **Settings → Open Ease shortcut** shows the active shortcut and opens Chrome’s shortcut page if you want to change it. Use **More actions → Set shortcut** on a snippet to choose an available key from **1–9**. Press that number while Ease is focused to copy the snippet.
 - Use the side panel button to keep Ease open alongside a page.

@@ -563,6 +563,97 @@ html[dir="rtl"] .section-copy h1 {
   font-weight: 670;
 }
 
+.folder-bar,
+.folder-quick,
+.folder-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.folder-bar {
+  align-items: flex-start;
+  min-inline-size: 0;
+}
+
+.folder-quick {
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  min-inline-size: 0;
+}
+
+.folder-actions {
+  flex: none;
+}
+
+.folder-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-inline-size: 0;
+  max-inline-size: min(100%, 116px);
+  min-block-size: var(--control-height);
+  padding: 3px 6px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 8px;
+  background: var(--subtle);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 620;
+}
+
+.folder-quick:has(.folder-chip:nth-child(4)) .folder-chip {
+  max-inline-size: min(116px, calc((100% - 4px) / 2));
+}
+
+.folder-chip > .folder-label,
+.folder-menu-item > .folder-label {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-chip svg,
+.folder-actions .icon-button svg {
+  inline-size: 14px;
+  block-size: 14px;
+}
+
+.folder-chip:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.folder-chip[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--stroke-subtle));
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.folder-actions .icon-button {
+  border-color: var(--stroke-subtle);
+  background: var(--surface);
+}
+
+.folder-actions .icon-button:hover,
+.folder-overflow[open] > .icon-button {
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--stroke-subtle));
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.folder-overflow {
+  position: relative;
+}
+
+.folder-overflow > summary {
+  list-style: none;
+}
+
+.folder-overflow > summary::-webkit-details-marker {
+  display: none;
+}
+
 .snippet-list, .catalog-list, .settings-list, .command-list {
   display: grid;
   gap: var(--list-gap);
@@ -668,6 +759,27 @@ html[dir="rtl"] .snippet-text > :is(strong, span) {
   line-height: 1.35;
 }
 
+.snippet-text > .folder-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.folder-breadcrumb > span:last-child {
+  min-inline-size: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-breadcrumb svg {
+  inline-size: 10px;
+  block-size: 10px;
+}
+
 .row-copy-icon {
   flex: none;
   color: var(--quiet);
@@ -710,7 +822,8 @@ html[dir="rtl"] .snippet-text > :is(strong, span) {
   block-size: 26px;
 }
 
-.action-menu {
+.action-menu,
+.folder-menu {
   position: absolute;
   z-index: 3;
   inset-block-start: calc(100% + 4px);
@@ -726,7 +839,30 @@ html[dir="rtl"] .snippet-text > :is(strong, span) {
   box-shadow: 0 8px 22px var(--shadow);
 }
 
-.action-menu button {
+.folder-menu {
+  inline-size: clamp(144px, 55vw, 206px);
+  min-inline-size: 0;
+  max-inline-size: calc(100vw - var(--rail-width) - 2 * var(--app-space));
+  max-block-size: min(236px, 48vh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.folder-menu-group {
+  display: grid;
+  gap: 2px;
+  min-inline-size: 0;
+}
+
+.folder-menu-group + .folder-menu-group {
+  padding-block-start: 4px;
+  border-block-start: 1px solid var(--stroke-subtle);
+}
+
+.action-menu button,
+.folder-menu-item,
+.folder-picker-item {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -744,16 +880,53 @@ html[dir="rtl"] .snippet-text > :is(strong, span) {
   inset-block-end: calc(100% + 4px);
 }
 
-.action-menu button:hover {
+.action-menu button:hover,
+.folder-menu-item:hover,
+.folder-picker-item:not(:disabled):hover {
   background: var(--subtle);
 }
 
-.action-menu button svg {
+.action-menu button svg,
+.folder-menu-item svg,
+.folder-picker-item svg {
   inline-size: 14px;
   block-size: 14px;
 }
 
-.action-menu [data-action="delete"] {
+.folder-menu-item,
+.folder-picker-item {
+  min-inline-size: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.folder-picker {
+  display: grid;
+  gap: 4px;
+  max-block-size: min(236px, 46vh);
+  padding: 2px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.folder-picker-item {
+  border: 1px solid var(--stroke-subtle);
+  background: var(--surface);
+}
+
+.folder-picker-item > span:nth-child(2) {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+}
+
+.folder-menu-active,
+.folder-picker-active {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+:is(.action-menu, .folder-menu) [data-action="delete"] {
   color: var(--danger);
 }
 
@@ -1050,6 +1223,11 @@ html[dir="rtl"] :is(.search-event-copy > strong, .calendar-detail-title) {
   block-size: 14px;
 }
 
+.folder-icon-options .choice-option > input + span {
+  justify-content: center;
+  min-inline-size: var(--control-height);
+}
+
 .palette-swatch {
   flex: none;
   inline-size: 11px;
@@ -1140,6 +1318,10 @@ html[dir="rtl"] :is(.search-event-copy > strong, .calendar-detail-title) {
 
 .field :is(input, textarea, select) {
   inline-size: 100%;
+}
+
+.folder-select select {
+  font-weight: 500;
 }
 
 .field :is(input, textarea)::placeholder {

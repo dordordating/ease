@@ -3,7 +3,7 @@ import { paintBrand } from "./brand.js";
 import { accountStorageKey, calendarConnectionKeys, loadConnectedEvents, renderAccount, renderCalendarConnections } from "./connections.js";
 import { icon } from "./icons.js";
 import { isRtl, localeNames, translate } from "./locales.js";
-import { calendarSystemFor, defaultWorkspace, densities, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
+import { calendarSystemFor, defaultWorkspace, densities, folderIcons, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
 
 const view = document.querySelector("#workspace");
 const editor = document.querySelector("#editor");
@@ -23,6 +23,7 @@ const settings = { id: "settings", icon: "settings" };
 const destinations = [...modules, library, settings];
 let workspace = defaultWorkspace;
 let activePage = clipboard.id;
+let activeFolder = "all";
 let query = "";
 let toastTimer;
 let copyTimer;
@@ -229,11 +230,11 @@ function emptyState(title, description, symbol, action) {
 
 const displayTitle = ({ title, text }) => title || text.trim().split(/\r?\n/u)[0];
 
-function pinnedSnippets() {
-  return workspace.snippets.filter(({ pinned }) => pinned);
+function folderFor(id) {
+  return workspace.folders.find((folder) => folder.id === id);
 }
 
-function snippetList(title, snippets) {
+function snippetList(title, snippets, showFolder = false) {
   const heading = node("div", "collection-heading");
   heading.append(node("h2", "", title));
   heading.append(node("small", "", new Intl.NumberFormat(workspace.locale).format(snippets.length)));
@@ -256,6 +257,15 @@ function snippetList(title, snippets) {
       const snippetText = node("span", "", snippet.text);
       snippetText.dir = "auto";
       text.append(snippetText);
+    }
+    if (showFolder && workspace.folders.length) {
+      const folder = folderFor(snippet.folderId);
+      const breadcrumb = node("span", "folder-breadcrumb");
+      const label = node("span", "", folder?.name ?? t("noFolder"));
+      label.dir = "auto";
+      breadcrumb.append(glyph(folder?.icon ?? "folder"), label);
+      text.append(breadcrumb);
+      copy.setAttribute("aria-description", label.textContent);
     }
     copy.append(text);
     if (snippet.slot) {
@@ -285,7 +295,10 @@ function snippetList(title, snippets) {
     }
     menu.append(
       action(snippet.pinned ? "unpin" : "pin", "pin", () => mutate("pin-snippet", { id: snippet.id, pinned: !snippet.pinned })),
-      action("edit", "edit", () => editSnippet(snippet)),
+      action("edit", "edit", () => editSnippet(snippet))
+    );
+    if (workspace.folders.length) menu.append(action("moveToFolder", "folder", () => moveSnippet(snippet)));
+    menu.append(
       action("shortcutAssign", "keyboard", () => editShortcut(snippet)),
       action("remove", "trash", () => removeSnippet(snippet))
     );
@@ -297,21 +310,105 @@ function snippetList(title, snippets) {
 }
 
 function renderClipboard() {
+  if (activeFolder !== "all" && activeFolder !== null && !folderFor(activeFolder)) activeFolder = "all";
   const add = (className) => {
     const action = button(t("newSnippet"), className, { symbol: "plus", onClick: () => editSnippet() });
     action.id = "new-snippet";
     return action;
   };
-  const hasSnippets = workspace.snippets.length > 0;
+  const snippets = activeFolder === "all"
+    ? workspace.snippets
+    : workspace.snippets.filter(({ folderId }) => (folderId ?? null) === activeFolder);
+  const hasSnippets = snippets.length > 0;
   section(t("clipboard"), undefined, hasSnippets ? add("primary-button") : undefined);
+  renderFolderBar();
   if (!hasSnippets) {
-    emptyState(t("emptyTitle"), t("emptyHint"), "clipboard", add("secondary-button"));
+    const filtered = activeFolder !== "all";
+    emptyState(t(filtered ? "emptyFolder" : "emptyTitle"), t(filtered ? "emptyFolderHint" : "emptyHint"),
+      filtered ? "folder" : "clipboard", add("secondary-button"));
     return;
   }
-  const pinned = pinnedSnippets().sort((left, right) => (left.slot ?? 10) - (right.slot ?? 10));
-  const others = workspace.snippets.filter(({ pinned }) => !pinned);
+  const pinned = snippets.filter(({ pinned }) => pinned).sort((left, right) => (left.slot ?? 10) - (right.slot ?? 10));
+  const others = snippets.filter(({ pinned }) => !pinned);
   if (pinned.length) snippetList(t("pinned"), pinned);
   if (others.length) snippetList(t("snippets"), others);
+}
+
+function selectFolder(id) {
+  activeFolder = id;
+  render();
+  view.scrollTop = 0;
+  document.getElementById(`folder-chip-${id ?? "unfiled"}`)?.focus();
+}
+
+function renderFolderBar() {
+  const bar = node("nav", "folder-bar");
+  bar.setAttribute("aria-label", t("clipboardFolders"));
+  const quick = node("div", "folder-quick");
+  const all = { id: "all", name: t("allFolders"), icon: "clipboard" };
+  const unfiled = { id: null, name: t("noFolder"), icon: "folder" };
+  const selected = folderFor(activeFolder);
+  const quickFolders = [all, ...workspace.folders.filter(({ pinned }) => pinned)];
+  if (activeFolder === null) quickFolders.push(unfiled);
+  else if (selected && !selected.pinned) quickFolders.push(selected);
+
+  function filterButton(folder, className) {
+    const selected = activeFolder === folder.id;
+    const item = button(folder.name, className, { symbol: folder.icon, onClick: () => selectFolder(folder.id) });
+    item.title = folder.name;
+    const label = item.lastElementChild;
+    label.className = "folder-label";
+    label.dir = "auto";
+    item.setAttribute("aria-pressed", String(selected));
+    return item;
+  }
+
+  for (const folder of quickFolders) {
+    const chip = filterButton(folder, "folder-chip");
+    chip.id = `folder-chip-${folder.id ?? "unfiled"}`;
+    quick.append(chip);
+  }
+  const actions = node("div", "folder-actions");
+  const create = button(t("newFolder"), "icon-button", { symbol: "folder-plus", iconOnly: true, onClick: () => editFolder() });
+  create.id = "new-folder";
+  actions.append(create);
+
+  if (workspace.folders.length || activeFolder === null) {
+    const overflow = node("details", "folder-overflow");
+    const summary = node("summary", "icon-button");
+    summary.id = "folder-overflow-button";
+    labelButton(summary, t("manageFolders"), "more");
+    const menu = node("div", "folder-menu");
+    if (selected) {
+      const management = node("div", "folder-menu-group");
+      const menuAction = (key, symbol, run) => button(t(key), "folder-menu-item", {
+        symbol,
+        onClick: () => {
+          overflow.open = false;
+          summary.focus();
+          run();
+        }
+      });
+      management.append(
+        menuAction("editFolder", "edit", () => editFolder(selected)),
+        menuAction(selected.pinned ? "folderUnpinned" : "folderPinned", "pin",
+          () => mutate("pin-folder", { id: selected.id, pinned: !selected.pinned })),
+        menuAction("deleteFolder", "trash", () => deleteFolder(selected))
+      );
+      management.lastElementChild.dataset.action = "delete";
+      menu.append(management);
+    }
+    const folders = node("div", "folder-menu-group");
+    for (const folder of [unfiled, ...workspace.folders]) {
+      folders.append(filterButton(folder, activeFolder === folder.id ? "folder-menu-item folder-menu-active" : "folder-menu-item"));
+    }
+    menu.append(folders);
+    overflow.append(summary, menu);
+    actions.append(overflow);
+  }
+
+  bar.append(quick, actions);
+  view.append(bar);
 }
 
 function renderLibrary() {
@@ -484,7 +581,10 @@ function renderSearch() {
   section(t("searchResults"));
   const searchText = searchable(query);
   const matches = (text) => searchable(text).includes(searchText);
-  const snippets = workspace.snippets.filter(({ title, text }) => matches(`${title} ${text}`));
+  const snippets = workspace.snippets.filter(({ title, text, folderId }) => {
+    const folder = folderFor(folderId);
+    return matches(`${title} ${text} ${folder?.name ?? ""}`);
+  });
   const events = workspace.tabs.includes("calendar")
     ? calendarEvents().filter(({ title, date, location, notes }) => matches([title, date, location, notes].join(" ")))
       .sort((left, right) => left.date.localeCompare(right.date)
@@ -497,7 +597,7 @@ function renderSearch() {
     emptyState(t("emptySearch"), t("emptySearchHint"), "search");
     return;
   }
-  if (snippets.length) snippetList(t("snippets"), snippets);
+  if (snippets.length) snippetList(t("snippets"), snippets, true);
   if (events.length) renderEventResults(events);
   if (commands.length || newSnippet) {
     const heading = node("div", "collection-heading");
@@ -601,7 +701,7 @@ function render() {
 function openEditor(title, submitLabel, onSubmit) {
   const opener = document.activeElement?.id;
   editor.addEventListener("close", () => {
-    if (opener) document.getElementById(opener)?.focus();
+    if (opener) (document.getElementById(opener) ?? view).focus({ preventScroll: true });
   }, { once: true });
   const form = node("form");
   const heading = node("div", "dialog-heading");
@@ -616,21 +716,24 @@ function openEditor(title, submitLabel, onSubmit) {
   const feedback = node("p", "dialog-feedback");
   feedback.setAttribute("role", "alert");
   feedback.hidden = true;
-  const buttons = node("div", "dialog-footer");
-  const submit = button(submitLabel, "primary-button");
-  submit.type = "submit";
-  buttons.append(button(t("cancel"), "secondary-button", { onClick: () => editor.close() }), submit);
-  form.append(heading, fields, feedback, buttons);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    submit.disabled = true;
-    feedback.hidden = true;
-    try {
-      if (await onSubmit()) editor.close();
-    } finally {
-      submit.disabled = false;
-    }
-  });
+  form.append(heading, fields, feedback);
+  if (onSubmit) {
+    const buttons = node("div", "dialog-footer");
+    const submit = button(submitLabel, "primary-button");
+    submit.type = "submit";
+    buttons.append(button(t("cancel"), "secondary-button", { onClick: () => editor.close() }), submit);
+    form.append(buttons);
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      submit.disabled = true;
+      feedback.hidden = true;
+      try {
+        if (await onSubmit()) editor.close();
+      } finally {
+        submit.disabled = false;
+      }
+    });
+  }
   editor.setAttribute("aria-labelledby", headingText.id);
   editor.replaceChildren(form);
   return fields;
@@ -657,13 +760,107 @@ function editSnippet(snippet) {
       text.reportValidity();
       return false;
     }
-    return mutate("save-snippet", { id: snippet?.id, title: title.value, text: text.value });
+    const initialFolder = snippet ? snippet.folderId ?? null : activeFolder === "all" ? null : activeFolder;
+    const folderId = destination ? destination.value || null : initialFolder;
+    const changeFolder = !snippet || folderId !== (snippet.folderId ?? null);
+    return mutate("save-snippet", {
+      id: snippet?.id, title: title.value, text: text.value, ...(changeFolder ? { folderId } : {})
+    });
   });
   const title = field(fields, { label: `${t("snippetTitle")} (${t("optional")})`, value: snippet?.title, placeholder: t("snippetTitlePlaceholder"), maxLength: 100 });
   const text = field(fields, { label: t("snippetText"), value: snippet?.text, placeholder: t("snippetTextPlaceholder"), required: true, maxLength: 20000, multiline: true });
+  const destination = workspace.folders.length ? node("select") : undefined;
+  if (destination) {
+    const row = node("label", "field folder-select");
+    const choices = [{ id: "", name: t("noFolder") }, ...workspace.folders];
+    for (const folder of choices) {
+      const option = node("option", "", folder.name);
+      option.value = folder.id;
+      option.dir = "auto";
+      destination.append(option);
+    }
+    const selectedId = snippet ? snippet.folderId : activeFolder;
+    destination.value = folderFor(selectedId)?.id ?? "";
+    row.append(node("span", "", t("folder")), destination);
+    fields.append(row);
+  }
   fields.append(node("p", "field-hint", t("templateTip")));
   editor.showModal();
   text.focus();
+}
+
+function editFolder(folder) {
+  const id = folder?.id ?? crypto.randomUUID();
+  const fields = openEditor(t(folder ? "editFolder" : "newFolder"), t("save"), async () => {
+    const chosenIcon = choices.querySelector("input:checked").value;
+    if (!await mutate(folder ? "update-folder" : "create-folder", { id, name: name.value, icon: chosenIcon })) return false;
+    if (!folder) {
+      activeFolder = id;
+      if (folderFor(id)) selectFolder(id);
+    }
+    return true;
+  });
+  const name = field(fields, { label: t("folderName"), value: folder?.name, placeholder: t("folderNamePlaceholder"), required: true, maxLength: 48 });
+  const picker = node("fieldset", "choice-group folder-icon-options");
+  const choices = node("div", "choice-options");
+  const labelKeys = { folder: "folder", briefcase: "work", user: "person", star: "star", link: "link" };
+  for (const symbol of folderIcons) {
+    const choice = radioOption("folder-icon", symbol, folder?.icon ?? "folder", "choice-option");
+    const label = t(labelKeys[symbol]);
+    choice.input.setAttribute("aria-label", label);
+    choice.label.title = label;
+    choice.face.append(glyph(symbol));
+    choices.append(choice.label);
+  }
+  picker.append(node("legend", "", t("folderIcon")), choices);
+  fields.append(picker);
+  editor.showModal();
+  name.focus();
+}
+
+function deleteFolder(folder) {
+  const fields = openEditor(t("deleteFolder"), t("remove"), async () => {
+    if (!await mutate("delete-folder", { id: folder.id })) return false;
+    selectFolder(null);
+    showToast(t("folderDeleted"));
+    return true;
+  });
+  fields.append(node("p", "", t("deleteFolderConfirm", { name: folder.name })));
+  editor.showModal();
+}
+
+function moveSnippet(snippet) {
+  const from = snippet.folderId ?? null;
+  const fields = openEditor(t("moveToFolder"));
+  const list = node("div", "folder-picker");
+  const choices = [{ id: null, name: t("noFolder"), icon: "folder" }, ...workspace.folders];
+  for (const folder of choices) {
+    const selected = folder.id === from;
+    const item = button(folder.name, selected ? "folder-picker-item folder-picker-active" : "folder-picker-item", {
+      symbol: folder.icon,
+      onClick: async () => {
+        if (!selected) {
+          for (const option of list.children) option.disabled = true;
+          if (!await mutate("move-snippet", { id: snippet.id, folderId: folder.id, expectedFolderId: from })) {
+            for (const option of list.children) option.disabled = false;
+            item.focus();
+            return;
+          }
+          showToast(t("snippetMoved", { name: folder.name }), async () => {
+            if (await mutate("move-snippet", { id: snippet.id, folderId: from, expectedFolderId: folder.id })) toast.hidden = true;
+          });
+        }
+        editor.close();
+      }
+    });
+    item.setAttribute("aria-pressed", String(selected));
+    item.lastElementChild.dir = "auto";
+    if (selected) item.append(glyph("check"));
+    list.append(item);
+  }
+  fields.append(list);
+  editor.showModal();
+  list.querySelector(".folder-picker-active")?.focus();
 }
 
 function editShortcut(snippet) {
@@ -784,16 +981,18 @@ tabBar.addEventListener("keydown", (event) => {
   switchTo(allTabs[next].dataset.module);
 });
 
+const openMenus = ".snippet-actions[open], .folder-overflow[open]";
 document.addEventListener("click", (event) => {
-  for (const menu of view.querySelectorAll(".snippet-actions[open]")) {
+  for (const menu of view.querySelectorAll(openMenus)) {
     if (!menu.contains(event.target)) menu.open = false;
   }
 });
 
 document.addEventListener("keydown", (event) => {
   if (editor.open || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.defaultPrevented) return;
-  const openMenu = view.querySelector(".snippet-actions[open]");
+  const openMenu = view.querySelector(openMenus);
   if (event.key === "Escape" && openMenu) {
+    event.preventDefault();
     openMenu.open = false;
     openMenu.querySelector("summary").focus();
     return;

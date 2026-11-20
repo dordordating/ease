@@ -14,6 +14,8 @@ export const palettes = { violet: "#774be0", blue: "#2869dc", mint: "#118466", a
 export const densities = ["compact", "comfortable"];
 export const sizes = ["small", "medium", "large"];
 export const shortcutSlots = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+export const folderIcons = ["folder", "briefcase", "user", "star", "link"];
+export const maxPinnedFolders = 2;
 export const defaultCalendar = { system: null, view: "month", firstDay: null, eventDisplay: "dots" };
 
 export function calendarSystemFor(locale, system) {
@@ -28,6 +30,7 @@ export const defaultWorkspace = {
   size: "medium",
   tabs: ["clipboard", "calendar"],
   snippets: [],
+  folders: [],
   calendar: defaultCalendar,
   events: [],
   holidays: []

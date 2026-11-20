@@ -4,6 +4,7 @@ import { setToolbarBrand } from "./brand.js";
 import { changeCalendarPreferences, saveCalendarEvent, setCalendarHoliday } from "./calendar-store.js";
 import { refreshConnectedGoogleCalendar, registerGoogleProviderHandlers } from "./providers.js";
 import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
+import { deleteFolder, hasFolder, moveSnippet, pinFolder, saveFolder } from "./clipboard-store.js";
 
 let pendingWrite = Promise.resolve();
 registerGoogleProviderHandlers();
@@ -59,16 +60,30 @@ function updateWorkspace(workspace, action, data) {
       workspace.tabs = data.enabled ? [...tabs, module.id] : tabs;
       break;
     }
+    case "create-folder":
+      return saveFolder(workspace, data, true);
+    case "update-folder":
+      return saveFolder(workspace, data, false);
+    case "pin-folder":
+      return pinFolder(workspace, data);
+    case "delete-folder":
+      return deleteFolder(workspace, data);
+    case "move-snippet":
+      return moveSnippet(workspace, data);
     case "save-snippet": {
       const text = typeof data.text === "string" ? data.text.slice(0, 20000) : "";
       if (!text.trim()) throw new Error("Snippet text is required");
       const title = typeof data.title === "string" ? data.title.trim().slice(0, 100) : "";
+      const { folderId } = data;
+      if (folderId != null && !hasFolder(workspace, folderId)) return "folderMissing";
       if (data.id) {
         const snippet = workspace.snippets.find(({ id }) => id === data.id);
         if (!snippet) throw new Error("Snippet no longer exists");
         Object.assign(snippet, { title, text });
+        if (folderId !== undefined) snippet.folderId = folderId;
       } else {
-        workspace.snippets = [{ id: crypto.randomUUID(), title, text, pinned: false }, ...workspace.snippets];
+        const snippet = { id: crypto.randomUUID(), title, text, pinned: false, folderId: folderId ?? null };
+        workspace.snippets = [snippet, ...workspace.snippets];
       }
       break;
     }
@@ -102,10 +117,12 @@ function updateWorkspace(workspace, action, data) {
       break;
     case "restore-snippet":
       if (!workspace.snippets.some(({ id }) => id === data.snippet.id)) {
-        if (data.snippet.slot && workspace.snippets.some(({ slot }) => slot === data.snippet.slot)) {
-          data.snippet.slot = null;
+        const restored = { ...data.snippet };
+        if (restored.slot && workspace.snippets.some(({ slot }) => slot === restored.slot)) {
+          restored.slot = null;
         }
-        workspace.snippets.splice(data.index, 0, data.snippet);
+        if (!hasFolder(workspace, restored.folderId)) restored.folderId = null;
+        workspace.snippets = workspace.snippets.toSpliced(data.index, 0, restored);
       }
       break;
     default:
