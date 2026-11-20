@@ -10,12 +10,16 @@ Ease is a local-first browser workspace for reusable text and quick daily checks
 
 Ease uses Manifest V3 and requires Chrome 116 or newer. It has no build step or dependencies.
 
+### Update an existing installation
+
+Open the new ZIP and copy the contents of its extension folder over the files in the folder already loaded by Chrome. Then select **Reload** on the existing Ease card at `chrome://extensions`. Using the same Chrome profile and installation folder keeps the extension ID, local data, and OAuth registration. Removing Ease or loading a different extracted folder can leave you without the previous install's local data.
+
 ## Use the workspace
 
 - Select **New snippet** and enter the text. Press **Enter** to save or **Shift+Enter** for a new line. **Advanced** contains the title and folder. Click a saved snippet to copy it, or open its **More actions** menu to edit, pin, or delete it.
 - The Clipboard rail lists all folders. Use the final **+** to create a folder and choose its icon and color. Right-click a folder or press **Shift+F10** while it is focused to open its actions. Drag folders to reorder them and drag snippets onto folders to move them. Moves can be undone. Deleting a folder keeps its snippets in **Unfiled**. Search includes unlocked snippets from every folder.
-- To protect a folder, choose **Set folder password** from its context menu. The password encrypts snippet titles and text in local storage. Folder names and shortcut assignments remain visible. Ease cannot recover a forgotten password. Choose a one-minute timeout, a five-minute timeout, or a lock on each copy with a five-minute idle timeout.
-- On supported devices, use **Set up device unlock** while the folder is open. Chrome handles verification through a platform credential and WebAuthn PRF. Keep the folder password as a fallback. Use the side panel if the system prompt closes the toolbar popup.
+- To protect a folder, choose **Set a 4-digit PIN** from its context menu. The PIN unlocks encrypted snippet titles and text. Ease verifies the PIN when you enter the fourth digit and cannot recover a forgotten PIN. Choose an automatic lock delay from one minute to six hours, or lock on each copy. Existing folders can still unlock with their old password. While unlocked, select **Set a 4-digit PIN** to switch without losing snippets.
+- On supported devices, use **Set up device unlock** while the folder is open. Chrome handles verification through a platform credential and WebAuthn PRF. Keep the folder’s PIN or existing password as a fallback. Use the side panel if the system prompt closes the toolbar popup.
 - Add a named placeholder such as `{name}` to make a reusable template. Ease asks for its value when you copy the snippet.
 - Press **Alt+Shift+E** to open the popup and **/** inside Ease to search. **Settings → Open Ease shortcut** shows the active shortcut and opens Chrome’s shortcut page if you want to change it. Use **More actions → Set shortcut** on a snippet to choose an available key from **1–9**. Press that number while Ease is focused to copy the snippet.
 - Use the side panel button to keep Ease open alongside a page.

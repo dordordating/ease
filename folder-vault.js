@@ -1,5 +1,5 @@
 const version = 1;
-const passwordIterations = 600_000;
+const credentialIterations = 600_000;
 const keyBytes = 32;
 const saltBytes = 16;
 const nonceBytes = 12;
@@ -38,7 +38,7 @@ function context(purpose, ...ids) {
   return encoder.encode(JSON.stringify(["ease-folder-vault", version, purpose, ...ids]));
 }
 
-async function passwordKey(password, salt, usage) {
+function validatePassword(password) {
   if (typeof password !== "string" || password.length > 256 || !password.isWellFormed()) {
     throw new Error("Invalid vault password");
   }
@@ -46,9 +46,18 @@ async function passwordKey(password, salt, usage) {
   if (length < 8 || length > 128) {
     throw new Error("Invalid vault password");
   }
-  const material = await crypto.subtle.importKey("raw", encoder.encode(password), "PBKDF2", false, ["deriveKey"]);
+}
+
+function validatePin(pin) {
+  if (typeof pin !== "string" || pin.length !== 4 || !/^[0-9]{4}$/u.test(pin)) {
+    throw new Error("Invalid vault PIN");
+  }
+}
+
+async function credentialKey(credential, salt, usage) {
+  const material = await crypto.subtle.importKey("raw", encoder.encode(credential), "PBKDF2", false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
-    { name: "PBKDF2", salt, iterations: passwordIterations, hash: "SHA-256" },
+    { name: "PBKDF2", salt, iterations: credentialIterations, hash: "SHA-256" },
     material,
     { name: "AES-GCM", length: keyBytes * 8 },
     false,
@@ -75,30 +84,56 @@ async function decrypt(key, envelope, additionalData, minimum, maximum = minimum
   return new Uint8Array(await crypto.subtle.decrypt(algorithm, key, ciphertext));
 }
 
+async function wrapCredentialKey(credential, folderId, dataKey, mode) {
+  const additionalData = context(`${mode}-wrap`, folderId);
+  const salt = randomBytes(saltBytes);
+  const wrappingKey = await credentialKey(credential, salt, "encrypt");
+  const envelope = await encrypt(wrappingKey, dataKey, additionalData);
+  return { ...envelope, salt: encodeBase64(salt), iterations: credentialIterations };
+}
+
+async function unlockCredentialKey(credential, folderId, vault, mode) {
+  const vaultMode = vault?.mode === undefined ? "password" : vault.mode;
+  if (vault?.version !== version || vault.iterations !== credentialIterations || vaultMode !== mode) {
+    throw new Error("Unsupported folder vault");
+  }
+  const additionalData = context(`${mode}-wrap`, folderId);
+  const salt = decodeBase64(vault.salt, saltBytes);
+  const wrappingKey = await credentialKey(credential, salt, "decrypt");
+  return encodeBase64(await decrypt(wrappingKey, vault, additionalData, keyBytes));
+}
+
 /**
- * A folder vault wraps a random data key with a key derived from the user's
- * password. Keep the unwrapped key in trusted session memory.
+ * Legacy password vaults remain readable so existing data keys can be
+ * rewrapped without changing any encrypted snippets.
  */
 export async function createFolderVault(password, folderId) {
-  const additionalData = context("password-wrap", folderId);
-  const salt = randomBytes(saltBytes);
-  const wrappingKey = await passwordKey(password, salt, "encrypt");
+  validatePassword(password);
   const dataKey = randomBytes(keyBytes);
-  const envelope = await encrypt(wrappingKey, dataKey, additionalData);
-  return {
-    vault: { ...envelope, salt: encodeBase64(salt), iterations: passwordIterations },
-    key: encodeBase64(dataKey)
-  };
+  const vault = await wrapCredentialKey(password, folderId, dataKey, "password");
+  return { vault, key: encodeBase64(dataKey) };
 }
 
 export async function unlockFolderVault(password, folderId, vault) {
-  if (vault?.version !== version || vault.iterations !== passwordIterations) {
-    throw new Error("Unsupported folder vault");
-  }
-  const additionalData = context("password-wrap", folderId);
-  const salt = decodeBase64(vault.salt, saltBytes);
-  const wrappingKey = await passwordKey(password, salt, "decrypt");
-  return encodeBase64(await decrypt(wrappingKey, vault, additionalData, keyBytes));
+  validatePassword(password);
+  return unlockCredentialKey(password, folderId, vault, "password");
+}
+
+export async function createFolderPin(pin, folderId) {
+  const key = encodeBase64(randomBytes(keyBytes));
+  return { vault: await rewrapFolderPin(pin, folderId, key), key };
+}
+
+export async function rewrapFolderPin(pin, folderId, key) {
+  validatePin(pin);
+  const dataKey = decodeBase64(key, keyBytes);
+  const vault = await wrapCredentialKey(pin, folderId, dataKey, "pin");
+  return { ...vault, mode: "pin" };
+}
+
+export async function unlockFolderPin(pin, folderId, vault) {
+  validatePin(pin);
+  return unlockCredentialKey(pin, folderId, vault, "pin");
 }
 
 export async function sealSnippet(snippet, key) {

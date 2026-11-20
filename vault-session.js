@@ -1,11 +1,20 @@
 export const vaultSessionStorageKey = "easeVaultSessions";
 export const vaultExpiryAlarm = "ease-vault-expiry";
 export const defaultVaultPolicy = "five-minutes";
+const minute = 60_000;
 const policyDurations = {
-  "after-copy": 5 * 60_000,
-  "one-minute": 60_000,
-  "five-minutes": 5 * 60_000
+  "after-copy": 5 * minute,
+  "one-minute": minute,
+  "five-minutes": 5 * minute,
+  "fifteen-minutes": 15 * minute,
+  "thirty-minutes": 30 * minute,
+  "one-hour": 60 * minute,
+  "three-hours": 3 * 60 * minute,
+  "six-hours": 6 * 60 * minute
 };
+const pinAttemptsKey = "easeVaultPinAttempts";
+const pinAttemptLimit = 5;
+const pinRetryWindow = minute;
 
 export function vaultPolicyFor(policy) {
   return typeof policy === "string" && Object.hasOwn(policyDurations, policy) ? policy : defaultVaultPolicy;
@@ -54,4 +63,28 @@ export async function lockVaultSession(sessions, folderId) {
   next.delete(folderId);
   await persistSessions(next);
   sessions.delete(folderId);
+}
+
+async function readPinAttempts(now = Date.now()) {
+  const result = await chrome.storage.session.get(pinAttemptsKey);
+  return new Map(Object.entries(result[pinAttemptsKey] ?? {}).filter(([, attempt]) => attempt?.expiresAt > now));
+}
+
+async function persistPinAttempts(attempts) {
+  await chrome.storage.session.set({ [pinAttemptsKey]: Object.fromEntries(attempts) });
+}
+
+export async function reserveVaultPinAttempt(folderId) {
+  const now = Date.now();
+  const attempts = await readPinAttempts(now);
+  const count = attempts.get(folderId)?.count ?? 0;
+  if (count >= pinAttemptLimit) return false;
+  attempts.set(folderId, { count: count + 1, expiresAt: now + pinRetryWindow });
+  await persistPinAttempts(attempts);
+  return true;
+}
+
+export async function clearVaultPinAttempts(folderId) {
+  const attempts = await readPinAttempts();
+  if (attempts.delete(folderId)) await persistPinAttempts(attempts);
 }

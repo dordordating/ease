@@ -1,6 +1,7 @@
 import {
-  connectGoogleCalendar, disconnectGoogleCalendar, getGoogleAccount, getGoogleCalendarState,
-  googleAccountStorageKey, googleCalendarStorageKey, googleConfigured, signInGoogle, signOutGoogle, syncGoogleCalendar
+  connectGoogleCalendar, disconnectGoogleCalendar, getGoogleAccount, getGoogleCalendarState, getGoogleProviderIssue,
+  googleAccountStorageKey, googleCalendarStorageKey, googleConfigured, googleProviderErrorKey,
+  signInGoogle, signOutGoogle, syncGoogleCalendar
 } from "./providers.js";
 import {
   appleCalendarStorageKey, connectAppleCalendar, disconnectAppleCalendar, getAppleCalendarState, syncAppleCalendar
@@ -32,9 +33,51 @@ function card(title) {
   return { wrap, details };
 }
 
-export function renderAccount(parent, t, reportError) {
+function googleDiagnostics(wrap, kind, t) {
+  const panel = element("div", "account-error");
+  panel.setAttribute("role", "alert");
+  panel.hidden = true;
+  wrap.append(panel);
+  let hasCurrentResult = false;
+
+  function show(code) {
+    panel.replaceChildren();
+    panel.hidden = !code;
+    if (!code) return;
+    panel.append(element("p", "account-error-message", t(code)));
+    if (code === "googleOAuthClientMismatch" && /^[a-p]{32}$/u.test(chrome.runtime.id ?? "")) {
+      const installedId = element("code", "account-extension-id", chrome.runtime.id);
+      installedId.dir = "ltr";
+      panel.append(installedId);
+    }
+    const route = new URLSearchParams(location.search);
+    if ((code === "googleHostPromptFailed" || code === "googleOAuthUnavailable") && route.get("open") !== kind) {
+      panel.append(element("p", "", t("googleAuthTabHint")));
+      panel.append(action(t("googleOpenAuthTab"), async () => {
+        try {
+          await chrome.tabs.create({ url: chrome.runtime.getURL(`workspace.html?surface=panel&open=${kind}`) });
+        } catch {
+          show("googleWorkerUnavailable");
+        }
+      }));
+    }
+  }
+
+  getGoogleProviderIssue(kind).then((code) => {
+    if (!hasCurrentResult && panel.isConnected) show(code);
+  }).catch(() => {});
+  return (code) => {
+    hasCurrentResult = true;
+    show(code);
+  };
+}
+
+export function renderAccount(parent, t, reportError, { inToolbarPopup = false } = {}) {
   const { wrap, details } = card(t("account"));
+  wrap.id = "ease-account";
   parent.append(wrap);
+  const showIssue = googleDiagnostics(wrap, "account", t);
+  const requestFromPage = !inToolbarPopup && document.body.dataset.surface === "panel";
 
   async function refresh() {
     const profile = await getGoogleAccount();
@@ -54,11 +97,13 @@ export function renderAccount(parent, t, reportError) {
     }
     details.append(action(t(profile ? "signOut" : "signInGoogle"), async ({ currentTarget }) => {
       currentTarget.disabled = true;
+      showIssue(null);
       try {
-        await (profile ? signOutGoogle() : signInGoogle());
+        await (profile ? signOutGoogle() : signInGoogle({ requestFromPage }));
         await refresh();
-      } catch {
-        reportError("accountFailed");
+      } catch (error) {
+        const fallback = profile ? "googleSignOutFailed" : "accountFailed";
+        showIssue(googleProviderErrorKey(error, fallback));
         currentTarget.disabled = false;
       }
     }, !profile && !googleConfigured()));
@@ -75,14 +120,14 @@ export async function loadConnectedEvents() {
   ));
 }
 
-export function renderCalendarConnections(parent, { locale, t, reportError, eventsChanged }) {
+export function renderCalendarConnections(parent, { locale, t, reportError, eventsChanged, inToolbarPopup = false }) {
   const heading = element("h3", "calendar-connection-heading", t("calendarConnections"));
   parent.append(heading);
   const dateFormat = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" });
   const google = {
     name: "googleCalendar",
     get: getGoogleCalendarState,
-    connect: connectGoogleCalendar,
+    connect: () => connectGoogleCalendar({ requestFromPage: !inToolbarPopup && document.body.dataset.surface === "panel" }),
     sync: syncGoogleCalendar,
     disconnect: disconnectGoogleCalendar,
     configured: googleConfigured()
@@ -99,16 +144,21 @@ export function renderCalendarConnections(parent, { locale, t, reportError, even
   function mount(provider) {
     const { wrap, details } = card(t(provider.name));
     parent.append(wrap);
+    const showIssue = provider === google ? googleDiagnostics(wrap, "calendar", t) : null;
 
     async function run(control, operation) {
       control.disabled = true;
+      showIssue?.(null);
       try {
         await operation();
         await Promise.all([refresh(), eventsChanged()]);
       } catch (error) {
-        const messages = ["appleCalendarLinkInvalid", "appleCalendarPermissionDenied"];
-        const code = error?.code ?? error?.message;
-        reportError(messages.includes(code) ? code : "syncFailed");
+        if (showIssue) showIssue(googleProviderErrorKey(error, "syncFailed"));
+        else {
+          const messages = ["appleCalendarLinkInvalid", "appleCalendarPermissionDenied"];
+          const code = error?.code ?? error?.message;
+          reportError(messages.includes(code) ? code : "syncFailed");
+        }
       } finally {
         control.disabled = false;
       }

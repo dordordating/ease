@@ -5,10 +5,13 @@ import { changeCalendarPreferences, saveCalendarEvent, setCalendarHoliday } from
 import { refreshConnectedGoogleCalendar, registerGoogleProviderHandlers } from "./providers.js";
 import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
 import { deleteFolder, hasFolder, moveSnippet, pinFolder, reorderFolder, saveFolder } from "./clipboard-store.js";
-import { createFolderVault, openSnippet, sealSnippet, unlockFolderVault, unwrapDeviceKey, wrapDeviceKey } from "./folder-vault.js";
 import {
-  activeVaultSession, defaultVaultPolicy, lockVaultSession, readVaultSessions, unlockVaultSession, vaultExpiryAlarm,
-  vaultPolicyFor
+  createFolderPin, createFolderVault, openSnippet, rewrapFolderPin, sealSnippet, unlockFolderPin, unlockFolderVault,
+  unwrapDeviceKey, wrapDeviceKey
+} from "./folder-vault.js";
+import {
+  activeVaultSession, clearVaultPinAttempts, defaultVaultPolicy, lockVaultSession, readVaultSessions,
+  reserveVaultPinAttempt, unlockVaultSession, vaultExpiryAlarm, vaultPolicyFor
 } from "./vault-session.js";
 
 let pendingWrite = Promise.resolve();
@@ -84,6 +87,7 @@ async function hydrateWorkspace(workspace, sessions) {
     return {
       ...folder,
       protected: true,
+      vaultMode: vault.mode === "pin" ? "pin" : "password",
       vaultPolicy: vaultPolicyFor(folder.vaultPolicy),
       unlockedUntil: vaultFolders.get(folder.id)?.expiresAt ?? null,
       ...(device ? { device: { credentialId: device.credentialId, salt: device.salt } } : {})
@@ -124,18 +128,28 @@ async function unsealFolder(workspace, folder, key) {
   )));
 }
 
+function validPin(pin) {
+  return typeof pin === "string" && pin.length === 4 && /^[0-9]{4}$/u.test(pin);
+}
+
 async function updateVault(workspace, action, data, transaction) {
   const { sessions } = transaction;
   const folder = folderFor(workspace, data.id);
   if (!folder) return "folderMissing";
   if (action === "protect-folder") {
     if (folder.vault) return "vaultLocked";
-    const { password, policy = defaultVaultPolicy } = data;
+    const { pin, password, policy = defaultVaultPolicy } = data;
     if (policy !== vaultPolicyFor(policy)) throw new Error("Invalid vault lock policy");
-    if (typeof password !== "string" || password.length > 256 || !password.isWellFormed()) return "vaultPasswordLength";
-    const length = Array.from(password).length;
-    if (length < 8 || length > 128) return "vaultPasswordLength";
-    const { vault, key } = await createFolderVault(password, folder.id);
+    if (pin !== undefined) {
+      if (!validPin(pin)) return "vaultPinFormat";
+    } else {
+      if (typeof password !== "string" || password.length > 256 || !password.isWellFormed()) return "vaultPasswordLength";
+      const length = Array.from(password).length;
+      if (length < 8 || length > 128) return "vaultPasswordLength";
+    }
+    const { vault, key } = pin === undefined
+      ? await createFolderVault(password, folder.id)
+      : await createFolderPin(pin, folder.id);
     workspace.snippets = await Promise.all(workspace.snippets.map(snippet => (
       snippet.folderId === folder.id ? sealSnippet(snippet, key) : snippet
     )));
@@ -150,13 +164,21 @@ async function updateVault(workspace, action, data, transaction) {
 
   switch (action) {
     case "unlock-folder": {
+      const usesPin = folder.vault.mode === "pin";
+      if (usesPin) {
+        if (!validPin(data.pin)) return "vaultPinFormat";
+        if (!await reserveVaultPinAttempt(folder.id)) return "vaultPinWait";
+      }
       let key;
       try {
-        key = await unlockFolderVault(data.password, folder.id, folder.vault);
+        key = usesPin
+          ? await unlockFolderPin(data.pin, folder.id, folder.vault)
+          : await unlockFolderVault(data.password, folder.id, folder.vault);
       } catch {
-        return "vaultPasswordInvalid";
+        return usesPin ? "vaultPinInvalid" : "vaultPasswordInvalid";
       }
       await unlockVaultSession(sessions, folder.id, key, folder.vaultPolicy);
+      if (usesPin) await clearVaultPinAttempts(folder.id).catch(() => {});
       transaction.writeWorkspace = false;
       break;
     }
@@ -177,6 +199,15 @@ async function updateVault(workspace, action, data, transaction) {
           throw error;
         }
       };
+      break;
+    }
+    case "set-vault-pin": {
+      const key = unlockedKey(sessions, folder);
+      if (!validPin(data.pin)) return "vaultPinFormat";
+      const { device } = folder.vault;
+      folder.vault = await rewrapFolderPin(data.pin, folder.id, key);
+      if (device) folder.vault.device = device;
+      transaction.afterCommit = () => clearVaultPinAttempts(folder.id).catch(() => {});
       break;
     }
     case "unprotect-folder": {
@@ -276,6 +307,7 @@ async function updateWorkspace(workspace, action, data, transaction) {
     case "unlock-folder":
     case "lock-folder":
     case "set-vault-policy":
+    case "set-vault-pin":
     case "unprotect-folder":
     case "protect-device":
     case "unlock-device":

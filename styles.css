@@ -736,19 +736,19 @@ body[data-surface="popup"] .folder-bar {
   color: var(--accent);
 }
 
-:is(.folder-chip, .folder-current)[data-folder-color="violet"] {
+:is(.folder-chip, .folder-current, .snippet-glyph)[data-folder-color="violet"] {
   --folder-icon-color: var(--folder-violet);
 }
 
-:is(.folder-chip, .folder-current)[data-folder-color="blue"] {
+:is(.folder-chip, .folder-current, .snippet-glyph)[data-folder-color="blue"] {
   --folder-icon-color: var(--calendar);
 }
 
-:is(.folder-chip, .folder-current)[data-folder-color="mint"] {
+:is(.folder-chip, .folder-current, .snippet-glyph)[data-folder-color="mint"] {
   --folder-icon-color: var(--markets);
 }
 
-:is(.folder-chip, .folder-current)[data-folder-color="amber"] {
+:is(.folder-chip, .folder-current, .snippet-glyph)[data-folder-color="amber"] {
   --folder-icon-color: var(--mail);
 }
 
@@ -900,6 +900,11 @@ body[data-surface="popup"] .folder-bar {
   border-radius: 8px;
   background: var(--subtle);
   color: var(--module-color, var(--muted));
+}
+
+.snippet-glyph[data-folder-color]:not([data-folder-color="default"]) {
+  background: color-mix(in srgb, var(--folder-icon-color, var(--muted)) 11%, var(--surface));
+  color: var(--folder-icon-color, var(--muted));
 }
 
 .snippet-glyph svg, .module-glyph svg {
@@ -1292,6 +1297,39 @@ html[dir="rtl"] .snippet-text > :is(strong, span) {
 }
 
 .account-card .status-tag {
+  max-inline-size: 100%;
+}
+
+.account-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-inline-size: 0;
+  padding: 6px 7px;
+  border-inline-start: 2px solid var(--danger);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  overflow-wrap: anywhere;
+}
+
+.account-card .account-error-message {
+  flex: 1 1 100%;
+  min-inline-size: 0;
+  color: var(--danger);
+}
+
+.account-extension-id {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  padding: 2px 4px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 4px;
+  background: var(--surface);
+  font-size: 10px;
+}
+
+.account-error .secondary-button {
   max-inline-size: 100%;
 }
 
@@ -1702,6 +1740,47 @@ html[dir="rtl"] :is(input, textarea):placeholder-shown {
 html[dir="rtl"] .vault-password-field:placeholder-shown {
   direction: ltr;
   text-align: left;
+}
+
+.field:has(> .vault-pin-input) {
+  justify-items: center;
+}
+
+.field .vault-pin-input {
+  --pin-step: 34px;
+  --pin-gap: 5px;
+  --pin-cell: calc(var(--pin-step) - var(--pin-gap));
+  --pin-inset: 16px;
+  --pin-track: calc(4 * var(--pin-step) - var(--pin-gap));
+  inline-size: calc(var(--pin-track) + 2 * var(--pin-inset));
+  max-inline-size: 100%;
+  min-block-size: 42px;
+  padding-block: 0;
+  padding-inline-start: calc(var(--pin-inset) + (var(--pin-cell) - 1ch) / 2);
+  padding-inline-end: 0;
+  background: repeating-linear-gradient(
+    to right,
+    var(--subtle) 0 var(--pin-cell),
+    transparent var(--pin-cell) var(--pin-step)
+  ) center / var(--pin-track) calc(100% - 10px) no-repeat var(--surface);
+  color: var(--text);
+  caret-color: var(--accent);
+  font: 700 20px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  letter-spacing: calc(var(--pin-step) - 1ch);
+}
+
+.vault-pin-input,
+html[dir="rtl"] .vault-pin-input:placeholder-shown {
+  direction: ltr;
+  text-align: left;
+}
+
+.vault-pin-input:focus {
+  border-color: var(--accent);
+}
+
+.vault-pin-form .dialog-footer:has([type="submit"][hidden]) {
+  justify-content: center;
 }
 
 .field textarea {
