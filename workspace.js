@@ -59,6 +59,7 @@ async function refreshCalendarEvents() {
   if (version !== refreshVersion) return;
   providerEvents = events;
   calendarController?.update({ events: calendarEvents() });
+  if (query) render();
 }
 
 function node(tag, className, label) {
@@ -451,19 +452,53 @@ function searchable(text) {
     .replace(/ي/gu, "ی").replace(/ك/gu, "ک").replace(/\u200c/gu, " ");
 }
 
+function renderEventResults(results) {
+  const heading = node("div", "collection-heading");
+  heading.append(node("h2", "", t("calendarEvents")));
+  const list = node("div", "command-list");
+  const dateFormat = new Intl.DateTimeFormat(workspace.locale, {
+    calendar: calendarSystemFor(workspace.locale, workspace.calendar?.system),
+    dateStyle: "medium",
+    timeZone: "UTC"
+  });
+  for (const event of results) {
+    const result = node("button", "command-item search-event-result");
+    result.type = "button";
+    result.id = `event-result-${event.id}`;
+    const copy = node("span", "search-event-copy");
+    const title = node("strong", "", event.title || t("calendarEventTitle"));
+    title.dir = "auto";
+    const date = new Date(`${event.date}T00:00:00Z`);
+    copy.append(title, node("small", "", dateFormat.format(date)));
+    result.append(glyph("calendar"), copy);
+    result.addEventListener("click", () => {
+      switchTo("calendar", false);
+      calendarController?.openEvent(event.id);
+    });
+    list.append(result);
+  }
+  view.append(heading, list);
+}
+
 function renderSearch() {
   section(t("searchResults"));
   const searchText = searchable(query);
   const matches = (text) => searchable(text).includes(searchText);
   const snippets = workspace.snippets.filter(({ title, text }) => matches(`${title} ${text}`));
+  const events = workspace.tabs.includes("calendar")
+    ? calendarEvents().filter(({ title, date, location, notes }) => matches([title, date, location, notes].join(" ")))
+      .sort((left, right) => left.date.localeCompare(right.date)
+        || (left.start || left.end || "").localeCompare(right.start || right.end || ""))
+    : [];
   const commands = destinations.filter((page) => (page === library || page === settings || workspace.tabs.includes(page.id))
     && matches(`${t(page.id)} ${translate("en", page.id)}`));
   const newSnippet = matches(`${t("newSnippet")} ${translate("en", "newSnippet")}`);
-  if (!snippets.length && !commands.length && !newSnippet) {
+  if (!snippets.length && !events.length && !commands.length && !newSnippet) {
     emptyState(t("emptySearch"), t("emptySearchHint"), "search");
     return;
   }
   if (snippets.length) snippetList(t("snippets"), snippets);
+  if (events.length) renderEventResults(events);
   if (commands.length || newSnippet) {
     const heading = node("div", "collection-heading");
     heading.append(node("h2", "", t("commands")));
@@ -815,3 +850,4 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 render();
 refreshCalendarDay();
+refreshCalendarEvents();

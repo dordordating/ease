@@ -42,6 +42,7 @@ export function renderCalendar(container, {
   let formatMonth;
   let formatWeek;
   let formatDay;
+  let formatWeekDay;
   let formatDate;
   let monthDayNumber;
   let eventsByDate;
@@ -50,7 +51,10 @@ export function renderCalendar(container, {
   let activeDay = navigation.activeDay ?? selectedDay;
   let editorEvent;
   let editorDay;
-  let deleteCandidate;
+  let detailEvent;
+  let eventOrigin;
+  let showingSettings = false;
+  let confirmingDelete = false;
   let savingSettings = false;
   let savingHoliday = false;
   let savingEvent = false;
@@ -64,6 +68,7 @@ export function renderCalendar(container, {
     formatMonth = new Intl.DateTimeFormat(locale, { ...options, month: 'long', year: 'numeric' });
     formatWeek = new Intl.DateTimeFormat(locale, { ...options, month: 'short', day: 'numeric', year: 'numeric' });
     formatDay = new Intl.DateTimeFormat(locale, { ...options, day: 'numeric' });
+    formatWeekDay = new Intl.DateTimeFormat(locale, { ...options, weekday: 'long', month: 'short', day: 'numeric' });
     formatDate = new Intl.DateTimeFormat(locale, { ...options, dateStyle: 'full' });
     monthDayNumber = new Intl.DateTimeFormat(locale, { ...options, day: 'numeric', numberingSystem: 'latn' });
   }
@@ -89,7 +94,8 @@ export function renderCalendar(container, {
       eventsByDate.get(event.date).push(event);
     }
     for (const dayEvents of eventsByDate.values()) {
-      dayEvents.sort((a, b) => (a.start ?? '').localeCompare(b.start ?? '') || a.title.localeCompare(b.title, locale));
+      dayEvents.sort((a, b) => (a.start || a.end || '').localeCompare(b.start || b.end || '')
+        || (a.title ?? '').localeCompare(b.title ?? '', locale));
     }
   }
 
@@ -121,6 +127,7 @@ export function renderCalendar(container, {
             <option value="dots" data-label="calendarEventDots"></option>
             <option value="count" data-label="calendarEventCountMode"></option>
             <option value="titles" data-label="calendarEventTitles"></option>
+            <option value="cards" data-label="calendarEventCards"></option>
           </select>
         </label>
       </div>
@@ -140,6 +147,7 @@ export function renderCalendar(container, {
         <thead><tr></tr></thead>
         <tbody></tbody>
       </table>
+      <div class="calendar-week-list" role="list" aria-labelledby="calendar-month-heading" hidden></div>
       <div class="calendar-summary">
         <div class="calendar-summary-copy">
           <span class="calendar-summary-label" data-label="calendarSelected"></span>
@@ -161,19 +169,17 @@ export function renderCalendar(container, {
             <span data-label="calendarEventTitle"></span>
             <input name="title" type="text" maxlength="160" dir="auto" required>
           </label>
-          <label class="calendar-all-day">
-            <input name="allDay" type="checkbox" checked>
-            <span data-label="calendarAllDay"></span>
-          </label>
-          <div class="calendar-time-fields">
+          <button type="button" class="calendar-time-toggle" aria-expanded="false" aria-controls="calendar-time-fields">${icon('plus')}<span data-label="calendarAddTime"></span></button>
+          <div class="calendar-time-fields" id="calendar-time-fields" hidden>
             <label class="calendar-field">
               <span data-label="calendarStarts"></span>
-              <input name="start" type="time" required>
+              <input name="start" type="time">
             </label>
             <label class="calendar-field">
               <span data-label="calendarEnds"></span>
-              <input name="end" type="time" required>
+              <input name="end" type="time">
             </label>
+            <button type="button" class="calendar-clear-time" data-label="calendarClearTime"></button>
           </div>
           <label class="calendar-field">
             <span data-label="calendarLocation"></span>
@@ -191,7 +197,28 @@ export function renderCalendar(container, {
         </form>
         <div class="calendar-events"></div>
       </section>
+      <div class="calendar-month-cards" hidden></div>
     </div>
+    <section class="calendar calendar-event-detail" aria-labelledby="calendar-detail-title" hidden>
+      <div class="calendar-detail-heading">
+        <button type="button" class="calendar-detail-back">${icon(rtl ? 'chevron-right' : 'chevron-left')}<span data-label="calendarBack"></span></button>
+        <h3 data-label="calendarEventDetails"></h3>
+      </div>
+      <h4 class="calendar-detail-title" id="calendar-detail-title" dir="auto"></h4>
+      <dl class="calendar-detail-fields"></dl>
+      <div class="calendar-detail-actions">
+        <button type="button" class="secondary-button calendar-detail-edit">${icon('edit')}<span data-label="edit"></span></button>
+        <button type="button" class="secondary-button calendar-detail-delete">${icon('trash')}<span data-label="remove"></span></button>
+      </div>
+      <div class="calendar-event-confirm" hidden>
+        <p class="calendar-confirm-message"></p>
+        <p class="calendar-form-status" role="status" hidden></p>
+        <div class="calendar-form-actions">
+          <button type="button" class="secondary-button" data-calendar-delete-cancel data-label="cancel"></button>
+          <button type="button" class="secondary-button" data-calendar-delete-confirm data-label="remove"></button>
+        </div>
+      </div>
+    </section>
   `;
 
   const heading = container.querySelector('.calendar-month');
@@ -205,6 +232,8 @@ export function renderCalendar(container, {
   const settingsStatus = container.querySelector('[data-calendar-settings-status]');
   const grid = container.querySelector('.calendar-grid');
   const body = grid.tBodies[0];
+  const weekList = container.querySelector('.calendar-week-list');
+  const monthCards = container.querySelector('.calendar-month-cards');
   const selectedDate = container.querySelector('.calendar-summary-date');
   const holidayBadge = container.querySelector('.calendar-summary-holiday');
   const holidayButton = container.querySelector('.calendar-holiday-toggle');
@@ -213,11 +242,24 @@ export function renderCalendar(container, {
   const agenda = container.querySelector('.calendar-events');
   const editor = container.querySelector('.calendar-event-form');
   const editorTitle = editor.elements.namedItem('title');
-  const allDayField = editor.elements.namedItem('allDay');
+  const timeToggle = editor.querySelector('.calendar-time-toggle');
+  const timeFields = editor.querySelector('.calendar-time-fields');
+  const clearTime = editor.querySelector('.calendar-clear-time');
   const startField = editor.elements.namedItem('start');
   const endField = editor.elements.namedItem('end');
   const editorStatus = editor.querySelector('.calendar-form-status');
   const editorCancel = editor.querySelector('[data-calendar-cancel]');
+  const detailView = container.querySelector('.calendar-event-detail');
+  const detailTitle = detailView.querySelector('.calendar-detail-title');
+  const detailFields = detailView.querySelector('.calendar-detail-fields');
+  const detailBack = detailView.querySelector('.calendar-detail-back');
+  const detailActions = detailView.querySelector('.calendar-detail-actions');
+  const detailEdit = detailView.querySelector('.calendar-detail-edit');
+  const detailDelete = detailView.querySelector('.calendar-detail-delete');
+  const deletePrompt = detailView.querySelector('.calendar-event-confirm');
+  const deleteCancelButton = deletePrompt.querySelector('[data-calendar-delete-cancel]');
+  const deleteConfirmButton = deletePrompt.querySelector('[data-calendar-delete-confirm]');
+  const deleteStatus = deletePrompt.querySelector('.calendar-form-status');
 
   for (const label of container.querySelectorAll('[data-label]')) label.textContent = t(label.dataset.label);
   holidayButton.hidden = !onHoliday;
@@ -226,13 +268,8 @@ export function renderCalendar(container, {
   settingsButton?.setAttribute('aria-controls', settingsView.id);
   settingsButton?.setAttribute('aria-expanded', 'false');
   settingsButton?.addEventListener('click', () => {
-    const opening = settingsView.hidden;
-    settingsView.hidden = !opening;
-    calendarView.hidden = opening;
-    settingsButton.setAttribute('aria-expanded', String(opening));
-    const label = t(opening ? 'close' : 'calendarSettings');
-    settingsButton.setAttribute('aria-label', label);
-    settingsButton.title = label;
+    showingSettings = !showingSettings;
+    updateViews();
     const workspace = container.closest('.workspace');
     if (workspace) workspace.scrollTop = 0;
   });
@@ -269,7 +306,7 @@ export function renderCalendar(container, {
 
   function eventDisplayMode() {
     const { eventDisplay } = preferences;
-    return eventDisplay === 'count' || eventDisplay === 'titles' ? eventDisplay : defaultCalendar.eventDisplay;
+    return ['dots', 'count', 'titles', 'cards'].includes(eventDisplay) ? eventDisplay : defaultCalendar.eventDisplay;
   }
 
   function updateControls() {
@@ -292,51 +329,94 @@ export function renderCalendar(container, {
     holidayButton.textContent = t(marked ? 'calendarUnmarkHoliday' : 'calendarMarkHoliday');
   }
 
-  function appendEventMarkers(button, dayEvents, mode, weekly) {
-    button.classList.add('has-events');
-    button.dataset.eventDisplay = mode;
-    const markers = document.createElement('span');
-    markers.className = 'calendar-event-markers';
-    markers.setAttribute('aria-hidden', 'true');
-    if (mode === 'count') {
-      appendText(markers, 'span', 'calendar-event-marker-count', formatMarkerCount.format(dayEvents.length));
-    } else if (mode === 'titles') {
-      const visibleLimit = weekly ? 2 : 1;
-      for (const event of dayEvents.slice(0, visibleLimit)) {
-        const title = event.title || t('calendarEventTitle');
-        appendText(markers, 'span', 'calendar-event-chip', title);
-        markers.lastElementChild.title = title;
-      }
-      if (dayEvents.length > visibleLimit) {
-        const count = formatMarkerCount.format(dayEvents.length - visibleLimit);
-        appendText(markers, 'span', 'calendar-event-marker-more', t('calendarEventMore', { count }));
-        markers.lastElementChild.dir = 'ltr';
-      }
-    } else {
-      appendText(markers, 'span', 'calendar-event-dot', '');
-    }
-    button.append(markers);
+  function makeEventButton(event, className) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = className;
+    button.dataset.event = event.id;
+    button.disabled = !editor.hidden;
+    button.addEventListener('click', () => openDetails(event, button));
+    return button;
   }
 
-  function updateGrid(focusDay = false) {
-    const today = localToday();
-    const weekly = preferences.view === 'week';
-    const mode = eventDisplayMode();
-    calendarView.classList.toggle('is-week', weekly);
-    calendarView.dataset.eventDisplay = mode;
-    const firstDate = weekly ? activeDay - weekOffset(activeDay) : monthStart(activeDay);
-    const start = firstDate - weekOffset(firstDate);
-    const end = weekly ? start + 7 : nextMonth(firstDate);
-    const monthLabel = weekly
-      ? formatWeek.formatRange(start * dayLength, (end - 1) * dayLength)
-      : formatMonth.format(firstDate * dayLength);
-    const dateLabel = formatDate.format(selectedDay * dayLength);
-    if (heading.textContent !== monthLabel) heading.textContent = monthLabel;
-    if (selectedDate.textContent !== dateLabel) selectedDate.textContent = dateLabel;
-    updateHolidaySummary();
-    previousButton.setAttribute('aria-label', t(weekly ? 'previousWeek' : 'previousMonth'));
-    nextButton.setAttribute('aria-label', t(weekly ? 'nextWeek' : 'nextMonth'));
+  function eventTitle(event) {
+    return event.title || t('calendarUntitledEvent');
+  }
 
+  function eventSource(event) {
+    if (event.provider === 'google') return t('googleCalendar');
+    if (event.provider === 'apple') return t('appleCalendar');
+    return t('localWorkspace');
+  }
+
+  function eventItem(event, card) {
+    const button = makeEventButton(event, card
+      ? 'calendar-event-card'
+      : 'calendar-event calendar-event-content');
+    appendText(button, 'span', 'calendar-event-title', eventTitle(event));
+    appendText(button, 'span', 'calendar-event-time', eventTime(event));
+    if (event.location) appendText(button, 'span', 'calendar-event-location', event.location);
+    if (event.readOnly) appendText(button, 'span', 'calendar-event-provider', eventSource(event));
+    return button;
+  }
+
+  function titleMarkers(dayEvents, limit) {
+    const markers = document.createElement('span');
+    markers.className = 'calendar-event-markers';
+    for (const event of dayEvents.slice(0, limit)) {
+      const chip = makeEventButton(event, 'calendar-event-chip');
+      chip.dir = 'auto';
+      chip.textContent = eventTitle(event);
+      chip.title = chip.textContent;
+      markers.append(chip);
+    }
+    if (dayEvents.length > limit) {
+      const count = formatMarkerCount.format(dayEvents.length - limit);
+      appendText(markers, 'span', 'calendar-event-marker-more', t('calendarEventMore', { count }));
+      markers.lastElementChild.dir = 'ltr';
+    }
+    return markers;
+  }
+
+  function makeDayButton(day, today, dayEvents, mode, weekly) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'calendar-day';
+    button.dataset.day = day;
+    button.tabIndex = day === activeDay ? 0 : -1;
+    if (weekly) button.classList.add('calendar-week-day-button');
+    appendText(button, 'span', 'calendar-day-number', formatDay.format(day * dayLength));
+    if (weekly) appendText(button, 'span', 'calendar-week-day-label', longWeekday.format(day * dayLength));
+
+    const label = [formatDate.format(day * dayLength)];
+    if (dayEvents.length) {
+      button.classList.add('has-events');
+      button.dataset.eventDisplay = mode;
+      label.push(t('calendarEventCount', { count: formatCount.format(dayEvents.length) }));
+      if (mode === 'dots' || mode === 'count' || (!weekly && mode === 'cards')) {
+        const markers = document.createElement('span');
+        markers.className = 'calendar-event-markers';
+        markers.setAttribute('aria-hidden', 'true');
+        if (mode === 'count') {
+          appendText(markers, 'span', 'calendar-event-marker-count', formatMarkerCount.format(dayEvents.length));
+        } else {
+          appendText(markers, 'span', 'calendar-event-dot', '');
+        }
+        button.append(markers);
+      }
+    }
+    const holiday = holidays.has(dayKey(day));
+    if (holiday) label.push(t('calendarHoliday'));
+    button.setAttribute('aria-label', label.join(', '));
+    button.classList.toggle('is-holiday', holiday);
+    button.classList.toggle('is-selected', day === selectedDay);
+    button.classList.toggle('is-today', day === today);
+    if (weekly) button.setAttribute('aria-pressed', String(day === selectedDay));
+    if (day === today) button.setAttribute('aria-current', 'date');
+    return button;
+  }
+
+  function renderMonth(start, firstDate, end, today, mode) {
     body.replaceChildren();
     for (let week = start; week < end; week += 7) {
       const row = body.insertRow();
@@ -346,88 +426,97 @@ export function renderCalendar(container, {
         cell.className = 'calendar-cell';
         if (day < firstDate || day >= end) continue;
 
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = 'calendar-day';
-        button.dataset.day = day;
-        button.tabIndex = day === activeDay ? 0 : -1;
-        const date = dayKey(day);
-        const dayEvents = eventsByDate.get(date);
-        const holiday = holidays.has(date);
-        appendText(button, 'span', 'calendar-day-number', formatDay.format(day * dayLength));
-        const buttonLabel = [formatDate.format(day * dayLength)];
-        if (dayEvents?.length) {
-          buttonLabel.push(t('calendarEventCount', { count: formatCount.format(dayEvents.length) }));
-          appendEventMarkers(button, dayEvents, mode, weekly);
-        }
-        if (holiday) buttonLabel.push(t('calendarHoliday'));
-        button.setAttribute('aria-label', buttonLabel.join(', '));
-        button.classList.toggle('is-holiday', holiday);
-        button.classList.toggle('is-selected', day === selectedDay);
-        button.classList.toggle('is-today', day === today);
+        const dayEvents = eventsByDate.get(dayKey(day)) ?? [];
+        const button = makeDayButton(day, today, dayEvents, mode, false);
         cell.setAttribute('aria-selected', String(day === selectedDay));
-        if (day === today) button.setAttribute('aria-current', 'date');
-        cell.append(button);
+        if (mode === 'titles' && dayEvents.length) {
+          const block = document.createElement('div');
+          block.className = 'calendar-day-titles';
+          block.append(button, titleMarkers(dayEvents, 1));
+          cell.append(block);
+        } else {
+          cell.append(button);
+        }
       }
     }
+  }
 
-    if (focusDay) body.querySelector(`[data-day="${activeDay}"]`).focus();
+  function renderWeek(start, end, today, mode) {
+    weekList.replaceChildren();
+    for (let day = start; day < end; day += 1) {
+      const dayEvents = eventsByDate.get(dayKey(day)) ?? [];
+      const section = document.createElement('div');
+      section.className = 'calendar-week-day';
+      section.setAttribute('role', 'listitem');
+      section.append(makeDayButton(day, today, dayEvents, mode, true));
+      if (dayEvents.length && (mode === 'cards' || mode === 'titles')) {
+        const events = document.createElement('div');
+        events.className = 'calendar-week-events';
+        if (mode === 'cards') events.append(...dayEvents.map(event => eventItem(event, true)));
+        else events.append(titleMarkers(dayEvents, 2));
+        section.append(events);
+      }
+      weekList.append(section);
+    }
+  }
+
+  function renderMonthCards(firstDate, end) {
+    monthCards.replaceChildren();
+    for (let day = firstDate; day < end; day += 1) {
+      const dayEvents = eventsByDate.get(dayKey(day));
+      if (!dayEvents?.length) continue;
+      const group = document.createElement('section');
+      group.className = 'calendar-card-group';
+      appendText(group, 'h4', 'calendar-card-group-label', formatWeekDay.format(day * dayLength));
+      group.append(...dayEvents.map(event => eventItem(event, true)));
+      monthCards.append(group);
+    }
+  }
+
+  function updateGrid(focusDay = false) {
+    const today = localToday();
+    const weekly = preferences.view === 'week';
+    const mode = eventDisplayMode();
+    const firstDate = weekly ? activeDay - weekOffset(activeDay) : monthStart(activeDay);
+    const start = firstDate - weekOffset(firstDate);
+    const end = weekly ? start + 7 : nextMonth(firstDate);
+    const periodLabel = weekly
+      ? formatWeek.formatRange(start * dayLength, (end - 1) * dayLength)
+      : formatMonth.format(firstDate * dayLength);
+    const dateLabel = formatDate.format(selectedDay * dayLength);
+    if (heading.textContent !== periodLabel) heading.textContent = periodLabel;
+    if (selectedDate.textContent !== dateLabel) selectedDate.textContent = dateLabel;
+    updateHolidaySummary();
+    previousButton.setAttribute('aria-label', t(weekly ? 'previousWeek' : 'previousMonth'));
+    nextButton.setAttribute('aria-label', t(weekly ? 'nextWeek' : 'nextMonth'));
+
+    calendarView.classList.toggle('is-week', weekly);
+    calendarView.dataset.eventDisplay = mode;
+    grid.hidden = weekly;
+    weekList.hidden = !weekly;
+    monthCards.hidden = weekly || mode !== 'cards';
+    if (weekly) {
+      body.replaceChildren();
+      renderWeek(start, end, today, mode);
+    } else {
+      weekList.replaceChildren();
+      renderMonth(start, firstDate, end, today, mode);
+    }
+    if (monthCards.hidden) monthCards.replaceChildren();
+    else renderMonthCards(firstDate, end);
+    if (focusDay) calendarView.querySelector(`[data-day="${activeDay}"]`)?.focus();
   }
 
   function updateAgenda() {
     const dayEvents = eventsByDate.get(dayKey(selectedDay)) ?? [];
-    const focusedRow = document.activeElement.closest('.calendar-event');
-    const focusedControl = focusedRow && Array.from(focusedRow.querySelectorAll('button')).indexOf(document.activeElement);
+    const cardMode = eventDisplayMode() === 'cards';
     agenda.replaceChildren();
+    if (cardMode) return;
     if (!dayEvents.length) {
-      appendText(agenda, 'p', 'calendar-empty', t('calendarNoEvents'));
-      agenda.firstElementChild.hidden = !editor.hidden;
+      if (editor.hidden) appendText(agenda, 'p', 'calendar-empty', t('calendarNoEvents'));
       return;
     }
-    for (const event of dayEvents) {
-      const row = document.createElement('div');
-      row.className = 'calendar-event';
-      row.dataset.event = event.id;
-      const content = document.createElement(event.readOnly ? 'div' : 'button');
-      content.className = 'calendar-event-content';
-      if (!event.readOnly) {
-        content.type = 'button';
-        content.title = t('calendarEditEvent');
-        content.disabled = !editor.hidden;
-        content.addEventListener('click', () => openEditor(event));
-      }
-      appendText(content, 'span', 'calendar-event-title', event.title || t('calendarEventTitle'));
-      const time = eventTime(event);
-      appendText(content, 'span', 'calendar-event-time', time);
-      if (event.location) appendText(content, 'span', 'calendar-event-location', event.location);
-      if (event.notes && event.readOnly) appendText(content, 'span', 'calendar-event-notes', event.notes);
-      if (event.provider === 'google' || event.provider === 'apple') {
-        appendText(content, 'span', 'calendar-event-provider', t(event.provider === 'google' ? 'googleCalendar' : 'appleCalendar'));
-      }
-      row.append(content);
-      if (!event.readOnly) {
-        const remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'calendar-event-delete';
-        remove.setAttribute('aria-label', t('calendarDeleteEvent'));
-        remove.title = t('calendarDeleteEvent');
-        remove.disabled = deletingEvent;
-        remove.innerHTML = icon('trash');
-        remove.addEventListener('click', () => {
-          if (deletingEvent) return;
-          deleteCandidate = event.id;
-          updateAgenda();
-          agenda.querySelector('.calendar-event-confirm button').focus();
-        });
-        row.append(remove);
-        if (deleteCandidate === event.id) row.append(deletePrompt(event));
-      }
-      agenda.append(row);
-    }
-    if (focusedRow && focusedControl >= 0) {
-      Array.from(agenda.children).find(row => row.dataset.event === focusedRow.dataset.event)
-        ?.querySelectorAll('button')[focusedControl]?.focus();
-    }
+    agenda.append(...dayEvents.map(event => eventItem(event, false)));
   }
 
   function eventTime(event) {
@@ -449,52 +538,6 @@ export function renderCalendar(container, {
     parent.append(element);
   }
 
-  function deletePrompt(event) {
-    const prompt = document.createElement('div');
-    prompt.className = 'calendar-event-confirm';
-    prompt.innerHTML = `
-      <p></p>
-      <p class="calendar-form-status" role="status" hidden></p>
-      <div class="calendar-form-actions">
-        <button type="button" class="secondary-button"></button>
-        <button type="button" class="secondary-button"></button>
-      </div>
-    `;
-    prompt.firstElementChild.textContent = t('calendarConfirmDelete', { title: event.title });
-    const [cancel, remove] = prompt.querySelectorAll('button');
-    cancel.textContent = t('cancel');
-    remove.textContent = t('remove');
-    cancel.disabled = deletingEvent;
-    remove.disabled = deletingEvent;
-    cancel.addEventListener('click', () => {
-      deleteCandidate = undefined;
-      updateAgenda();
-      Array.from(agenda.children).find(row => row.dataset.event === event.id)
-        ?.querySelector('.calendar-event-delete')?.focus();
-    });
-    remove.addEventListener('click', async () => {
-      deletingEvent = true;
-      cancel.disabled = true;
-      remove.disabled = true;
-      const deleted = await runChange(onDeleteEvent, event.id);
-      deletingEvent = false;
-      if (deleted) {
-        deleteCandidate = undefined;
-        if (editorEvent?.id === event.id) closeEditor();
-        updateAgenda();
-        addButton.focus();
-      } else {
-        updateAgenda();
-        const currentPrompt = agenda.querySelector('.calendar-event-confirm');
-        if (currentPrompt) {
-          setStatus(currentPrompt.querySelector('[role="status"]'), 'deleteFailed');
-          currentPrompt.querySelector('button').focus();
-        }
-      }
-    });
-    return prompt;
-  }
-
   function setStatus(element, message) {
     element.textContent = message ? t(message) : '';
     element.hidden = !message;
@@ -508,31 +551,163 @@ export function renderCalendar(container, {
     }
   }
 
-  function toggleTimes() {
-    editor.querySelector('.calendar-time-fields').hidden = allDayField.checked;
-    startField.disabled = allDayField.checked || savingEvent;
-    endField.disabled = allDayField.checked || savingEvent;
+  function updateViews() {
+    const showingDetails = Boolean(detailEvent) && editor.hidden && !showingSettings;
+    settingsView.hidden = !showingSettings;
+    detailView.hidden = !showingDetails;
+    calendarView.hidden = showingSettings || showingDetails;
+    if (settingsButton) {
+      const label = t(showingSettings ? 'close' : 'calendarSettings');
+      settingsButton.setAttribute('aria-expanded', String(showingSettings));
+      settingsButton.setAttribute('aria-label', label);
+      settingsButton.title = label;
+    }
+  }
+
+  function findEvent(id) {
+    for (const events of eventsByDate.values()) {
+      const event = events.find(item => item.id === id);
+      if (event) return event;
+    }
+  }
+
+  function buttonOrigin(button) {
+    return button && [body, weekList, agenda, monthCards].find(list => list.contains(button));
+  }
+
+  function eventButtonIn(origin, id) {
+    return Array.from(origin?.querySelectorAll('button[data-event]') ?? []).find(button => button.dataset.event === id);
+  }
+
+  function openDetails(event, opener) {
+    if (!editor.hidden || deletingEvent) return false;
+    eventOrigin = buttonOrigin(opener);
+    detailEvent = event;
+    confirmingDelete = false;
+    showingSettings = false;
+    setStatus(deleteStatus);
+    showDay(Date.parse(event.date) / dayLength, { select: true });
+    renderDetail();
+    updateViews();
+    const workspace = container.closest('.workspace');
+    if (workspace) workspace.scrollTop = 0;
+    detailBack.focus();
+    return true;
+  }
+
+  function openEvent(id) {
+    const event = findEvent(id);
+    return event ? openDetails(event) : false;
+  }
+
+  function closeDetails(restoreFocus = true) {
+    const id = detailEvent?.id;
+    detailEvent = undefined;
+    confirmingDelete = false;
+    updateViews();
+    if (restoreFocus) (eventButtonIn(eventOrigin, id) ?? addButton).focus();
+    eventOrigin = undefined;
+  }
+
+  function renderDetail() {
+    if (!detailEvent) return;
+    detailTitle.textContent = eventTitle(detailEvent);
+    detailFields.replaceChildren();
+    const fields = [
+      ['calendarEventDate', formatDate.format(Date.parse(detailEvent.date))],
+      ['calendarStarts', detailEvent.start && formatTime.format(timeValue(detailEvent.start))],
+      ['calendarEnds', detailEvent.end && formatTime.format(timeValue(detailEvent.end))],
+      ['calendarLocation', detailEvent.location],
+      ['calendarNotes', detailEvent.notes],
+      ['calendar', eventSource(detailEvent)],
+    ];
+    for (const [key, value] of fields) {
+      if (!value) continue;
+      appendText(detailFields, 'dt', '', t(key));
+      appendText(detailFields, 'dd', '', value);
+    }
+
+    detailActions.hidden = Boolean(detailEvent.readOnly) || confirmingDelete;
+    deletePrompt.hidden = !confirmingDelete;
+    deletePrompt.querySelector('.calendar-confirm-message').textContent = t('calendarConfirmDelete', {
+      title: eventTitle(detailEvent),
+    });
+    detailBack.disabled = deletingEvent;
+    deleteCancelButton.disabled = deletingEvent;
+    deleteConfirmButton.disabled = deletingEvent;
+  }
+
+  function cancelDelete() {
+    confirmingDelete = false;
+    setStatus(deleteStatus);
+    renderDetail();
+    detailDelete.focus();
+  }
+
+  detailBack.addEventListener('click', () => closeDetails());
+  detailEdit.addEventListener('click', () => openEditor(detailEvent));
+  detailDelete.addEventListener('click', () => {
+    confirmingDelete = true;
+    renderDetail();
+    deleteCancelButton.focus();
+  });
+  deleteCancelButton.addEventListener('click', cancelDelete);
+  deleteConfirmButton.addEventListener('click', async () => {
+    if (!detailEvent || deletingEvent) return;
+    const { id, date } = detailEvent;
+    deletingEvent = true;
+    setStatus(deleteStatus);
+    renderDetail();
+    const deleted = await runChange(onDeleteEvent, id);
+    deletingEvent = false;
+    if (deleted) {
+      const dayEvents = eventsByDate.get(date) ?? [];
+      eventsByDate.set(date, dayEvents.filter(event => event.id !== id));
+      closeDetails(false);
+      updateGrid();
+      updateAgenda();
+      addButton.focus();
+    } else {
+      renderDetail();
+      setStatus(deleteStatus, 'deleteFailed');
+      deleteConfirmButton.focus();
+    }
+  });
+  detailView.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || deletingEvent) return;
+    event.preventDefault();
+    if (confirmingDelete) cancelDelete();
+    else closeDetails();
+  });
+
+  function showTimeFields(show) {
+    timeFields.hidden = !show;
+    timeToggle.hidden = show;
+    timeToggle.setAttribute('aria-expanded', String(show));
+    startField.disabled = !show || savingEvent;
+    endField.disabled = !show || savingEvent;
   }
 
   function openEditor(event) {
     if (!editor.hidden) return;
     editorEvent = event;
-    editorDay = selectedDay;
+    editorDay = event ? Date.parse(event.date) / dayLength : selectedDay;
     editor.hidden = false;
     addButton.disabled = true;
     editor.querySelector('.calendar-form-title').textContent = t(event ? 'calendarEditEvent' : 'calendarAddEvent');
     editor.querySelector('.calendar-form-date').textContent = formatDate.format(editorDay * dayLength);
     editorTitle.value = event?.title ?? '';
-    allDayField.checked = !event?.start;
-    startField.value = event?.start || '09:00';
-    endField.value = event?.end || '10:00';
+    startField.value = event?.start ?? '';
+    endField.value = event?.end ?? '';
     editor.elements.namedItem('location').value = event?.location ?? '';
     editor.elements.namedItem('notes').value = event?.notes ?? '';
     editorTitle.setCustomValidity('');
     endField.setCustomValidity('');
     setStatus(editorStatus);
-    toggleTimes();
+    showTimeFields(Boolean(startField.value || endField.value));
+    updateGrid();
     updateAgenda();
+    updateViews();
     editorTitle.focus();
   }
 
@@ -540,8 +715,19 @@ export function renderCalendar(container, {
     editor.hidden = true;
     editorEvent = undefined;
     addButton.disabled = false;
-    updateAgenda();
-    addButton.focus();
+    if (detailEvent) {
+      showDay(Date.parse(detailEvent.date) / dayLength, { select: true });
+    } else {
+      updateGrid();
+      updateAgenda();
+    }
+    updateViews();
+    if (detailEvent) {
+      renderDetail();
+      detailEdit.focus();
+    } else {
+      addButton.focus();
+    }
   }
 
   editor.addEventListener('submit', async event => {
@@ -553,7 +739,9 @@ export function renderCalendar(container, {
       editorTitle.reportValidity();
       return;
     }
-    if (!allDayField.checked && endField.value <= startField.value) {
+    const start = startField.value;
+    const end = endField.value;
+    if (start && end && end <= start) {
       endField.setCustomValidity(t('calendarTimeOrder'));
       endField.reportValidity();
       return;
@@ -561,8 +749,8 @@ export function renderCalendar(container, {
     const draft = {
       date: dayKey(editorDay),
       title,
-      start: allDayField.checked ? '' : startField.value,
-      end: allDayField.checked ? '' : endField.value,
+      start,
+      end,
       location: editor.elements.namedItem('location').value.trim(),
       notes: editor.elements.namedItem('notes').value.trim(),
     };
@@ -572,17 +760,28 @@ export function renderCalendar(container, {
     const saved = await runChange(onSaveEvent, draft);
     savingEvent = false;
     for (const input of editor.elements) input.disabled = false;
-    toggleTimes();
-    if (saved) closeEditor();
-    else setStatus(editorStatus, 'saveFailed');
+    showTimeFields(!timeFields.hidden);
+    if (saved) {
+      if (draft.id && detailEvent?.id === draft.id) detailEvent = { ...detailEvent, ...draft };
+      closeEditor();
+    } else {
+      setStatus(editorStatus, 'saveFailed');
+    }
   });
   editorTitle.addEventListener('input', () => editorTitle.setCustomValidity(''));
   for (const field of [startField, endField]) {
     field.addEventListener('input', () => endField.setCustomValidity(''));
   }
-  allDayField.addEventListener('change', () => {
+  timeToggle.addEventListener('click', () => {
+    showTimeFields(true);
+    startField.focus();
+  });
+  clearTime.addEventListener('click', () => {
+    startField.value = '';
+    endField.value = '';
     endField.setCustomValidity('');
-    toggleTimes();
+    showTimeFields(false);
+    timeToggle.focus();
   });
   editorCancel.addEventListener('click', closeEditor);
   addButton.addEventListener('click', () => openEditor());
@@ -600,7 +799,6 @@ export function renderCalendar(container, {
     if (select) {
       selectedDay = day;
       navigation.selectedDay = day;
-      deleteCandidate = undefined;
       setStatus(holidayStatus);
       updateAgenda();
     }
@@ -623,7 +821,7 @@ export function renderCalendar(container, {
     if (saved) {
       if (enabled) holidays.add(date);
       else holidays.delete(date);
-      updateGrid(body.contains(document.activeElement));
+      updateGrid(document.activeElement?.matches('.calendar-day'));
     } else {
       updateHolidaySummary();
       setStatus(holidayStatus, 'saveFailed');
@@ -631,21 +829,22 @@ export function renderCalendar(container, {
     if (document.activeElement === document.body) holidayButton.focus();
   });
 
-  body.addEventListener('click', event => {
+  calendarView.addEventListener('click', event => {
     const dayButton = event.target.closest('.calendar-day');
     if (dayButton) showDay(Number(dayButton.dataset.day), { focusDay: true, select: true });
   });
 
-  body.addEventListener('keydown', event => {
+  calendarView.addEventListener('keydown', event => {
     const dayButton = event.target.closest('.calendar-day');
     if (!dayButton || event.altKey || event.ctrlKey || event.metaKey) return;
     const day = Number(dayButton.dataset.day);
+    const verticalStep = preferences.view === 'week' ? 1 : 7;
     let destination;
     switch (event.key) {
       case 'ArrowLeft': destination = day + (rtl ? 1 : -1); break;
       case 'ArrowRight': destination = day + (rtl ? -1 : 1); break;
-      case 'ArrowUp': destination = day - 7; break;
-      case 'ArrowDown': destination = day + 7; break;
+      case 'ArrowUp': destination = day - verticalStep; break;
+      case 'ArrowDown': destination = day + verticalStep; break;
       case 'Home': destination = day - weekOffset(day); break;
       case 'End': destination = day + 6 - weekOffset(day); break;
       case 'PageUp': destination = movePeriod(-1, day); break;
@@ -682,7 +881,10 @@ export function renderCalendar(container, {
   eventDisplaySelect.addEventListener('change', () => changePreferences({ eventDisplay: eventDisplaySelect.value }));
 
   function update({ preferences: nextPreferences, events, holidays: nextHolidays } = {}) {
-    const focusDay = body.contains(document.activeElement);
+    const focused = document.activeElement;
+    const focusDay = focused?.matches('.calendar-day');
+    const focusedEvent = focused?.closest('button[data-event]');
+    const focusedOrigin = buttonOrigin(focusedEvent);
     if (nextPreferences) {
       Object.assign(preferences, nextPreferences);
       configureDates();
@@ -691,11 +893,20 @@ export function renderCalendar(container, {
         editor.querySelector('.calendar-form-date').textContent = formatDate.format(editorDay * dayLength);
       }
     }
-    if (events) setEvents(events);
+    if (events) {
+      setEvents(events);
+      if (detailEvent) {
+        const refreshed = findEvent(detailEvent.id);
+        if (refreshed) detailEvent = refreshed;
+        else if (!deletingEvent && editor.hidden) closeDetails(false);
+      }
+    }
     if (nextHolidays) holidays = new Set(nextHolidays);
     updateControls();
     updateGrid(focusDay);
     updateAgenda();
+    renderDetail();
+    if (focusedEvent) eventButtonIn(focusedOrigin, focusedEvent.dataset.event)?.focus();
   }
 
   configureDates();
@@ -703,5 +914,5 @@ export function renderCalendar(container, {
   setEvents(initialEvents);
   update();
   renderConnections?.(container.querySelector('.calendar-connections'));
-  return { update };
+  return { update, openEvent };
 }

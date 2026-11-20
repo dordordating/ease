@@ -19,7 +19,7 @@ export function changeCalendarPreferences(workspace, patch) {
   const preferences = { ...defaultCalendar, ...workspace.calendar };
   if ([null, "gregory", "persian", "islamic-civil"].includes(patch.system)) preferences.system = patch.system;
   if (["week", "month"].includes(patch.view)) preferences.view = patch.view;
-  if (["dots", "count", "titles"].includes(patch.eventDisplay)) preferences.eventDisplay = patch.eventDisplay;
+  if (["dots", "count", "titles", "cards"].includes(patch.eventDisplay)) preferences.eventDisplay = patch.eventDisplay;
   if (patch.firstDay === null || (Number.isInteger(patch.firstDay) && patch.firstDay >= 0 && patch.firstDay <= 6)) {
     preferences.firstDay = patch.firstDay;
   }
@@ -41,7 +41,7 @@ export function saveCalendarEvent(workspace, event) {
   if (!title) return "calendarTitleRequired";
   const start = typeof event.start === "string" ? event.start.trim() : "";
   const end = typeof event.end === "string" ? event.end.trim() : "";
-  if ((start && !timePattern.test(start)) || (end && (!timePattern.test(end) || !start || end <= start))) {
+  if ((start && !timePattern.test(start)) || (end && !timePattern.test(end)) || (start && end && end <= start)) {
     return "calendarTimeOrder";
   }
   const stored = {
