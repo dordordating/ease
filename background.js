@@ -1,7 +1,7 @@
 import { densities, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
 import { localeNames } from "./locales.js";
 import { setToolbarBrand } from "./brand.js";
-import { changeCalendarPreferences, saveCalendarEvent } from "./calendar-store.js";
+import { changeCalendarPreferences, saveCalendarEvent, setCalendarHoliday } from "./calendar-store.js";
 import { refreshConnectedGoogleCalendar, registerGoogleProviderHandlers } from "./providers.js";
 import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
 
@@ -43,6 +43,9 @@ function updateWorkspace(workspace, action, data) {
       break;
     case "calendar-preferences":
       changeCalendarPreferences(workspace, data);
+      break;
+    case "calendar-holiday":
+      setCalendarHoliday(workspace, data);
       break;
     case "save-event":
       return saveCalendarEvent(workspace, data);

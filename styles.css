@@ -398,6 +398,71 @@ body[data-surface="panel"] .module-tabs {
   border-color: var(--stroke-subtle);
 }
 
+.calendar-date-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  inline-size: 20px;
+  block-size: 18px;
+  margin-block-start: 2px;
+  padding-block-start: 3px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+}
+
+.calendar-date-icon::before,
+.calendar-date-icon::after {
+  position: absolute;
+  background: currentColor;
+  content: "";
+}
+
+.calendar-date-icon::before {
+  inset-block-start: -3px;
+  left: 4px;
+  inline-size: 2px;
+  block-size: 5px;
+  border-radius: 1px;
+  box-shadow: 8px 0 currentColor;
+}
+
+.calendar-date-icon::after {
+  inset: 4px 2px auto;
+  block-size: 1px;
+  opacity: .45;
+}
+
+.calendar-date-number {
+  font-size: 9px;
+  font-weight: 760;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.calendar-date-icon[data-day-kind="weekend"] {
+  color: var(--mail);
+}
+
+.calendar-date-icon[data-day-kind="holiday"] {
+  color: var(--danger);
+}
+
+.calendar-date-accent {
+  position: absolute;
+  inset-block-end: -3px;
+  inset-inline-end: -3px;
+  inline-size: 6px;
+  block-size: 6px;
+  border: 1px solid var(--rail);
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.calendar-date-icon[data-day-kind="holiday"] .calendar-date-accent {
+  transform: rotate(45deg);
+  border-radius: 1px;
+}
+
 .workspace {
   grid-area: workspace;
   display: grid;
@@ -1268,16 +1333,20 @@ html[dir="rtl"] :is(input, textarea):placeholder-shown {
 .calendar-cell {
   padding: 0;
   text-align: center;
+  vertical-align: top;
 }
 
 .calendar-day {
   position: relative;
-  display: inline-grid;
-  place-items: center;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
   inline-size: 100%;
   max-inline-size: 38px;
   min-block-size: calc(var(--control-height) - 4px);
-  padding: 0;
+  padding: 2px 1px;
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
@@ -1285,18 +1354,80 @@ html[dir="rtl"] :is(input, textarea):placeholder-shown {
   font-variant-numeric: tabular-nums;
 }
 
-.calendar-day.has-events {
-  padding-block-end: 4px;
+.calendar-day-number {
+  line-height: 1;
+}
+
+.calendar-event-markers {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  max-inline-size: 100%;
+  min-block-size: 4px;
+  color: var(--calendar);
 }
 
 .calendar-event-dot {
-  position: absolute;
-  inset-block-end: 3px;
-  inset-inline-start: calc(50% - 1.5px);
+  flex: none;
   inline-size: 3px;
   block-size: 3px;
   border-radius: 50%;
-  background: var(--calendar);
+  background: currentColor;
+}
+
+.calendar-event-marker-count,
+.calendar-event-chip,
+.calendar-event-marker-more {
+  border-radius: 3px;
+  font-size: 8px;
+  font-weight: 650;
+  line-height: 1.15;
+}
+
+.calendar-event-marker-count,
+.calendar-event-chip {
+  padding: 1px 2px;
+  background: color-mix(in srgb, var(--calendar) 15%, var(--surface));
+}
+
+.calendar[data-event-display="titles"] .calendar-day {
+  justify-content: flex-start;
+  max-inline-size: 100%;
+  min-block-size: 36px;
+}
+
+.calendar.is-week[data-event-display="titles"] .calendar-day {
+  min-block-size: 48px;
+}
+
+.calendar-day[data-event-display="titles"] .calendar-event-markers {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+  inline-size: 100%;
+}
+
+.calendar-event-chip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-day.is-holiday::after {
+  position: absolute;
+  inset-block-start: 2px;
+  inset-inline-end: 2px;
+  inline-size: 4px;
+  block-size: 4px;
+  transform: rotate(45deg);
+  border-radius: 1px;
+  background: var(--danger);
+  content: "";
+}
+
+.calendar-day.is-holiday .calendar-day-number {
+  color: var(--danger);
 }
 
 .calendar-day:hover {
@@ -1318,11 +1449,22 @@ html[dir="rtl"] :is(input, textarea):placeholder-shown {
 }
 
 .calendar-summary {
-  display: grid;
-  gap: 2px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
   margin-block-start: 6px;
   padding-block-start: 6px;
   border-block-start: 1px solid var(--stroke-subtle);
+}
+
+.calendar-summary-copy {
+  display: grid;
+  flex: 1 1 94px;
+  gap: 2px;
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
 }
 
 .calendar-summary-label {
@@ -1334,6 +1476,39 @@ html[dir="rtl"] :is(input, textarea):placeholder-shown {
   color: var(--calendar);
   font-size: 11.5px;
   font-weight: 660;
+}
+
+.calendar-summary-holiday {
+  justify-self: start;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
+  color: var(--danger);
+  font-size: 10px;
+  font-weight: 660;
+}
+
+.calendar-holiday-toggle {
+  flex: none;
+  max-inline-size: 53%;
+  min-block-size: 24px;
+  padding: 3px 5px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 10px;
+  white-space: normal;
+}
+
+.calendar-holiday-toggle:hover {
+  border-color: color-mix(in srgb, var(--danger) 24%, var(--stroke-subtle));
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+  color: var(--danger);
+}
+
+.calendar-summary .calendar-form-status {
+  flex-basis: 100%;
 }
 
 .calendar-agenda {

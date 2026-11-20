@@ -7,22 +7,36 @@ function clean(value, limit) {
   return typeof value === "string" ? value.trim().slice(0, limit) : "";
 }
 
+function validateDate(date) {
+  if (typeof date !== "string" || !datePattern.test(date)) throw new Error("Invalid date");
+  const timestamp = Date.parse(date + "T00:00:00Z");
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) {
+    throw new Error("Invalid date");
+  }
+}
+
 export function changeCalendarPreferences(workspace, patch) {
   const preferences = { ...defaultCalendar, ...workspace.calendar };
   if ([null, "gregory", "persian", "islamic-civil"].includes(patch.system)) preferences.system = patch.system;
   if (["week", "month"].includes(patch.view)) preferences.view = patch.view;
+  if (["dots", "count", "titles"].includes(patch.eventDisplay)) preferences.eventDisplay = patch.eventDisplay;
   if (patch.firstDay === null || (Number.isInteger(patch.firstDay) && patch.firstDay >= 0 && patch.firstDay <= 6)) {
     preferences.firstDay = patch.firstDay;
   }
   workspace.calendar = preferences;
 }
 
+export function setCalendarHoliday(workspace, { date, enabled }) {
+  validateDate(date);
+  if (typeof enabled !== "boolean") throw new Error("Invalid holiday setting");
+  const holidays = new Set(workspace.holidays);
+  if (enabled) holidays.add(date);
+  else holidays.delete(date);
+  workspace.holidays = [...holidays];
+}
+
 export function saveCalendarEvent(workspace, event) {
-  if (typeof event.date !== "string" || !datePattern.test(event.date)) throw new Error("Invalid event date");
-  const timestamp = Date.parse(event.date + "T00:00:00Z");
-  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== event.date) {
-    throw new Error("Invalid event date");
-  }
+  validateDate(event.date);
   const title = clean(event.title, 160);
   if (!title) return "calendarTitleRequired";
   const start = typeof event.start === "string" ? event.start.trim() : "";

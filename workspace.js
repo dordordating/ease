@@ -3,7 +3,7 @@ import { paintBrand } from "./brand.js";
 import { accountStorageKey, calendarConnectionKeys, loadConnectedEvents, renderAccount, renderCalendarConnections } from "./connections.js";
 import { icon } from "./icons.js";
 import { isRtl, localeNames, translate } from "./locales.js";
-import { defaultWorkspace, densities, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
+import { calendarSystemFor, defaultWorkspace, densities, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
 
 const view = document.querySelector("#workspace");
 const editor = document.querySelector("#editor");
@@ -36,6 +36,7 @@ let calendarLocale;
 let providerEvents = [];
 let refreshVersion = 0;
 let accountRefresh;
+let calendarDayTimer;
 
 document.body.dataset.surface = inPanel ? "panel" : "popup";
 panelButton.hidden = inPanel;
@@ -137,6 +138,42 @@ function switchTo(page, focus = true) {
   }
 }
 
+function updateCalendarTab(button, today = new Date()) {
+  const { locale, calendar, holidays } = workspace;
+  const system = calendarSystemFor(locale, calendar?.system);
+  const dayFormat = new Intl.DateTimeFormat(locale, { calendar: system, day: "numeric" });
+  const dayNumber = dayFormat.formatToParts(today).find(({ type }) => type === "day").value;
+  const fullDate = new Intl.DateTimeFormat(locale, { calendar: system, dateStyle: "full" }).format(today);
+  const year = String(today.getFullYear()).padStart(4, "0");
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  const isHoliday = holidays.includes(`${year}-${month}-${day}`);
+  const localeInfo = new Intl.Locale(locale);
+  const weekend = (localeInfo.getWeekInfo?.() ?? localeInfo.weekInfo)?.weekend
+    ?? (localeInfo.language === "fa" ? [5] : [6, 7]);
+  const isWeekend = weekend.includes(today.getDay() || 7);
+  const kind = isHoliday ? "holiday" : isWeekend ? "weekend" : "normal";
+  const labelKey = isHoliday ? "calendarTabHoliday" : isWeekend ? "calendarTabWeekend" : "calendarTabToday";
+  const label = t(labelKey, { date: fullDate });
+  const mark = node("span", "calendar-date-icon");
+  mark.dataset.dayKind = kind;
+  mark.setAttribute("aria-hidden", "true");
+  mark.append(node("span", "calendar-date-number", dayNumber));
+  if (kind !== "normal") mark.append(node("span", "calendar-date-accent"));
+  button.replaceChildren(mark);
+  button.setAttribute("aria-label", label);
+  button.title = label;
+}
+
+function refreshCalendarDay() {
+  const tab = document.getElementById("tab-calendar");
+  const now = new Date();
+  if (tab) updateCalendarTab(tab, now);
+  const nextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  clearTimeout(calendarDayTimer);
+  calendarDayTimer = setTimeout(refreshCalendarDay, nextDay.getTime() - now.getTime());
+}
+
 function renderTabs() {
   tabBar.setAttribute("aria-label", t("modulesLabel"));
   tabBar.setAttribute("role", "tablist");
@@ -156,6 +193,7 @@ function renderTabs() {
     item.setAttribute("aria-controls", "workspace");
     item.setAttribute("aria-selected", String(isSelected));
     item.tabIndex = isSelected || (!tabs.some(({ id }) => id === activePage && !query) && module === tabs[0]) ? 0 : -1;
+    if (module.id === "calendar") updateCalendarTab(item);
     return item;
   }));
 }
@@ -470,7 +508,7 @@ function render() {
   if (![library.id, settings.id, ...workspace.tabs].includes(activePage)) activePage = clipboard.id;
   renderTabs();
   if (!query && activePage === "calendar" && calendarController && calendarLocale === workspace.locale) {
-    calendarController.update({ preferences: workspace.calendar, events: calendarEvents() });
+    calendarController.update({ preferences: workspace.calendar, events: calendarEvents(), holidays: workspace.holidays });
     return;
   }
   calendarController = undefined;
@@ -504,7 +542,9 @@ function render() {
       navigation: calendarNavigation,
       preferences: workspace.calendar,
       events: calendarEvents(),
+      holidays: workspace.holidays,
       onPreferences: (patch) => mutate("calendar-preferences", patch),
+      onHoliday: (date, enabled) => mutate("calendar-holiday", { date, enabled }),
       onSaveEvent: (event) => mutate("save-event", event),
       onDeleteEvent: (id) => mutate("delete-event", { id }),
       renderConnections: (container) => {
@@ -673,6 +713,7 @@ async function removeSnippet(snippet) {
 }
 
 window.addEventListener("focus", readActivationShortcut);
+window.addEventListener("focus", refreshCalendarDay);
 document.querySelector(".search-icon").innerHTML = icon("search");
 settingsButton.addEventListener("click", () => switchTo(activePage === "settings" && !query ? "clipboard" : "settings", false));
 panelButton.addEventListener("click", async () => {
@@ -773,3 +814,4 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes[accountStorageKey]) accountRefresh?.().catch(() => reportError("accountFailed"));
 });
 render();
+refreshCalendarDay();

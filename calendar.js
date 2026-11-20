@@ -1,3 +1,5 @@
+import { calendarSystemFor, defaultCalendar } from './workspace-data.js';
+
 const dayLength = 86_400_000;
 
 function localToday() {
@@ -20,9 +22,11 @@ export function renderCalendar(container, {
   icon,
   preferences: initialPreferences,
   events: initialEvents = [],
+  holidays: initialHolidays = [],
   navigation = {},
   settingsButton,
   onPreferences,
+  onHoliday,
   onSaveEvent,
   onDeleteEvent,
   renderConnections,
@@ -31,28 +35,31 @@ export function renderCalendar(container, {
   const localeWeekStart = ((localeInfo.getWeekInfo?.() ?? localeInfo.weekInfo)?.firstDay ?? 1) % 7;
   const direction = (localeInfo.getTextInfo?.() ?? localeInfo.textInfo)?.direction;
   const rtl = (direction ?? container.closest('[dir]')?.dir) === 'rtl';
-  const preferences = { system: null, view: 'month', firstDay: null, ...initialPreferences };
+  const preferences = { ...defaultCalendar, ...initialPreferences };
   const formatTime = new Intl.DateTimeFormat(locale, { timeZone: 'UTC', timeStyle: 'short' });
   const formatCount = new Intl.NumberFormat(locale);
+  const formatMarkerCount = new Intl.NumberFormat(locale, { useGrouping: false });
   let formatMonth;
   let formatWeek;
   let formatDay;
   let formatDate;
   let monthDayNumber;
   let eventsByDate;
+  let holidays = new Set(initialHolidays);
   let selectedDay = navigation.selectedDay ?? localToday();
   let activeDay = navigation.activeDay ?? selectedDay;
   let editorEvent;
   let editorDay;
   let deleteCandidate;
   let savingSettings = false;
+  let savingHoliday = false;
   let savingEvent = false;
   let deletingEvent = false;
 
   function configureDates() {
     const options = {
       timeZone: 'UTC',
-      calendar: preferences.system ?? (localeInfo.language === 'fa' ? 'persian' : 'gregory'),
+      calendar: calendarSystemFor(locale, preferences.system),
     };
     formatMonth = new Intl.DateTimeFormat(locale, { ...options, month: 'long', year: 'numeric' });
     formatWeek = new Intl.DateTimeFormat(locale, { ...options, month: 'short', day: 'numeric', year: 'numeric' });
@@ -109,6 +116,13 @@ export function renderCalendar(container, {
             <option value="" data-label="calendarSystemDefault"></option>
           </select>
         </label>
+        <label><span data-label="calendarEventDisplay"></span>
+          <select class="calendar-select" data-calendar-event-display>
+            <option value="dots" data-label="calendarEventDots"></option>
+            <option value="count" data-label="calendarEventCountMode"></option>
+            <option value="titles" data-label="calendarEventTitles"></option>
+          </select>
+        </label>
       </div>
       <p class="calendar-form-status" data-calendar-settings-status role="status" hidden></p>
       <div class="calendar-connections"></div>
@@ -126,10 +140,15 @@ export function renderCalendar(container, {
         <thead><tr></tr></thead>
         <tbody></tbody>
       </table>
-      <p class="calendar-summary">
-        <span class="calendar-summary-label" data-label="calendarSelected"></span>
-        <span class="calendar-summary-date" aria-live="polite"></span>
-      </p>
+      <div class="calendar-summary">
+        <div class="calendar-summary-copy">
+          <span class="calendar-summary-label" data-label="calendarSelected"></span>
+          <span class="calendar-summary-date" aria-live="polite"></span>
+          <span class="calendar-summary-holiday" data-label="calendarHoliday" hidden></span>
+        </div>
+        <button type="button" class="calendar-holiday-toggle"></button>
+        <p class="calendar-form-status" data-calendar-holiday-status role="status" hidden></p>
+      </div>
       <section class="calendar-agenda" aria-labelledby="calendar-agenda-heading">
         <div class="calendar-agenda-header">
           <h4 id="calendar-agenda-heading" data-label="calendarEvents"></h4>
@@ -182,10 +201,14 @@ export function renderCalendar(container, {
   const viewButtons = Array.from(container.querySelectorAll('.calendar-view-button'));
   const systemSelect = container.querySelector('[data-calendar-system]');
   const weekSelect = container.querySelector('[data-calendar-week-start]');
+  const eventDisplaySelect = container.querySelector('[data-calendar-event-display]');
   const settingsStatus = container.querySelector('[data-calendar-settings-status]');
   const grid = container.querySelector('.calendar-grid');
   const body = grid.tBodies[0];
   const selectedDate = container.querySelector('.calendar-summary-date');
+  const holidayBadge = container.querySelector('.calendar-summary-holiday');
+  const holidayButton = container.querySelector('.calendar-holiday-toggle');
+  const holidayStatus = container.querySelector('[data-calendar-holiday-status]');
   const addButton = container.querySelector('.calendar-add-event');
   const agenda = container.querySelector('.calendar-events');
   const editor = container.querySelector('.calendar-event-form');
@@ -197,6 +220,7 @@ export function renderCalendar(container, {
   const editorCancel = editor.querySelector('[data-calendar-cancel]');
 
   for (const label of container.querySelectorAll('[data-label]')) label.textContent = t(label.dataset.label);
+  holidayButton.hidden = !onHoliday;
   const settingsView = container.querySelector('.calendar-settings-view');
   const calendarView = container.querySelector('.calendar-main');
   settingsButton?.setAttribute('aria-controls', settingsView.id);
@@ -243,6 +267,11 @@ export function renderCalendar(container, {
     }
   }
 
+  function eventDisplayMode() {
+    const { eventDisplay } = preferences;
+    return eventDisplay === 'count' || eventDisplay === 'titles' ? eventDisplay : defaultCalendar.eventDisplay;
+  }
+
   function updateControls() {
     for (const button of viewButtons) {
       button.setAttribute('aria-pressed', String(button.dataset.view === preferences.view));
@@ -250,13 +279,51 @@ export function renderCalendar(container, {
     }
     systemSelect.value = preferences.system ?? '';
     weekSelect.value = preferences.firstDay ?? '';
+    eventDisplaySelect.value = eventDisplayMode();
     systemSelect.disabled = savingSettings;
     weekSelect.disabled = savingSettings;
+    eventDisplaySelect.disabled = savingSettings;
+  }
+
+  function updateHolidaySummary() {
+    const marked = holidays.has(dayKey(selectedDay));
+    holidayBadge.hidden = !marked;
+    holidayButton.disabled = savingHoliday;
+    holidayButton.textContent = t(marked ? 'calendarUnmarkHoliday' : 'calendarMarkHoliday');
+  }
+
+  function appendEventMarkers(button, dayEvents, mode, weekly) {
+    button.classList.add('has-events');
+    button.dataset.eventDisplay = mode;
+    const markers = document.createElement('span');
+    markers.className = 'calendar-event-markers';
+    markers.setAttribute('aria-hidden', 'true');
+    if (mode === 'count') {
+      appendText(markers, 'span', 'calendar-event-marker-count', formatMarkerCount.format(dayEvents.length));
+    } else if (mode === 'titles') {
+      const visibleLimit = weekly ? 2 : 1;
+      for (const event of dayEvents.slice(0, visibleLimit)) {
+        const title = event.title || t('calendarEventTitle');
+        appendText(markers, 'span', 'calendar-event-chip', title);
+        markers.lastElementChild.title = title;
+      }
+      if (dayEvents.length > visibleLimit) {
+        const count = formatMarkerCount.format(dayEvents.length - visibleLimit);
+        appendText(markers, 'span', 'calendar-event-marker-more', t('calendarEventMore', { count }));
+        markers.lastElementChild.dir = 'ltr';
+      }
+    } else {
+      appendText(markers, 'span', 'calendar-event-dot', '');
+    }
+    button.append(markers);
   }
 
   function updateGrid(focusDay = false) {
     const today = localToday();
     const weekly = preferences.view === 'week';
+    const mode = eventDisplayMode();
+    calendarView.classList.toggle('is-week', weekly);
+    calendarView.dataset.eventDisplay = mode;
     const firstDate = weekly ? activeDay - weekOffset(activeDay) : monthStart(activeDay);
     const start = firstDate - weekOffset(firstDate);
     const end = weekly ? start + 7 : nextMonth(firstDate);
@@ -266,6 +333,7 @@ export function renderCalendar(container, {
     const dateLabel = formatDate.format(selectedDay * dayLength);
     if (heading.textContent !== monthLabel) heading.textContent = monthLabel;
     if (selectedDate.textContent !== dateLabel) selectedDate.textContent = dateLabel;
+    updateHolidaySummary();
     previousButton.setAttribute('aria-label', t(weekly ? 'previousWeek' : 'previousMonth'));
     nextButton.setAttribute('aria-label', t(weekly ? 'nextWeek' : 'nextMonth'));
 
@@ -283,19 +351,18 @@ export function renderCalendar(container, {
         button.className = 'calendar-day';
         button.dataset.day = day;
         button.tabIndex = day === activeDay ? 0 : -1;
-        button.textContent = formatDay.format(day * dayLength);
-        const eventCount = eventsByDate.get(dayKey(day))?.length ?? 0;
-        const buttonDate = formatDate.format(day * dayLength);
-        button.setAttribute('aria-label', eventCount
-          ? `${buttonDate}, ${t('calendarEventCount', { count: formatCount.format(eventCount) })}`
-          : buttonDate);
-        if (eventCount) {
-          button.classList.add('has-events');
-          const dot = document.createElement('span');
-          dot.className = 'calendar-event-dot';
-          dot.setAttribute('aria-hidden', 'true');
-          button.append(dot);
+        const date = dayKey(day);
+        const dayEvents = eventsByDate.get(date);
+        const holiday = holidays.has(date);
+        appendText(button, 'span', 'calendar-day-number', formatDay.format(day * dayLength));
+        const buttonLabel = [formatDate.format(day * dayLength)];
+        if (dayEvents?.length) {
+          buttonLabel.push(t('calendarEventCount', { count: formatCount.format(dayEvents.length) }));
+          appendEventMarkers(button, dayEvents, mode, weekly);
         }
+        if (holiday) buttonLabel.push(t('calendarHoliday'));
+        button.setAttribute('aria-label', buttonLabel.join(', '));
+        button.classList.toggle('is-holiday', holiday);
         button.classList.toggle('is-selected', day === selectedDay);
         button.classList.toggle('is-today', day === today);
         cell.setAttribute('aria-selected', String(day === selectedDay));
@@ -433,9 +500,9 @@ export function renderCalendar(container, {
     element.hidden = !message;
   }
 
-  async function runChange(callback, value) {
+  async function runChange(callback, ...args) {
     try {
-      return await callback?.(value);
+      return await callback?.(...args);
     } catch {
       return false;
     }
@@ -534,6 +601,7 @@ export function renderCalendar(container, {
       selectedDay = day;
       navigation.selectedDay = day;
       deleteCandidate = undefined;
+      setStatus(holidayStatus);
       updateAgenda();
     }
     updateGrid(focusDay);
@@ -542,6 +610,26 @@ export function renderCalendar(container, {
   todayButton.addEventListener('click', () => showDay(localToday(), { select: true }));
   previousButton.addEventListener('click', () => showDay(movePeriod(-1), { select: true }));
   nextButton.addEventListener('click', () => showDay(movePeriod(1), { select: true }));
+
+  holidayButton.addEventListener('click', async () => {
+    if (savingHoliday) return;
+    const date = dayKey(selectedDay);
+    const enabled = !holidays.has(date);
+    savingHoliday = true;
+    setStatus(holidayStatus);
+    updateHolidaySummary();
+    const saved = await runChange(onHoliday, date, enabled);
+    savingHoliday = false;
+    if (saved) {
+      if (enabled) holidays.add(date);
+      else holidays.delete(date);
+      updateGrid(body.contains(document.activeElement));
+    } else {
+      updateHolidaySummary();
+      setStatus(holidayStatus, 'saveFailed');
+    }
+    if (document.activeElement === document.body) holidayButton.focus();
+  });
 
   body.addEventListener('click', event => {
     const dayButton = event.target.closest('.calendar-day');
@@ -591,8 +679,9 @@ export function renderCalendar(container, {
   }
   systemSelect.addEventListener('change', () => changePreferences({ system: systemSelect.value || null }));
   weekSelect.addEventListener('change', () => changePreferences({ firstDay: weekSelect.value === '' ? null : Number(weekSelect.value) }));
+  eventDisplaySelect.addEventListener('change', () => changePreferences({ eventDisplay: eventDisplaySelect.value }));
 
-  function update({ preferences: nextPreferences, events } = {}) {
+  function update({ preferences: nextPreferences, events, holidays: nextHolidays } = {}) {
     const focusDay = body.contains(document.activeElement);
     if (nextPreferences) {
       Object.assign(preferences, nextPreferences);
@@ -603,6 +692,7 @@ export function renderCalendar(container, {
       }
     }
     if (events) setEvents(events);
+    if (nextHolidays) holidays = new Set(nextHolidays);
     updateControls();
     updateGrid(focusDay);
     updateAgenda();
