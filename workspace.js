@@ -2,6 +2,8 @@ import { renderCalendar } from "./calendar.js";
 import { paintBrand } from "./brand.js";
 import { accountStorageKey, calendarConnectionKeys, loadConnectedEvents, renderAccount, renderCalendarConnections } from "./connections.js";
 import { icon } from "./icons.js";
+import { deviceUnlockAvailable, readDeviceUnlock, registerDeviceUnlock } from "./vault-device.js";
+import { vaultSessionStorageKey } from "./vault-session.js";
 import { isRtl, localeNames, translate } from "./locales.js";
 import { calendarSystemFor, defaultWorkspace, densities, folderIcons, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
 
@@ -38,6 +40,11 @@ let providerEvents = [];
 let refreshVersion = 0;
 let accountRefresh;
 let calendarDayTimer;
+let vaultTimer;
+let workspaceReadVersion = 0;
+let protectedDialogFolder;
+let protectedDialogSnippet;
+let supportsDeviceUnlock = false;
 
 document.body.dataset.surface = inPanel ? "panel" : "popup";
 panelButton.hidden = inPanel;
@@ -114,7 +121,10 @@ function showToast(message, action, error = false) {
     toastAction.textContent = t("undo");
     toastAction.onclick = action;
   }
-  toastTimer = setTimeout(() => { toast.hidden = true; }, action ? 7000 : 2200);
+  toastTimer = setTimeout(() => {
+    toast.hidden = true;
+    toastAction.onclick = null;
+  }, action ? 7000 : 2200);
 }
 
 async function mutate(action, data) {
@@ -210,7 +220,7 @@ function section(title, description, action) {
   view.append(header);
 }
 
-function emptyState(title, description, symbol, action) {
+function emptyState(title, description, symbol, action, container = view) {
   const empty = node("div", "empty-state");
   let illustration = glyph(symbol, "empty-illustration");
   if (symbol === "clipboard") {
@@ -225,7 +235,7 @@ function emptyState(title, description, symbol, action) {
   }
   empty.append(illustration, node("h2", "", title), node("p", "", description));
   if (action) empty.append(action);
-  view.append(empty);
+  container.append(empty);
 }
 
 const displayTitle = ({ title, text }) => title || text.trim().split(/\r?\n/u)[0];
@@ -234,7 +244,64 @@ function folderFor(id) {
   return workspace.folders.find((folder) => folder.id === id);
 }
 
-function snippetList(title, snippets, showFolder = false) {
+function folderLocked(folder) {
+  return Boolean(folder?.protected && !(folder.unlockedUntil > Date.now()));
+}
+
+function snippetReadable(snippet) {
+  return !snippet.locked && !folderLocked(folderFor(snippet.folderId));
+}
+
+function clearExpiredDialog() {
+  if (!editor.open) return;
+  const snippet = protectedDialogSnippet && workspace.snippets.find(({ id }) => id === protectedDialogSnippet);
+  if ((snippet && !snippetReadable(snippet)) || folderLocked(folderFor(protectedDialogFolder))) editor.close();
+}
+
+function startVaultTimer() {
+  clearTimeout(vaultTimer);
+  const now = Date.now();
+  const expiration = Math.min(...workspace.folders
+    .map(({ unlockedUntil }) => unlockedUntil).filter((until) => until > now));
+  if (!Number.isFinite(expiration)) return;
+  vaultTimer = setTimeout(() => {
+    clearExpiredDialog();
+    render();
+    refreshWorkspace();
+  }, expiration - now);
+}
+
+async function refreshWorkspace(raw) {
+  const version = ++workspaceReadVersion;
+  try {
+    const snapshot = raw ?? await readWorkspace();
+    let next = snapshot;
+    const vaultFolders = new Set(snapshot.folders.filter(({ vault }) => vault).map(({ id }) => id));
+    if (vaultFolders.size) {
+      try {
+        const response = await chrome.runtime.sendMessage({ type: "ease-workspace-read" });
+        if (!response?.workspace) throw new Error("Workspace unavailable");
+        next = response.workspace;
+      } catch {
+        // If the worker cannot hydrate the vault, keep the public data and hide the protected snippets.
+        next = {
+          ...snapshot,
+          folders: snapshot.folders.map(({ vault, ...folder }) => vault ? { ...folder, protected: true } : folder),
+          snippets: snapshot.snippets.filter(({ sealed, folderId }) => !sealed && !vaultFolders.has(folderId))
+        };
+      }
+    }
+    if (version !== workspaceReadVersion) return;
+    workspace = next;
+    clearExpiredDialog();
+    render();
+    startVaultTimer();
+  } catch {
+    if (version === workspaceReadVersion) reportError("saveFailed");
+  }
+}
+
+function snippetList(title, snippets, showFolder = false, container = view) {
   const heading = node("div", "collection-heading");
   heading.append(node("h2", "", title));
   heading.append(node("small", "", new Intl.NumberFormat(workspace.locale).format(snippets.length)));
@@ -306,32 +373,44 @@ function snippetList(title, snippets, showFolder = false) {
     row.append(copy, details);
     list.append(row);
   });
-  view.append(heading, list);
+  container.append(heading, list);
 }
 
 function renderClipboard() {
   if (activeFolder !== "all" && activeFolder !== null && !folderFor(activeFolder)) activeFolder = "all";
+  const folder = folderFor(activeFolder);
   const add = (className) => {
     const action = button(t("newSnippet"), className, { symbol: "plus", onClick: () => editSnippet() });
     action.id = "new-snippet";
     return action;
   };
-  const snippets = activeFolder === "all"
-    ? workspace.snippets
-    : workspace.snippets.filter(({ folderId }) => (folderId ?? null) === activeFolder);
+  const snippets = workspace.snippets.filter((snippet) => snippetReadable(snippet)
+    && (activeFolder === "all" || (snippet.folderId ?? null) === activeFolder));
   const hasSnippets = snippets.length > 0;
   section(t("clipboard"), undefined, hasSnippets ? add("primary-button") : undefined);
-  renderFolderBar();
+  const layout = node("div", "clipboard-layout");
+  const content = node("div", "clipboard-content");
+  layout.append(renderFolderBar(), content);
+  view.append(layout);
+  if (activeFolder !== "all") {
+    const label = node("div", "folder-current", folder?.name ?? t("noFolder"));
+    label.dir = "auto";
+    content.append(label);
+  }
+  if (folderLocked(folder)) {
+    renderLockedFolder(folder, content);
+    return;
+  }
   if (!hasSnippets) {
     const filtered = activeFolder !== "all";
     emptyState(t(filtered ? "emptyFolder" : "emptyTitle"), t(filtered ? "emptyFolderHint" : "emptyHint"),
-      filtered ? "folder" : "clipboard", add("secondary-button"));
+      filtered ? "folder" : "clipboard", add("secondary-button"), content);
     return;
   }
   const pinned = snippets.filter(({ pinned }) => pinned).sort((left, right) => (left.slot ?? 10) - (right.slot ?? 10));
   const others = snippets.filter(({ pinned }) => !pinned);
-  if (pinned.length) snippetList(t("pinned"), pinned);
-  if (others.length) snippetList(t("snippets"), others);
+  if (pinned.length) snippetList(t("pinned"), pinned, false, content);
+  if (others.length) snippetList(t("snippets"), others, false, content);
 }
 
 function selectFolder(id) {
@@ -360,6 +439,11 @@ function renderFolderBar() {
     label.className = "folder-label";
     label.dir = "auto";
     item.setAttribute("aria-pressed", String(selected));
+    if (folderLocked(folder)) {
+      item.classList.add("is-locked");
+      item.append(glyph("lock", "folder-lock-mark"));
+      item.setAttribute("aria-description", t("vaultLockedFolder"));
+    }
     return item;
   }
 
@@ -389,13 +473,26 @@ function renderFolderBar() {
           run();
         }
       });
-      management.append(
-        menuAction("editFolder", "edit", () => editFolder(selected)),
-        menuAction(selected.pinned ? "folderUnpinned" : "folderPinned", "pin",
-          () => mutate("pin-folder", { id: selected.id, pinned: !selected.pinned })),
-        menuAction("deleteFolder", "trash", () => deleteFolder(selected))
-      );
-      management.lastElementChild.dataset.action = "delete";
+      if (folderLocked(selected)) {
+        management.append(menuAction("vaultUnlock", "unlock", () => editVaultPassword(selected)));
+      } else {
+        management.append(
+          menuAction("editFolder", "edit", () => editFolder(selected)),
+          menuAction(selected.pinned ? "folderUnpinned" : "folderPinned", "pin",
+            () => mutate("pin-folder", { id: selected.id, pinned: !selected.pinned }))
+        );
+        if (selected.protected) {
+          management.append(menuAction("vaultLock", "lock", () => changeVault("lock-folder", { id: selected.id })));
+          if (selected.device) management.append(menuAction("vaultDeviceRemove", "fingerprint", () => removeDeviceUnlock(selected)));
+          else if (supportsDeviceUnlock) management.append(menuAction("vaultDeviceEnable", "fingerprint", () => enableDeviceUnlock(selected)));
+          management.append(menuAction("vaultRemove", "unlock", () => removeVaultPassword(selected)));
+        } else {
+          management.append(menuAction("vaultProtect", "lock", () => editVaultPassword(selected, true)));
+        }
+        const remove = menuAction("deleteFolder", "trash", () => deleteFolder(selected));
+        remove.dataset.action = "delete";
+        management.append(remove);
+      }
       menu.append(management);
     }
     const folders = node("div", "folder-menu-group");
@@ -408,7 +505,7 @@ function renderFolderBar() {
   }
 
   bar.append(quick, actions);
-  view.append(bar);
+  return bar;
 }
 
 function renderLibrary() {
@@ -581,9 +678,10 @@ function renderSearch() {
   section(t("searchResults"));
   const searchText = searchable(query);
   const matches = (text) => searchable(text).includes(searchText);
-  const snippets = workspace.snippets.filter(({ title, text, folderId }) => {
+  const snippets = workspace.snippets.filter((snippet) => {
+    const { title, text, folderId } = snippet;
     const folder = folderFor(folderId);
-    return matches(`${title} ${text} ${folder?.name ?? ""}`);
+    return snippetReadable(snippet) && matches(`${title} ${text} ${folder?.name ?? ""}`);
   });
   const events = workspace.tabs.includes("calendar")
     ? calendarEvents().filter(({ title, date, location, notes }) => matches([title, date, location, notes].join(" ")))
@@ -698,7 +796,9 @@ function render() {
   }
 }
 
-function openEditor(title, submitLabel, onSubmit) {
+function openEditor(title, submitLabel, onSubmit, guardedFolder) {
+  protectedDialogFolder = guardedFolder;
+  protectedDialogSnippet = undefined;
   const opener = document.activeElement?.id;
   editor.addEventListener("close", () => {
     if (opener) (document.getElementById(opener) ?? view).focus({ preventScroll: true });
@@ -754,6 +854,11 @@ function field(container, { label, value = "", placeholder, multiline = false, m
 }
 
 function editSnippet(snippet) {
+  const folder = folderFor(snippet ? snippet.folderId : activeFolder);
+  if (folderLocked(folder)) {
+    editVaultPassword(folder);
+    return;
+  }
   const fields = openEditor(t(snippet ? "editSnippet" : "newSnippet"), t("save"), async () => {
     if (!text.value.trim()) {
       text.value = "";
@@ -766,7 +871,8 @@ function editSnippet(snippet) {
     return mutate("save-snippet", {
       id: snippet?.id, title: title.value, text: text.value, ...(changeFolder ? { folderId } : {})
     });
-  });
+  }, folder?.id);
+  protectedDialogSnippet = snippet?.id;
   const title = field(fields, { label: `${t("snippetTitle")} (${t("optional")})`, value: snippet?.title, placeholder: t("snippetTitlePlaceholder"), maxLength: 100 });
   const text = field(fields, { label: t("snippetText"), value: snippet?.text, placeholder: t("snippetTextPlaceholder"), required: true, maxLength: 20000, multiline: true });
   const destination = workspace.folders.length ? node("select") : undefined;
@@ -777,6 +883,7 @@ function editSnippet(snippet) {
       const option = node("option", "", folder.name);
       option.value = folder.id;
       option.dir = "auto";
+      option.disabled = folderLocked(folder);
       destination.append(option);
     }
     const selectedId = snippet ? snippet.folderId : activeFolder;
@@ -824,14 +931,15 @@ function deleteFolder(folder) {
     selectFolder(null);
     showToast(t("folderDeleted"));
     return true;
-  });
+  }, folder.protected ? folder.id : undefined);
   fields.append(node("p", "", t("deleteFolderConfirm", { name: folder.name })));
+  if (folder.protected) fields.append(node("p", "vault-hint", t("vaultDeleteHint")));
   editor.showModal();
 }
 
 function moveSnippet(snippet) {
   const from = snippet.folderId ?? null;
-  const fields = openEditor(t("moveToFolder"));
+  const fields = openEditor(t("moveToFolder"), undefined, undefined, folderFor(from)?.protected ? from : undefined);
   const list = node("div", "folder-picker");
   const choices = [{ id: null, name: t("noFolder"), icon: "folder" }, ...workspace.folders];
   for (const folder of choices) {
@@ -842,7 +950,9 @@ function moveSnippet(snippet) {
         if (!selected) {
           for (const option of list.children) option.disabled = true;
           if (!await mutate("move-snippet", { id: snippet.id, folderId: folder.id, expectedFolderId: from })) {
-            for (const option of list.children) option.disabled = false;
+            for (const [index, option] of Array.from(list.children).entries()) {
+              option.disabled = folderLocked(folderFor(choices[index].id));
+            }
             item.focus();
             return;
           }
@@ -854,6 +964,8 @@ function moveSnippet(snippet) {
       }
     });
     item.setAttribute("aria-pressed", String(selected));
+    item.disabled = folderLocked(folder);
+    if (item.disabled) item.title = t("vaultUnlockFirst");
     item.lastElementChild.dir = "auto";
     if (selected) item.append(glyph("check"));
     list.append(item);
@@ -861,6 +973,107 @@ function moveSnippet(snippet) {
   fields.append(list);
   editor.showModal();
   list.querySelector(".folder-picker-active")?.focus();
+}
+
+async function changeVault(action, data) {
+  if (!await mutate(action, data)) return false;
+  await refreshWorkspace();
+  return true;
+}
+
+function renderLockedFolder(folder, container) {
+  const state = node("div", "vault-state");
+  const actions = node("div", "vault-actions");
+  actions.append(button(t("vaultUnlock"), "primary-button", {
+    symbol: "unlock", onClick: () => editVaultPassword(folder)
+  }));
+  if (folder.device && supportsDeviceUnlock) {
+    actions.append(button(t("vaultDevice"), "secondary-button", {
+      symbol: "fingerprint", onClick: ({ currentTarget }) => unlockWithDevice(folder, currentTarget)
+    }));
+  }
+  state.append(glyph("lock", "vault-illustration"), node("h2", "", t("vaultLockedFolder")),
+    node("p", "", t("vaultUnlockHint")), actions);
+  container.append(state);
+}
+
+function passwordField(fields, label, autocomplete) {
+  const input = field(fields, { label: t(label), maxLength: 256, required: true });
+  input.type = "password";
+  input.className = "vault-password-field";
+  input.dir = "ltr";
+  input.autocomplete = autocomplete;
+  return input;
+}
+
+function editVaultPassword(folder, setup = false) {
+  const fields = openEditor(t(setup ? "vaultProtect" : "vaultUnlock"), t(setup ? "save" : "vaultUnlock"), async () => {
+    const count = Array.from(password.value).length;
+    if (setup && (count < 8 || count > 128)) {
+      reportError("vaultPasswordLength");
+      password.focus();
+      return false;
+    }
+    if (setup && repeat.value !== password.value) {
+      reportError("vaultMismatch");
+      repeat.focus();
+      return false;
+    }
+    const action = setup ? "protect-folder" : "unlock-folder";
+    if (!await changeVault(action, { id: folder.id, password: password.value })) return false;
+    if (setup) showToast(t("vaultProtected"));
+    return true;
+  });
+  fields.append(node("p", "vault-hint", t(setup ? "vaultSetupHint" : "vaultAutoLock")));
+  const password = passwordField(fields, "vaultPassword", setup ? "new-password" : "current-password");
+  const repeat = setup ? passwordField(fields, "vaultRepeat", "new-password") : undefined;
+  if (setup) fields.append(node("p", "vault-hint", t("vaultPasswordLength")));
+  else if (folder.device && supportsDeviceUnlock) {
+    fields.append(button(t("vaultDevice"), "secondary-button", {
+      symbol: "fingerprint", onClick: ({ currentTarget }) => unlockWithDevice(folder, currentTarget)
+    }));
+  }
+  editor.showModal();
+  password.focus();
+}
+
+function removeVaultPassword(folder) {
+  const fields = openEditor(t("vaultRemove"), t("remove"), () => changeVault("unprotect-folder", { id: folder.id }), folder.id);
+  fields.append(node("p", "vault-hint", t("vaultRemoveHint")));
+  editor.showModal();
+}
+
+async function unlockWithDevice(folder, trigger) {
+  trigger.disabled = true;
+  try {
+    const prf = await readDeviceUnlock(folder.device);
+    const unlocked = await changeVault("unlock-device", { id: folder.id, prf });
+    if (unlocked && editor.contains(trigger)) editor.close();
+    else if (!unlocked) trigger.disabled = false;
+  } catch {
+    reportError("vaultDeviceFailed");
+    trigger.disabled = false;
+  }
+}
+
+function enableDeviceUnlock(folder) {
+  const fields = openEditor(t("vaultDeviceEnable"), t("vaultDeviceEnable"), async () => {
+    try {
+      const credential = await registerDeviceUnlock();
+      if (!await changeVault("protect-device", { id: folder.id, ...credential })) return false;
+      showToast(t("vaultDeviceReady"));
+      return true;
+    } catch {
+      reportError("vaultDeviceFailed");
+      return false;
+    }
+  }, folder.id);
+  fields.append(node("p", "vault-hint", t("vaultDeviceHint")));
+  editor.showModal();
+}
+
+async function removeDeviceUnlock(folder) {
+  if (await changeVault("remove-device", { id: folder.id })) showToast(t("vaultDeviceRemoved"));
 }
 
 function editShortcut(snippet) {
@@ -875,7 +1088,7 @@ function editShortcut(snippet) {
   choices.setAttribute("aria-label", t("shortcutAssign"));
   const selected = String(snippet.slot ?? "none");
   const occupied = new Map(workspace.snippets.filter(({ id, slot }) => id !== snippet.id && slot)
-    .map((item) => [item.slot, displayTitle(item)]));
+    .map((item) => [item.slot, snippetReadable(item) ? displayTitle(item) : t("vaultLockedFolder")]));
   for (const slot of [...shortcutSlots, "none"]) {
     const option = radioOption("snippet-shortcut", String(slot), selected, "shortcut-option");
     if (occupied.has(slot)) {
@@ -899,6 +1112,14 @@ function templateFields(text) {
 }
 
 function prepareCopy(snippet) {
+  const current = workspace.snippets.find(({ id }) => id === snippet.id);
+  if (!current) return;
+  if (!snippetReadable(current)) {
+    const folder = folderFor(current.folderId);
+    if (folder) editVaultPassword(folder);
+    return;
+  }
+  snippet = current;
   const names = templateFields(snippet.text);
   if (!names.length) {
     copySnippet(snippet, snippet.text);
@@ -907,7 +1128,8 @@ function prepareCopy(snippet) {
   const fields = openEditor(t("templateTitle"), t("copy"), () => {
     const text = snippet.text.replace(templatePattern, (match, name) => values.get(name.trim())?.value ?? match);
     return copySnippet(snippet, text);
-  });
+  }, snippet.folderId);
+  protectedDialogSnippet = snippet.id;
   fields.append(node("p", "field-hint", t("templateHint")));
   const values = new Map(names.map((name) => [name, field(fields, { label: name, required: true })]));
   editor.showModal();
@@ -915,6 +1137,11 @@ function prepareCopy(snippet) {
 }
 
 async function copySnippet(snippet, text) {
+  const current = workspace.snippets.find(({ id }) => id === snippet.id);
+  if (!current || !snippetReadable(current)) {
+    reportError("vaultLocked");
+    return false;
+  }
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -946,6 +1173,16 @@ async function removeSnippet(snippet) {
 
 window.addEventListener("focus", readActivationShortcut);
 window.addEventListener("focus", refreshCalendarDay);
+window.addEventListener("focus", () => {
+  if (workspace.folders.some(({ protected: enabled }) => enabled)) refreshWorkspace();
+});
+editor.addEventListener("close", () => {
+  if (!editor.open) {
+    protectedDialogFolder = undefined;
+    protectedDialogSnippet = undefined;
+    editor.replaceChildren();
+  }
+});
 document.querySelector(".search-icon").innerHTML = icon("search");
 settingsButton.addEventListener("click", () => switchTo(activePage === "settings" && !query ? "clipboard" : "settings", false));
 panelButton.addEventListener("click", async () => {
@@ -1030,23 +1267,20 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-try {
-  workspace = await readWorkspace();
-} catch {
-  showToast(t("saveFailed"), undefined, true);
-}
 chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "session" && changes[vaultSessionStorageKey]) refreshWorkspace();
   if (area !== "local") return;
-  if (changes[storageKey]) {
-    workspace = { ...defaultWorkspace, ...changes[storageKey].newValue };
-    render();
-  }
+  if (changes[storageKey]) refreshWorkspace({ ...defaultWorkspace, ...changes[storageKey].newValue });
   if (calendarConnectionKeys.some((key) => changes[key])) {
     calendarConnectionsRefresh?.().catch(() => reportError("syncFailed"));
     refreshCalendarEvents();
   }
   if (changes[accountStorageKey]) accountRefresh?.().catch(() => reportError("accountFailed"));
 });
-render();
+await refreshWorkspace();
+deviceUnlockAvailable().then((available) => {
+  supportsDeviceUnlock = available;
+  if (available && !editor.open && activePage === "clipboard") render();
+}).catch(() => {});
 refreshCalendarDay();
 refreshCalendarEvents();

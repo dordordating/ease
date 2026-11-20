@@ -563,49 +563,85 @@ html[dir="rtl"] .section-copy h1 {
   font-weight: 670;
 }
 
+.clipboard-layout {
+  --folder-rail-width: calc(var(--control-height) + 8px);
+  display: grid;
+  grid-template: "content folders" auto / minmax(0, 1fr) var(--folder-rail-width);
+  align-items: start;
+  gap: 7px;
+  min-inline-size: 0;
+  direction: ltr;
+}
+
+html[dir="rtl"] .clipboard-layout > :is(.clipboard-content, .folder-bar) {
+  direction: rtl;
+}
+
+.clipboard-content {
+  grid-area: content;
+  display: grid;
+  align-content: start;
+  gap: var(--section-gap);
+  min-inline-size: 0;
+}
+
+.folder-current {
+  min-inline-size: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 660;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
 .folder-bar,
 .folder-quick,
 .folder-actions {
   display: flex;
-  gap: 4px;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
 }
 
 .folder-bar {
-  align-items: flex-start;
-  min-inline-size: 0;
-}
-
-.folder-quick {
-  flex: 1 1 0;
-  flex-wrap: wrap;
-  min-inline-size: 0;
+  grid-area: folders;
+  position: sticky;
+  z-index: 2;
+  inset-block-start: var(--section-gap);
+  padding: 3px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 9px;
+  background: var(--rail);
 }
 
 .folder-actions {
-  flex: none;
+  margin-block-start: 1px;
+  padding-block-start: 4px;
+  border-block-start: 1px solid var(--stroke-subtle);
 }
 
 .folder-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-inline-size: 0;
-  max-inline-size: min(100%, 116px);
-  min-block-size: var(--control-height);
-  padding: 3px 6px;
-  border: 1px solid var(--stroke-subtle);
-  border-radius: 8px;
-  background: var(--subtle);
+  position: relative;
+  display: grid;
+  place-items: center;
+  inline-size: var(--control-height);
+  block-size: var(--control-height);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
   color: var(--muted);
-  font-size: 11.5px;
-  font-weight: 620;
 }
 
-.folder-quick:has(.folder-chip:nth-child(4)) .folder-chip {
-  max-inline-size: min(116px, calc((100% - 4px) / 2));
+.folder-chip > .folder-label {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
-.folder-chip > .folder-label,
 .folder-menu-item > .folder-label {
   min-inline-size: 0;
   overflow: hidden;
@@ -613,7 +649,11 @@ html[dir="rtl"] .section-copy h1 {
   white-space: nowrap;
 }
 
-.folder-chip svg,
+.folder-chip svg {
+  inline-size: 16px;
+  block-size: 16px;
+}
+
 .folder-actions .icon-button svg {
   inline-size: 14px;
   block-size: 14px;
@@ -628,6 +668,39 @@ html[dir="rtl"] .section-copy h1 {
   border-color: color-mix(in srgb, var(--accent) 32%, var(--stroke-subtle));
   background: var(--accent-wash);
   color: var(--accent);
+}
+
+.folder-chip.is-locked:not([aria-pressed="true"]) {
+  border-color: color-mix(in srgb, var(--mail) 24%, var(--stroke-subtle));
+}
+
+.folder-menu-item.is-locked > .folder-label {
+  flex: 1 1 auto;
+}
+
+.folder-lock-mark {
+  display: grid;
+  place-items: center;
+  flex: none;
+  inline-size: 15px;
+  block-size: 15px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mail) 13%, var(--surface));
+  color: var(--mail);
+}
+
+.folder-chip .folder-lock-mark {
+  position: absolute;
+  inset-block-end: -1px;
+  inset-inline-end: -1px;
+  inline-size: 12px;
+  block-size: 12px;
+  border: 1px solid var(--rail);
+}
+
+:is(.folder-chip, .folder-menu-item) .folder-lock-mark svg {
+  inline-size: 10px;
+  block-size: 10px;
 }
 
 .folder-actions .icon-button {
@@ -840,10 +913,11 @@ html[dir="rtl"] .snippet-text > :is(strong, span) {
 }
 
 .folder-menu {
+  inset: 0 calc(100% + 6px) auto auto;
   inline-size: clamp(144px, 55vw, 206px);
   min-inline-size: 0;
-  max-inline-size: calc(100vw - var(--rail-width) - 2 * var(--app-space));
-  max-block-size: min(236px, 48vh);
+  max-inline-size: calc(100vw - var(--rail-width) - var(--folder-rail-width) - 2 * var(--app-space) - 6px);
+  max-block-size: min(236px, 42vh);
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -972,6 +1046,63 @@ html[dir="rtl"] .snippet-text > :is(strong, span) {
 
 .empty-state :is(.primary-button, .secondary-button) {
   margin-block-start: 3px;
+}
+
+.vault-state {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  min-inline-size: 0;
+  padding: calc(var(--app-space) + 3px) var(--app-space);
+  border: 1px solid color-mix(in srgb, var(--mail) 23%, var(--stroke-subtle));
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--mail) 4%, var(--surface));
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.vault-illustration {
+  display: grid;
+  place-items: center;
+  inline-size: 38px;
+  block-size: 38px;
+  margin-block-end: 2px;
+  border: 1px solid color-mix(in srgb, var(--mail) 23%, var(--stroke-subtle));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--mail) 11%, var(--surface));
+  color: var(--mail);
+}
+
+.vault-illustration svg {
+  inline-size: 20px;
+  block-size: 20px;
+}
+
+.vault-state h2 {
+  font-size: 14px;
+  font-weight: 720;
+  line-height: 1.35;
+}
+
+.vault-state p {
+  max-inline-size: 34ch;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.vault-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  margin-block-start: 2px;
+}
+
+.vault-actions > button {
+  max-inline-size: 100%;
 }
 
 .catalog-item, .setting-row {
@@ -1332,6 +1463,31 @@ html[dir="rtl"] :is(.search-event-copy > strong, .calendar-detail-title) {
 html[dir="rtl"] :is(input, textarea):placeholder-shown {
   direction: rtl;
   text-align: right;
+}
+
+.vault-hint {
+  padding: 6px 7px;
+  border-inline-start: 2px solid color-mix(in srgb, var(--mail) 60%, var(--stroke));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--mail) 6%, var(--surface));
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.editor-dialog form:has(.vault-hint) .dialog-footer {
+  flex-wrap: wrap;
+}
+
+.editor-dialog form:has(.vault-hint) .dialog-footer button {
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
+}
+
+.vault-password-field,
+html[dir="rtl"] .vault-password-field:placeholder-shown {
+  direction: ltr;
+  text-align: left;
 }
 
 .field textarea {
