@@ -18,7 +18,7 @@ Ease API uses FastAPI and PostgreSQL. It checks Google credentials, keeps one ac
 3. Point an API subdomain to the Coolify server. In the resource, assign that HTTPS domain to the `api` service on container port `8000`, for example `https://api.example.com:8000` in Coolify's domain field. Keep `db` on the private Compose network.
 4. Deploy the resource. Request `https://api.example.com/healthz` and check for `{"status":"ok"}`. The API applies PostgreSQL migrations on startup. The named `postgres-data` volume holds the data across redeploys. Keep that volume when updating, and back up the database before restoring or moving it.
 
-The initial per-container limits are **0.25 vCPU and 192 MiB for the API** and **0.25 vCPU and 256 MiB for PostgreSQL**. The API starts with one worker. The Docker Compose file sets the resource limits for the installation.
+The initial limits are **0.5 vCPU and 512 MiB per container** for both the API and PostgreSQL. The API starts with one worker. The Docker Compose file sets the resource limits for the installation.
 
 ## Translation tiers and limits
 
