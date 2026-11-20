@@ -19,6 +19,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .auth import GoogleAuthUnavailable, InvalidGoogleCredential, issue_session, validate_session, verify_google_access_token
 from .db import MAX_WORKSPACE_SYNC_REVISION, Database, QuotaExceeded, User
+from .markets import MARKET_SYMBOLS, MarketsService
 from .openrouter import OpenRouterRejected, OpenRouterUnavailable, translate_with_openrouter
 from .settings import Settings
 
@@ -189,6 +190,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 follow_redirects=False,
             ) as client:
                 app.state.http = client
+                demo_key = settings.coingecko_demo_api_key
+                app.state.markets = MarketsService(client, demo_key.get_secret_value() if demo_key else None)
                 yield
         finally:
             await database.close()
@@ -216,6 +219,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not await request.app.state.database.check():
             raise HTTPException(503, "database_unavailable")
         return {"status": "ok"}
+
+    @app.get("/v1/markets/quotes")
+    async def market_quotes(request: Request):
+        return {"quotes": await request.app.state.markets.quotes()}
+
+    @app.get("/v1/markets/history")
+    async def market_history(request: Request, symbol: str):
+        if symbol not in MARKET_SYMBOLS:
+            raise HTTPException(422, "invalid_market_symbol")
+        return await request.app.state.markets.history(symbol)
 
     @app.post("/v1/auth/google")
     async def google_login(payload: GoogleLogin, request: Request):

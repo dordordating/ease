@@ -1,11 +1,12 @@
 import { defaultFlashcards } from "./flashcard-store.js";
+import { defaultMarkets } from "./markets-store.js";
 
 export const storageKey = "easeWorkspace";
 
 export const modules = [
   { id: "clipboard", icon: "clipboard", color: "#ba9aff", released: true },
   { id: "calendar", icon: "calendar", color: "#83acf9", released: true },
-  { id: "markets", icon: "chart", color: "#68dbc3" },
+  { id: "markets", icon: "chart", color: "#68dbc3", released: true },
   { id: "mail", icon: "mail", color: "#ffae85" },
   { id: "translate", icon: "translate", color: "#69d5fa", released: true },
   { id: "flashcards", icon: "flashcards", color: "#82b9ac", released: true },
@@ -40,6 +41,7 @@ export const defaultWorkspace = {
   calendar: defaultCalendar,
   translator: defaultTranslator,
   flashcards: defaultFlashcards,
+  markets: defaultMarkets,
   events: [],
   holidays: []
 };

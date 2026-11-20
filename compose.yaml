@@ -29,6 +29,7 @@ services:
       - MAX_TRANSLATION_CHARACTERS
       - MAX_OUTPUT_TOKENS
       - MAX_CONCURRENT_TRANSLATIONS
+      - COINGECKO_DEMO_API_KEY
     healthcheck:
       test:
         - CMD

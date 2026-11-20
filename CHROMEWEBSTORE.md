@@ -24,8 +24,8 @@ Use the final release manifest as the source of truth when entering these answer
 | `sidePanel` | Opens the same workspace next to the current page when the user selects the side panel control. |
 | `clipboardWrite` | Copies saved snippets, completed template text, and translations when the user chooses to copy them. |
 | `identity` | Uses Chrome’s identity API for optional Google sign-in and requests separate read-only consent for Google Calendar. |
-| `alarms` | Schedules connected calendar refresh, optional workspace sync, and local event reminders while Chrome is running. |
-| Optional `notifications` | Requested when the user sets a calendar reminder. Shows the event title and start time in a Chrome notification. |
+| `alarms` | Schedules connected calendar refresh, optional workspace sync, local event reminders, and periodic price alert checks while Chrome is running. |
+| Optional `notifications` | Requested when the user sets a calendar reminder or price alert. Shows the event or the price that triggered a configured alert. |
 | `contextMenus` | Adds **Translate with Ease** to the context menu when the user selects text. |
 | `activeTab` | Temporarily allows the translation shortcut to access the active tab where the user invoked it. |
 | `scripting` | Reads only the current text selection when the user invokes the translation shortcut. |
@@ -48,6 +48,7 @@ Use this inventory to match the final ZIP to the Dashboard’s data categories, 
 | Translation history | An optional Translator setting, off by default. When enabled, this browser profile stores up to 100 successful translations, which users can search, copy, or remove. |
 | Flashcards and study progress | Saved in this browser profile. A card can include a phrase, a translation, a usage note, and an example. Review ratings determine the next study time. Pronunciation uses an available on-device speech voice. |
 | Encrypted workspace snapshot | If enabled in Settings, Ease encrypts workspace settings, snippets and folders, flashcards, and local calendar data on the device. Its server stores the encrypted bytes, revision, and account ID so another device can fetch them. The sync passphrase stays on the device. |
+| Market watchlist and price alerts | Workspace preferences saved in the browser. With encrypted workspace sync, preferences travel in the encrypted workspace snapshot. Ease requests quotes from a shared cache and evaluates alert rules in this browser profile. |
 | Workspace settings and locally created calendar events | Saved in `chrome.storage.local`, including event dates, times, titles, locations, and notes. This data remains in the browser profile. |
 | Google account identifier, name, and verified email address | Fetched from Google after sign-in and stored in `chrome.storage.local`. For online translation, Ease API uses a Google access token to verify the account, records the verified profile and account timestamps, and returns a short-lived Ease token held in service worker memory. |
 | Connected calendar event data | Retrieved directly from Google or iCloud and cached in the browser. Includes event identifiers, dates, times, titles, locations, and notes that the provider supplies. The calendar connection stores its latest refresh time. |

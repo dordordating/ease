@@ -1,6 +1,9 @@
 import { renderCalendar } from "./calendar.js";
 import { renderTranslator } from "./translator.js";
 import { renderFlashcards } from "./flashcards.js";
+import { renderMarkets } from "./markets.js";
+import { marketAlertStateKey, readMarketAlertState } from "./markets-alerts.js";
+import { marketInstruments } from "./markets-store.js";
 import { flashcardFieldLimits } from "./flashcard-store.js";
 import { translatorLanguages } from "./translator-engine.js";
 import { takeTranslatorSelection, translatorSelectionKey } from "./translator-selection.js";
@@ -60,6 +63,9 @@ let translatorHistoryController;
 let translationHistory = { enabled: false, entries: [] };
 let flashcardController;
 let flashcardLocale;
+let marketsController;
+let marketsLocale;
+let marketAlertState = {};
 const translatorDraft = {};
 let translatorAccountId = null;
 let workspaceInitialized = false;
@@ -831,6 +837,7 @@ const moduleSearchSources = {
     render: (entries) => snippetList(t("snippets"), entries.map(({ snippet }) => snippet), true)
   }),
   calendar: calendarSearchSource,
+  markets: marketSearchSource,
   translate: () => ({
     label: "translationHistory", icon: "history",
     entries: translationHistory.entries.map((entry) => ({
@@ -851,6 +858,27 @@ const moduleSearchSources = {
     }))
   })
 };
+
+function marketSearchSource() {
+  const names = new Intl.DisplayNames([workspace.locale], { type: "currency" });
+  const coinNames = { BTC: "marketsBitcoin", ETH: "marketsEthereum", SOL: "marketsSolana", XRP: "marketsXrp" };
+  return {
+    label: "markets",
+    entries: marketInstruments.map(({ symbol, name, kind, base, quote }) => {
+      const baseName = kind === "crypto" ? t(coinNames[base]) : names.of(base);
+      const quoteName = names.of(quote);
+      const detail = `${baseName} · ${quoteName}`;
+      return {
+        id: `market-result-${base}-${quote}`, title: symbol, detail,
+        keywords: [symbol, `${base}${quote}`, base, quote, name, baseName, quoteName, base === "XRP" ? "Ripple" : ""],
+        open() {
+          switchTo("markets", false);
+          marketsController?.openInstrument(symbol);
+        }
+      };
+    })
+  };
+}
 
 function renderSearchGroup({ id, label, icon: symbol, entries, render: renderEntries }) {
   if (renderEntries) return renderEntries(entries);
@@ -943,12 +971,18 @@ function render() {
     flashcardController.update({ state: workspace.flashcards });
     return;
   }
+  if (!query && activePage === "markets" && marketsController && marketsLocale === workspace.locale) {
+    marketsController.update({ state: workspace.markets, alertState: marketAlertState });
+    return;
+  }
   translatorController?.dispose?.();
   translatorController = undefined;
   translatorSiteController = undefined;
   translatorHistoryController = undefined;
   flashcardController?.dispose();
   flashcardController = undefined;
+  marketsController?.dispose();
+  marketsController = undefined;
   calendarController = undefined;
   calendarConnectionsRefresh = undefined;
   accountRefresh = undefined;
@@ -1059,6 +1093,17 @@ function render() {
       onDelete: confirmFlashcardDeletion,
       onReview: (review) => mutate("review-flashcard", review)
     });
+  } else if (activePage === "markets") {
+    section(t("markets"));
+    const body = node("div");
+    view.append(body);
+    marketsLocale = workspace.locale;
+    marketsController = renderMarkets(body, {
+      locale: workspace.locale, t, icon, state: workspace.markets, alertState: marketAlertState,
+      onWatchlist: (change) => mutate("markets-watchlist", change),
+      onAddAlert: createMarketAlert,
+      onRemoveAlert: (id) => mutate("markets-remove-alert", { id })
+    });
   } else if (activePage === "library") renderLibrary();
   else if (activePage === "settings") renderSettings();
 
@@ -1066,6 +1111,17 @@ function render() {
     const element = document.getElementById(focused);
     if (element !== document.activeElement) element?.focus({ preventScroll: true });
   }
+}
+
+async function createMarketAlert(data) {
+  if (!inToolbarPopup) {
+    const allowed = await chrome.permissions.request({ permissions: ["notifications"] }).catch(() => false);
+    if (!allowed) {
+      reportError("marketsNotificationDenied");
+      return false;
+    }
+  }
+  return mutate("markets-add-alert", { ...data, requestPermission: inToolbarPopup });
 }
 
 function translatorOptions() {
@@ -1942,6 +1998,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "session" && changes[vaultSessionStorageKey]) refreshWorkspace();
   if (area === "session" && changes[translatorSelectionKey]?.newValue) receiveTranslationSelection();
   if (area !== "local") return;
+  if (changes[marketAlertStateKey]) {
+    marketAlertState = changes[marketAlertStateKey].newValue ?? {};
+    marketsController?.update({ state: workspace.markets, alertState: marketAlertState });
+  }
   if (changes[translationHistoryKey]) {
     translationHistory = changes[translationHistoryKey].newValue ?? { enabled: false, entries: [] };
     if (query || activePage === "translate") render();
@@ -1963,9 +2023,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
 if (inPanel) chrome.tabs?.onActivated?.addListener(receiveTranslationSelection);
 const initialTranslationSelection = await takeTranslatorSelection();
 if (initialTranslationSelection !== null) activePage = "translate";
-const [initialAccount, initialHistory] = await Promise.all([getGoogleAccount().catch(() => null), readTranslationHistory().catch(() => null)]);
+const [initialAccount, initialHistory, initialMarketAlerts] = await Promise.all([
+  getGoogleAccount().catch(() => null), readTranslationHistory().catch(() => null), readMarketAlertState().catch(() => ({}))
+]);
 translatorAccountId = initialAccount?.id ?? null;
 if (initialHistory) translationHistory = initialHistory;
+marketAlertState = initialMarketAlerts;
 await refreshWorkspace();
 workspaceInitialized = true;
 sendWorkspaceSync("wake").catch(() => {});

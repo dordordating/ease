@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     google_client_ids: str
     session_secret: SecretStr = Field(min_length=32)
     openrouter_api_key: SecretStr = Field(min_length=1)
+    coingecko_demo_api_key: SecretStr | None = None
     cors_origins: str = ""
 
     openrouter_model_economy: str = "google/gemma-4-31b-it"

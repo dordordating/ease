@@ -3,6 +3,8 @@ import { localeNames } from "./locales.js";
 import { setToolbarBrand } from "./brand.js";
 import { changeCalendarPreferences, saveCalendarEvent, setCalendarHoliday } from "./calendar-store.js";
 import { registerCalendarReminderHandlers } from "./calendar-reminders.js";
+import { registerMarketAlertHandlers } from "./markets-alerts.js";
+import { addMarketAlert, MarketPreferenceError, removeMarketAlert, updateMarketWatchlist } from "./markets-store.js";
 import { refreshConnectedGoogleCalendar, registerGoogleProviderHandlers } from "./providers.js";
 import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
 import { deleteFolder, hasFolder, moveSnippet, pinFolder, reorderFolder, saveFolder } from "./clipboard-store.js";
@@ -31,6 +33,7 @@ registerTranslatorSelectionHandlers();
 registerTranslationHistoryHandlers();
 registerTranslatorSiteHandlers();
 registerCalendarReminderHandlers();
+registerMarketAlertHandlers();
 registerWorkspaceSyncHandlers(queueWorkspace);
 
 function queueWorkspace(operation) {
@@ -339,6 +342,16 @@ async function updateWorkspace(workspace, action, data, transaction) {
     case "calendar-holiday":
       setCalendarHoliday(workspace, data);
       break;
+    case "markets-watchlist":
+      workspace.markets = updateMarketWatchlist(workspace.markets, data);
+      break;
+    case "markets-add-alert":
+      if (!await chrome.permissions.contains({ permissions: ["notifications"] })) return "marketsNotificationDenied";
+      workspace.markets = addMarketAlert(workspace.markets, data);
+      break;
+    case "markets-remove-alert":
+      workspace.markets = removeMarketAlert(workspace.markets, data.id);
+      break;
     case "save-event":
       return saveCalendarEvent(workspace, data);
     case "delete-event":
@@ -487,8 +500,15 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 
   const requestInline = message.type === "ease-workspace-update" && message.action === "translator-inline-enabled"
     && message.data?.enabled === true && message.data.requestPermission === true;
+  const requestMarketNotifications = message.type === "ease-workspace-update" && message.action === "markets-add-alert"
+    && message.data?.requestPermission === true;
   // Start permission UI on the first message hop so a toolbar popup can close without losing the action.
-  const permission = requestInline ? requestInlineTranslatorPermission() : null;
+  let permission = null;
+  if (requestInline) permission = requestInlineTranslatorPermission();
+  if (requestMarketNotifications) {
+    permission = chrome.permissions.request({ permissions: ["notifications"] })
+      .then((granted) => granted ? null : "marketsNotificationDenied", () => "marketsNotificationDenied");
+  }
   const result = queueWorkspace(async () => {
     const permissionError = await permission;
     if (permissionError) return { error: permissionError };
@@ -504,7 +524,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     return { workspace: await hydrateWorkspace(workspace, sessions) };
   });
   result.then(respond, (error) => {
-    const code = error instanceof VaultLockedError ? "vaultLocked" : error instanceof FlashcardError ? error.code : "saveFailed";
+    const code = error instanceof VaultLockedError ? "vaultLocked"
+      : error instanceof FlashcardError || error instanceof MarketPreferenceError ? error.code : "saveFailed";
     respond({ error: code });
   });
   return true;

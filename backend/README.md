@@ -32,6 +32,12 @@ Change the tier models and limits through the backend environment, then redeploy
 
 PostgreSQL stores the user's Google subject, email, display name, account timestamps, and daily aggregate request counts. Translation text and results are sent to or received from OpenRouter in memory. The API keeps both the Google access token and the OpenRouter key out of the account database.
 
+## Markets data
+
+`GET /v1/markets/quotes` returns the fixed market catalog with prices, changes, timestamps, stale flags, and available sparklines. `GET /v1/markets/history?symbol=EUR%2FUSD` returns the series for a supported pair. Both routes are available to guests. The API shares a cache across requests and loads crypto histories on demand.
+
+The ECB source supplies daily EUR reference rates. Ease derives cross rates from them and compares the latest two publication dates. CoinGecko supplies crypto prices and rolling 24-hour changes through one quote batch cached for ten minutes. If needed for testing, set a server-side `COINGECKO_DEMO_API_KEY`. Confirm the data display license for a public release. [ECB reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html) · [CoinGecko API terms](https://www.coingecko.com/en/api_terms)
+
 ## API contract
 
 | Method and path | Request and result |
