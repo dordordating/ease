@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ease",
-  "version": "0.3.9",
+  "version": "0.4.0",
   "description": "A fast, customizable workspace for everyday browser tasks.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -9,7 +9,10 @@
     "sidePanel",
     "clipboardWrite",
     "identity",
-    "alarms"
+    "alarms",
+    "contextMenus",
+    "activeTab",
+    "scripting"
   ],
   "optional_host_permissions": [
     "https://openidconnect.googleapis.com/*",
@@ -44,6 +47,13 @@
         "mac": "Alt+Shift+E"
       },
       "description": "Open the Ease workspace"
+    },
+    "translate-selection": {
+      "suggested_key": {
+        "default": "Alt+Shift+T",
+        "mac": "Alt+Shift+T"
+      },
+      "description": "Translate selected text with Ease"
     }
   },
   "oauth2": {

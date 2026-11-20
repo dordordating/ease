@@ -1833,12 +1833,14 @@ html[dir="rtl"] .vault-pin-input:placeholder-shown {
   --calendar-wash: color-mix(in srgb, var(--calendar) 10%, var(--surface));
 }
 
-.calendar-settings-trigger {
+.calendar-settings-trigger,
+#translator-settings-button {
   border-color: var(--stroke-subtle);
   background: var(--subtle);
 }
 
-.calendar-settings-trigger[aria-expanded="true"] {
+.calendar-settings-trigger[aria-expanded="true"],
+#translator-settings-button[aria-expanded="true"] {
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -2558,6 +2560,189 @@ button.calendar-event-content:hover {
 
 .calendar-time-fields .calendar-clear-time {
   grid-column: 1 / -1;
+}
+
+.translator,
+.translator-settings-view {
+  display: grid;
+  align-content: start;
+  gap: var(--section-gap);
+  min-inline-size: 0;
+  --translator-wash: color-mix(in srgb, var(--translate) 9%, var(--surface));
+}
+
+.translator-language-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: 5px;
+}
+
+.translator-field {
+  display: grid;
+  gap: 3px;
+  min-inline-size: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.translator-select {
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: var(--control-height);
+  padding: 4px 6px;
+  border: 1px solid var(--stroke);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 510;
+  text-overflow: ellipsis;
+}
+
+.translator-swap {
+  border-color: var(--stroke-subtle);
+  background: var(--subtle);
+}
+
+.translator-swap:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--translate) 27%, var(--stroke));
+  background: var(--translator-wash);
+  color: var(--translate);
+}
+
+.translator-panels {
+  display: grid;
+  gap: 6px;
+  min-inline-size: 0;
+}
+
+.translator-original,
+.translator-result {
+  display: grid;
+  gap: 5px;
+  min-inline-size: 0;
+  padding: 7px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: var(--radius);
+  background: var(--subtle);
+}
+
+.translator-panels :is(h2, h3, label) {
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 680;
+}
+
+.translator-textarea {
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: 92px;
+  max-block-size: min(42vh, 240px);
+  padding: 6px 7px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.translator-textarea::placeholder {
+  color: var(--quiet);
+  opacity: 1;
+}
+
+.translator-detected,
+.translator-shortcut-controls p {
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.translator-result {
+  border-color: color-mix(in srgb, var(--translate) 18%, var(--stroke-subtle));
+  background: var(--translator-wash);
+}
+
+.translator-output {
+  min-inline-size: 0;
+  min-block-size: 1.5em;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.translator.is-result-only .translator-result {
+  padding-block: 9px;
+}
+
+.translator-show-original {
+  justify-self: start;
+}
+
+.translator-toolbar,
+.translator-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-inline-size: 0;
+}
+
+.translator-toolbar {
+  justify-content: space-between;
+}
+
+.translator-toolbar button,
+.translator-show-original {
+  max-inline-size: 100%;
+  overflow-wrap: anywhere;
+}
+
+.translator-feedback {
+  min-inline-size: 0;
+  padding: 5px 6px;
+  border-radius: 6px;
+  background: var(--subtle);
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.translator-feedback:empty {
+  display: none;
+}
+
+.translator-feedback:is(.is-error, [data-kind="error"]) {
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--danger);
+}
+
+.translator-progress {
+  inline-size: 100%;
+  block-size: 5px;
+  accent-color: var(--translate);
+}
+
+.translator-settings-view h2 {
+  font-size: 14px;
+}
+
+.translator-settings-view .translator-field strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.translator-shortcut-controls {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
 }
 
 @media (prefers-reduced-motion: reduce) {

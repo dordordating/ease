@@ -2,11 +2,11 @@
 
 ## Store listing
 
-**Single purpose.** Give people quick access to their saved text and daily schedule from a personal workspace in Chrome’s popup and side panel.
+**Single purpose.** Give people quick access to saved text, translations, and their daily schedule from a personal workspace in Chrome’s popup and side panel.
 
-**Short description.** Open your saved text and daily schedule in a fast, customizable Chrome workspace.
+**Short description.** Save and translate text and check your calendar from a customizable Chrome workspace.
 
-**Detailed description.** Save frequently used phrases and links, then copy them with one click. Pin your favorites, assign number shortcuts, and add fill-in fields to reusable templates. See your schedule in a week or month view and create local events. Choose Gregorian, Solar Hijri, or civil Hijri, and set the first day of the week. Use Ease from the toolbar or keep it open in Chrome’s side panel.
+**Detailed description.** Save frequently used phrases and links, then copy them with one click. Pin your favorites, assign number shortcuts, and add fill-in fields to reusable templates. Translate selected or pasted text with Chrome’s on-device translator when the language pair is available. See your schedule in a week or month view and create local events. Choose Gregorian, Solar Hijri, or civil Hijri, and set the first day of the week. Use Ease from the toolbar or keep it open in Chrome’s side panel.
 
 The workspace is available without an account and stores your snippets, preferences, and local events in this Chrome profile. English is the initial language. Settings also offers Persian, Spanish, French, Brazilian Portuguese, Arabic, German, and Japanese.
 
@@ -22,9 +22,12 @@ Use the final release manifest as the source of truth when entering these answer
 | --- | --- |
 | `storage` | Saves the user’s snippets, shortcut choices, appearance and language settings, local events, and optional account and calendar connection data in this browser profile. |
 | `sidePanel` | Opens the same workspace next to the current page when the user selects the side panel control. |
-| `clipboardWrite` | Copies a saved snippet or the completed output of a snippet template when the user chooses to copy it. |
+| `clipboardWrite` | Copies saved snippets, completed template text, and translations when the user chooses to copy them. |
 | `identity` | Uses Chrome’s identity API for optional Google sign-in and requests separate read-only consent for Google Calendar. |
 | `alarms` | Schedules an hourly refresh for calendar feeds the user has connected while Chrome is running. |
+| `contextMenus` | Adds **Translate with Ease** to the context menu when the user selects text. |
+| `activeTab` | Temporarily allows the translation shortcut to access the active tab where the user invoked it. |
+| `scripting` | Reads only the current text selection when the user invokes the translation shortcut. |
 | Optional `https://openidconnect.googleapis.com/*` | Requested when the user selects Google sign-in or connects Google Calendar. Fetches the profile or verifies the account identity for the calendar connection. |
 | Optional `https://www.googleapis.com/*` | Requested when the user chooses to connect Google Calendar. Fetches events from the primary calendar after Google consent. |
 | Optional `https://*.icloud.com/*` | Lets the user grant access to the specific iCloud origin hosting the published calendar link they provide. Ease downloads the selected calendar feed. |
@@ -38,12 +41,13 @@ Use this inventory to match the final ZIP to the Dashboard’s data categories, 
 | Data | Storage and transmission |
 | --- | --- |
 | Snippets and template text entered by the user | Saved in `chrome.storage.local`. Filled-in template values are used to copy the output on the user’s request. Ease writes to the system clipboard and does not collect clipboard history. Snippets are not uploaded by Ease. |
+| Translation input and results | Processed with Chrome’s on-device translation APIs. Selected text can be held briefly in `chrome.storage.session` to open the side panel. Translations are kept in the panel unless the user saves one to the local clipboard workspace. Ease does not send this text to a translation service. |
 | Workspace settings and locally created calendar events | Saved in `chrome.storage.local`, including event dates, times, titles, locations, and notes. This data remains in the browser profile. |
 | Google account identifier, name, and verified email address | Fetched from Google after the user initiates sign-in and stored in `chrome.storage.local`. Chrome manages the cached OAuth authorization. Ease sends the access token to Google for the authorized requests. |
 | Connected calendar event data | Retrieved directly from Google or iCloud and cached in the browser. Includes event identifiers, dates, times, titles, locations, and notes that the provider supplies. The calendar connection stores its latest refresh time. |
 | Published iCloud calendar URL | User provides the URL and grants access to its origin. The URL is saved in `chrome.storage.local` and used to request the calendar from iCloud. Treat it as sensitive because a published feed can be read by someone who has its link. |
 
-Google identity can fall under personally identifiable information. OAuth tokens and a published feed link merit review under authentication information. Snippets and event fields can contain personal communications and locations supplied by the user or their calendar. Ease does not request device geolocation, browsing history, or page content permissions.
+Google identity can fall under personally identifiable information. OAuth tokens and a published feed link merit review under authentication information. Snippets, translation selections, and event fields can contain personal communications and locations supplied by the user or their calendar. The translation shortcut reads the selection under Chrome’s temporary active-tab permission. Ease does not request device geolocation or browsing history.
 
 ## Public privacy policy draft
 
@@ -54,6 +58,8 @@ Google identity can fall under personally identifiable information. OAuth tokens
 Ease is a Chrome workspace for reusable text and calendars. You can use the workspace without an account. Snippets, workspace settings, and local calendar events are stored in the browser profile on the device. Ease has no publisher-operated account or sync server and includes no advertising or analytics.
 
 When you choose to copy a saved snippet, Ease writes the text to your system clipboard. Copying a template uses the temporary values you enter to fill its fields. The extension does not read clipboard history.
+
+The translator uses Chrome’s on-device translation APIs. A text selection can be held briefly in browser session storage to open the sidebar. Ease stores a translation long term only when you choose to save it as a snippet. Chrome may download language models.
 
 If you choose to sign in with Google in an OAuth-enabled build, Ease uses Chrome’s identity service to request your account identifier, name, and verified email address from Google. Ease saves these profile details locally. If you separately connect Google Calendar, Ease requests read-only access to display events from your primary calendar. If you connect Apple Calendar, Ease uses the published iCloud calendar link that you enter. Anyone who has that link can access the published calendar.
 

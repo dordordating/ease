@@ -1,10 +1,12 @@
-import { densities, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
+import { defaultTranslator, densities, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
 import { localeNames } from "./locales.js";
 import { setToolbarBrand } from "./brand.js";
 import { changeCalendarPreferences, saveCalendarEvent, setCalendarHoliday } from "./calendar-store.js";
 import { refreshConnectedGoogleCalendar, registerGoogleProviderHandlers } from "./providers.js";
 import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
 import { deleteFolder, hasFolder, moveSnippet, pinFolder, reorderFolder, saveFolder } from "./clipboard-store.js";
+import { translatorLanguages } from "./translator-engine.js";
+import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
 import {
   createFolderPin, createFolderVault, openSnippet, rewrapFolderPin, sealSnippet, unlockFolderPin, unlockFolderVault,
   unwrapDeviceKey, wrapDeviceKey
@@ -16,6 +18,7 @@ import {
 
 let pendingWrite = Promise.resolve();
 registerGoogleProviderHandlers();
+registerTranslatorSelectionHandlers();
 
 function queueWorkspace(operation) {
   const result = pendingWrite.then(operation);
@@ -269,6 +272,15 @@ async function updateWorkspace(workspace, action, data, transaction) {
     case "calendar-preferences":
       changeCalendarPreferences(workspace, data);
       break;
+    case "translator-preferences": {
+      const settings = { ...defaultTranslator, ...workspace.translator };
+      if (data.source === "auto" || translatorLanguages.includes(data.source)) settings.source = data.source;
+      if (translatorLanguages.includes(data.target)) settings.target = data.target;
+      if (["both", "result"].includes(data.layout)) settings.layout = data.layout;
+      if (data.folderId === null || hasFolder(workspace, data.folderId)) settings.folderId = data.folderId;
+      workspace.translator = settings;
+      break;
+    }
     case "calendar-holiday":
       setCalendarHoliday(workspace, data);
       break;
@@ -318,6 +330,7 @@ async function updateWorkspace(workspace, action, data, transaction) {
       if (!folder) return "folderMissing";
       const key = unlockedKey(sessions, folder);
       await unsealFolder(workspace, folder, key);
+      if (workspace.translator.folderId === folder.id) workspace.translator = { ...workspace.translator, folderId: null };
       transaction.afterCommit = () => lockVaultSession(sessions, folder.id).catch(() => {});
       return deleteFolder(workspace, data);
     }

@@ -27,6 +27,7 @@ Open the new ZIP and copy the contents of its extension folder over the files in
 - In **Calendar settings**, choose dots, counts, titles, or event cards. Week view lays out days vertically. The Calendar tab icon shows today's date, holiday status, and an event count capped at **+9**. Select a date to mark or unmark it as a holiday.
 - Choose a day and select **Add event**. You can leave the time empty or set either a start or an end. Events can also have a location and notes. Choose an event in **Events** to read its details, then edit or delete it from there if it's a local event. Local events stay on this device and can be used without signing in.
 - Use the workspace search to find calendar events by title, location, notes, or date (`YYYY-MM-DD`). Select a result to open that event's details.
+- Open **Translator** from the module rail or add it from **+** on an existing workspace. Paste text, or select text on a web page and use **Translate with Ease** or **Alt+Shift+T**. Chrome runs the translation on the device. Chrome may need to download a model, and language-pair support depends on the browser. Choose a source and target in **Translator**, and use **Translator settings** to change the result layout and default clipboard folder.
 - Use **Settings → Language** to change the interface. English is the first-run default. Persian, Spanish, French, Brazilian Portuguese, Arabic, German, and Japanese are available. The Persian interface uses the bundled Vazir font.
 - In **Settings**, choose Light, Dark, or Automatic appearance, one of four accent colors, a control density, and a workspace size. The popup keeps a fixed height for its selected size. The accent color also updates the Ease logo and the toolbar icon. Use Chrome’s divider to resize the side panel itself.
 
@@ -58,6 +59,6 @@ Open the new ZIP and copy the contents of its extension folder over the files in
 
 Ease asks for access to Google's sites when you sign in or connect Google Calendar. Calendar authorization is separate from sign-in. See the [Chrome OAuth integration guide](https://developer.chrome.com/docs/extensions/how-to/integrate/oauth) for stable IDs and client setup.
 
-The module library marks Markets, Email, Translator, and AI Assistant as coming soon.
+The module library marks Markets, Email, and AI Assistant as coming soon.
 
 The bundled Vazir v30.1.0 font is distributed under the [SIL Open Font License](fonts/OFL.txt).

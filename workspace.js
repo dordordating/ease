@@ -1,11 +1,13 @@
 import { renderCalendar } from "./calendar.js";
+import { renderTranslator } from "./translator.js";
+import { takeTranslatorSelection, translatorSelectionKey } from "./translator-selection.js";
 import { paintBrand } from "./brand.js";
 import { accountStorageKey, calendarConnectionKeys, loadConnectedEvents, renderAccount, renderCalendarConnections } from "./connections.js";
 import { icon } from "./icons.js";
 import { deviceUnlockAvailable, readDeviceUnlock, registerDeviceUnlock } from "./vault-device.js";
 import { vaultPolicyFor, vaultSessionStorageKey } from "./vault-session.js";
 import { isRtl, localeNames, translate } from "./locales.js";
-import { calendarSystemFor, defaultWorkspace, densities, folderIcons, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
+import { calendarSystemFor, defaultTranslator, defaultWorkspace, densities, folderIcons, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
 
 const view = document.querySelector("#workspace");
 const editor = document.querySelector("#editor");
@@ -37,6 +39,10 @@ const calendarNavigation = {};
 let calendarController;
 let calendarConnectionsRefresh;
 let calendarLocale;
+let translatorController;
+let translatorLocale;
+const translatorDraft = {};
+let workspaceInitialized = false;
 let providerEvents = [];
 let refreshVersion = 0;
 let accountRefresh;
@@ -754,7 +760,7 @@ function renderSettings() {
   shortcutValue.dir = "auto";
   shortcutDetails.append(shortcutValue, button(t("manageActivationShortcut"), "secondary-button", {
     symbol: "keyboard",
-    onClick: () => chrome.tabs.create({ url: "chrome://extensions/shortcuts" }).catch(() => reportError("shortcutOpenFailed"))
+    onClick: openChromeShortcuts
   }));
   shortcut.append(node("h3", "", t("activationShortcut")), shortcutDetails);
   list.append(shortcut);
@@ -868,17 +874,23 @@ function render() {
   labelButton(panelButton, t("openPanel"), "panel");
   labelButton(settingsButton, t("settings"), "settings");
   settingsButton.setAttribute("aria-pressed", String(activePage === "settings" && !query));
-  if (![library.id, settings.id, ...workspace.tabs].includes(activePage)) activePage = clipboard.id;
+  if (![library.id, settings.id, "translate", ...workspace.tabs].includes(activePage)) activePage = clipboard.id;
   renderTabs();
   if (!query && activePage === "calendar" && calendarController && calendarLocale === workspace.locale) {
     calendarController.update({ preferences: workspace.calendar, events: calendarEvents(), holidays: workspace.holidays });
     return;
   }
+  if (!query && activePage === "translate" && translatorController && translatorLocale === workspace.locale) {
+    translatorController.update(translatorOptions());
+    return;
+  }
+  translatorController?.dispose?.();
+  translatorController = undefined;
   calendarController = undefined;
   calendarConnectionsRefresh = undefined;
   accountRefresh = undefined;
   view.replaceChildren();
-  if (query || activePage === "settings") {
+  if (query || activePage === "settings" || !document.getElementById(`tab-${activePage}`)) {
     view.removeAttribute("role");
     view.removeAttribute("aria-labelledby");
   } else {
@@ -917,6 +929,21 @@ function render() {
       }
     });
     refreshCalendarEvents();
+  } else if (activePage === "translate") {
+    const translatorSettings = button(t("translatorConfig"), "icon-button", { symbol: "settings", iconOnly: true });
+    translatorSettings.id = "translator-settings-button";
+    section(t("translate"), undefined, translatorSettings);
+    const body = node("div");
+    view.append(body);
+    translatorLocale = workspace.locale;
+    translatorController = renderTranslator(body, {
+      ...translatorOptions(),
+      locale: workspace.locale, t, icon, settingsButton: translatorSettings, draft: translatorDraft,
+      onPreferences: (patch) => mutate("translator-preferences", patch),
+      onCopy: copyTranslation,
+      onSave: saveTranslation,
+      onShortcut: openChromeShortcuts
+    });
   } else if (activePage === "library") renderLibrary();
   else if (activePage === "settings") renderSettings();
 
@@ -924,6 +951,54 @@ function render() {
     const element = document.getElementById(focused);
     if (element !== document.activeElement) element?.focus({ preventScroll: true });
   }
+}
+
+function translatorOptions() {
+  return {
+    preferences: { ...defaultTranslator, ...workspace.translator },
+    folders: workspace.folders.map((folder) => ({ ...folder, locked: folderLocked(folder) }))
+  };
+}
+
+function openChromeShortcuts() {
+  chrome.tabs.create({ url: "chrome://extensions/shortcuts" }).catch(() => reportError("shortcutOpenFailed"));
+}
+
+async function copyTranslation(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(t("copied"));
+    return true;
+  } catch {
+    reportError("copyFailed");
+    return false;
+  }
+}
+
+async function saveTranslation(snippet) {
+  if (snippet.text.length > 20_000) {
+    showToast(t("translatorTooLong", { limit: new Intl.NumberFormat(workspace.locale).format(20_000) }), undefined, true);
+    return false;
+  }
+  const save = async () => {
+    if (!await mutate("save-snippet", snippet)) return false;
+    showToast(t("translatorSaved"));
+    return true;
+  };
+  const folder = folderFor(snippet.folderId);
+  if (folderLocked(folder)) {
+    editVaultCredential(folder, "unlock", save);
+    return false;
+  }
+  return save();
+}
+
+async function receiveTranslationSelection() {
+  if (!inPanel || !workspaceInitialized || editor.open) return;
+  const selectedText = await takeTranslatorSelection();
+  if (selectedText === null) return;
+  if (activePage !== "translate" || query) switchTo("translate", false);
+  translatorController?.setSelection(selectedText, { auto: Boolean(selectedText.trim()) });
 }
 
 function openEditor(title, submitLabel, onSubmit, guardedFolder) {
@@ -1427,6 +1502,7 @@ editor.addEventListener("close", () => {
     protectedDialogFolder = undefined;
     protectedDialogSnippet = undefined;
     editor.replaceChildren();
+    receiveTranslationSelection();
   }
 });
 document.querySelector(".search-icon").innerHTML = icon("search");
@@ -1515,6 +1591,7 @@ document.addEventListener("keydown", (event) => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "session" && changes[vaultSessionStorageKey]) refreshWorkspace();
+  if (area === "session" && changes[translatorSelectionKey]?.newValue) receiveTranslationSelection();
   if (area !== "local") return;
   if (changes[storageKey]) refreshWorkspace({ ...defaultWorkspace, ...changes[storageKey].newValue });
   if (calendarConnectionKeys.some((key) => changes[key])) {
@@ -1523,7 +1600,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
   if (changes[accountStorageKey]) accountRefresh?.().catch(() => reportError("accountFailed"));
 });
+if (inPanel) chrome.tabs?.onActivated?.addListener(receiveTranslationSelection);
 await refreshWorkspace();
+workspaceInitialized = true;
 if (workspaceRoute.get("open") === "account") {
   switchTo("settings", false);
   document.getElementById("ease-account")?.scrollIntoView({ block: "nearest" });
@@ -1538,3 +1617,4 @@ deviceUnlockAvailable().then((available) => {
 }).catch(() => {});
 refreshCalendarDay();
 refreshCalendarEvents();
+receiveTranslationSelection();
