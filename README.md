@@ -25,9 +25,9 @@ Open the new ZIP and copy the contents of its extension folder over the files in
 - Add a named placeholder such as `{name}` to make a reusable template. Ease asks for its value when you copy the snippet.
 - Press **Alt+Shift+E** to open the popup and **/** inside Ease to search. **Settings → Open Ease shortcut** shows the active shortcut and opens Chrome’s shortcut page if you want to change it. Use **More actions → Set shortcut** on a snippet to choose an available key from **1–9**. Press that number while Ease is focused to copy the snippet.
 - Use the side panel button to keep Ease open alongside a page.
-- Open the module library (**+**) to show or hide Calendar. Switch between Week and Month, and use **Calendar settings** to choose Gregorian, Solar Hijri, or civil Hijri and the first day of the week.
+- Open the module library (**+**) to show or hide modules. Active modules use a colored outline, and the header buttons switch between grid and list. In Calendar, switch between Week and Month and choose Gregorian, Solar Hijri, or civil Hijri in settings.
 - In **Calendar settings**, choose dots, counts, titles, or event cards. The cards view shows events from the selected day onward in week and month views. The Calendar tab icon shows today's date, holiday status, and an event count capped at **+9**. Select a date to mark or unmark it as a holiday.
-- Choose a day and select **Add event**. You can leave the time empty or set either a start or an end. Events can also have a location and notes. Choose an event in **Events** to read its details, then edit or delete it from there if it's a local event. Local events stay on this device and can be used without signing in.
+- Choose a day and select **Add event**. When you set a start, Ease suggests an end one hour later, including events that cross midnight. You can change or remove the end. Set a reminder from the start time to one day before and allow Chrome notifications. Reminders use the browser's local time and work while Chrome is running. Select an event in **Events** to see its details and edit or delete local events.
 - Use the workspace search to find calendar events by title, location, notes, or date (`YYYY-MM-DD`). Select a result to open that event's details.
 - Open **Translator** from the module rail or add it from **+** on an existing workspace. Select text on a page and press **Alt+Shift+T** to open the toolbar popup and start translation. The right-click **Translate with Ease** action opens the side panel. Chrome can use reserved keys such as **Ctrl+T** for its own actions. [Chrome shortcut rules](https://developer.chrome.com/docs/extensions/reference/api/commands#key-combinations)
 - Choose **On-device**, **Economy**, **Fast**, or **Precision**. On-device is the default and may download a language model. The three AI options require Google sign-in. The same engine selection is available in **Translator settings**. Press **Ctrl+Enter** while typing to translate. Use the copy icon in the result to copy it.
@@ -39,7 +39,9 @@ Open the new ZIP and copy the contents of its extension folder over the files in
 
 ## Accounts and calendar connections
 
-**Settings → Account** offers Google sign-in in OAuth-configured builds. Signing in stores the verified profile in this browser. The first online translation verifies the account with Ease API and registers it on the server. Snippets, preferences and local events stay in the current browser profile.
+**Settings → Account** offers Google sign-in in OAuth-configured builds. The first online translation or encrypted sync operation verifies the account with Ease API and registers it on the server.
+
+Open **Settings → Encrypted sync** and set a passphrase to sync workspace preferences, snippets and folders, flashcards and review progress, and local Calendar events, holidays, and reminders. Enter the same passphrase on each device. Ease encrypts the workspace before sending it, and the passphrase is needed to open the cloud copy on a new device. Keep a copy of it. When the cloud and device have changed independently, Ease asks which version to keep. Site permissions, device unlock credentials, and connected calendar authorizations are managed separately on each device.
 
 **Calendar → Connected calendars** offers read-only connections. Ease refreshes on demand and attempts an hourly refresh while Chrome is running.
 

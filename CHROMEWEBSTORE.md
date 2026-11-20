@@ -24,7 +24,8 @@ Use the final release manifest as the source of truth when entering these answer
 | `sidePanel` | Opens the same workspace next to the current page when the user selects the side panel control. |
 | `clipboardWrite` | Copies saved snippets, completed template text, and translations when the user chooses to copy them. |
 | `identity` | Uses Chrome’s identity API for optional Google sign-in and requests separate read-only consent for Google Calendar. |
-| `alarms` | Schedules an hourly refresh for calendar feeds the user has connected while Chrome is running. |
+| `alarms` | Schedules connected calendar refresh, optional workspace sync, and local event reminders while Chrome is running. |
+| Optional `notifications` | Requested when the user sets a calendar reminder. Shows the event title and start time in a Chrome notification. |
 | `contextMenus` | Adds **Translate with Ease** to the context menu when the user selects text. |
 | `activeTab` | Temporarily allows the translation shortcut to access the active tab where the user invoked it. |
 | `scripting` | Reads only the current text selection when the user invokes the translation shortcut. |
@@ -45,6 +46,7 @@ Use this inventory to match the final ZIP to the Dashboard’s data categories, 
 | Snippets and template text entered by the user | Saved in `chrome.storage.local`. Filled-in template values are used to copy the output on the user’s request. Ease writes to the system clipboard and does not collect clipboard history. Snippets are not uploaded by Ease. |
 | Translation input and results | Chrome processes on-device translations locally. For an online tier, Ease sends the translation text, language pair, and learning-notes language to its API and OpenRouter, and keeps the result in the panel unless the user saves it to a snippet or flashcard. The Ease database stores usage counts. Selected text can be held briefly in `chrome.storage.session` to open the translator. |
 | Flashcards and study progress | Saved in this browser profile. A card can include a phrase, a translation, a usage note, and an example. Review ratings determine the next study time. Pronunciation uses an available on-device speech voice. |
+| Encrypted workspace snapshot | If enabled in Settings, Ease encrypts workspace settings, snippets and folders, flashcards, and local calendar data on the device. Its server stores the encrypted bytes, revision, and account ID so another device can fetch them. The sync passphrase stays on the device. |
 | Workspace settings and locally created calendar events | Saved in `chrome.storage.local`, including event dates, times, titles, locations, and notes. This data remains in the browser profile. |
 | Google account identifier, name, and verified email address | Fetched from Google after sign-in and stored in `chrome.storage.local`. For online translation, Ease API uses a Google access token to verify the account, records the verified profile and account timestamps, and returns a short-lived Ease token held in service worker memory. |
 | Connected calendar event data | Retrieved directly from Google or iCloud and cached in the browser. Includes event identifiers, dates, times, titles, locations, and notes that the provider supplies. The calendar connection stores its latest refresh time. |
@@ -66,7 +68,7 @@ Chrome processes on-device translations locally and may download language models
 
 If you choose to sign in with Google in an OAuth-enabled build, Ease uses Chrome’s identity service to request your account identifier, name, and verified email address from Google. Ease saves these profile details locally and registers the verified profile with the Ease service when you use an online engine. If you separately connect Google Calendar, Ease requests read-only access to display events from your primary calendar. If you connect Apple Calendar, Ease uses the published iCloud calendar link that you enter. Anyone who has that link can access the published calendar.
 
-Calendar refresh requests go directly to the selected provider. Ease retrieves and caches the events in the browser so it can display their dates, times, titles, locations, and notes. Refresh happens when you request it and through a scheduled refresh while Chrome is running. Ease does not sell personal data, use it for advertising, or transfer the locally saved workspace to the publisher.
+Calendar refresh requests go directly to the selected provider. Ease retrieves and caches the events in the browser so it can display their dates, times, titles, locations, and notes. Local reminders can show the event title and time in a notification on the device. If you enable encrypted sync, Ease sends an encrypted copy of saved workspace data to its server. You can turn sync off on each device. Your passphrase opens the encrypted copy on other devices. Ease does not sell personal data or use it for advertising.
 
 You can delete saved snippets and local events in Ease. Disconnecting a calendar clears its cached events and the saved connection from Ease. Signing out removes the stored Google profile and disconnects Google Calendar in Ease. You can separately revoke the Google permission in your Google Account and the calendar site permission in Chrome. Uninstall the extension to remove its local browser storage.
 

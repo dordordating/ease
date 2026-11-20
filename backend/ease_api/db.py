@@ -1,4 +1,4 @@
-"""PostgreSQL persistence for Google users and translation quotas."""
+"""PostgreSQL persistence for users, translation quotas and encrypted workspaces."""
 
 from asyncio import Lock, timeout
 from dataclasses import dataclass
@@ -13,6 +13,7 @@ from psycopg_pool import AsyncConnectionPool
 
 _MIGRATIONS = Path(__file__).with_name("migrations")
 _MIGRATION_LOCK = int.from_bytes(b"ease_api", "big")
+MAX_WORKSPACE_SYNC_REVISION = 2**53 - 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +23,14 @@ class User:
     name: str | None
     created_at: datetime
     last_seen_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceSnapshot:
+    revision: int
+    salt: bytes
+    iv: bytes
+    ciphertext: bytes
 
 
 class QuotaExceeded(Exception):
@@ -124,6 +133,39 @@ class Database:
             """, (id,))
             row = await cursor.fetchone()
             return User(**row) if row is not None else None
+
+    async def get_workspace_sync(self, user_id: UUID) -> WorkspaceSnapshot | None:
+        async with self._open_pool().connection() as connection:
+            cursor = await connection.execute("""
+                SELECT revision, salt, iv, ciphertext
+                FROM ease_workspace_sync
+                WHERE user_id = %s
+            """, (user_id,))
+            row = await cursor.fetchone()
+            return WorkspaceSnapshot(**row) if row else None
+
+    async def put_workspace_sync(
+        self, user_id: UUID, revision: int, salt: bytes, iv: bytes, ciphertext: bytes
+    ) -> int | None:
+        if revision >= MAX_WORKSPACE_SYNC_REVISION:
+            return None
+        async with self._open_pool().connection() as connection:
+            if revision == 0:
+                cursor = await connection.execute("""
+                    INSERT INTO ease_workspace_sync (user_id, revision, salt, iv, ciphertext)
+                    VALUES (%s, 1, %b, %b, %b)
+                    ON CONFLICT (user_id) DO NOTHING
+                    RETURNING revision
+                """, (user_id, salt, iv, ciphertext))
+            else:
+                cursor = await connection.execute("""
+                    UPDATE ease_workspace_sync
+                    SET revision = revision + 1, salt = %b, iv = %b, ciphertext = %b
+                    WHERE user_id = %s AND revision = %s
+                    RETURNING revision
+                """, (salt, iv, ciphertext, user_id, revision))
+            row = await cursor.fetchone()
+            return row["revision"] if row else None
 
     async def reserve_translation(
         self, user_id: UUID, tier: str, user_daily_limit: int, global_daily_limit: int

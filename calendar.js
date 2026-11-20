@@ -1,3 +1,4 @@
+import { calendarReminderOffsets, calendarReminderSchedule } from './calendar-store.js';
 import { calendarSystemFor, defaultCalendar } from './workspace-data.js';
 
 const dayLength = 86_400_000;
@@ -59,6 +60,7 @@ export function renderCalendar(container, {
   let savingHoliday = false;
   let savingEvent = false;
   let deletingEvent = false;
+  let endMode = 'auto';
 
   function configureDates() {
     const options = {
@@ -169,18 +171,29 @@ export function renderCalendar(container, {
             <span data-label="calendarEventTitle"></span>
             <input name="title" type="text" maxlength="160" dir="auto" required>
           </label>
-          <button type="button" class="calendar-time-toggle" aria-expanded="false" aria-controls="calendar-time-fields">${icon('plus')}<span data-label="calendarAddTime"></span></button>
-          <div class="calendar-time-fields" id="calendar-time-fields" hidden>
+          <div class="calendar-time-fields" id="calendar-time-fields">
             <label class="calendar-field">
               <span data-label="calendarStarts"></span>
               <input name="start" type="time">
             </label>
-            <label class="calendar-field">
-              <span data-label="calendarEnds"></span>
-              <input name="end" type="time">
-            </label>
-            <button type="button" class="calendar-clear-time" data-label="calendarClearTime"></button>
+            <div class="calendar-end-fields" hidden>
+              <label class="calendar-field">
+                <span data-label="calendarEnds"></span>
+                <input name="end" type="time">
+              </label>
+              <button type="button" class="icon-button calendar-remove-end">${icon('close')}</button>
+              <label class="calendar-end-next-day">
+                <input name="endNextDay" type="checkbox">
+                <span data-label="calendarEndNextDay"></span>
+              </label>
+            </div>
+            <button type="button" class="secondary-button calendar-add-end" hidden>${icon('plus')}<span data-label="calendarAddEnd"></span></button>
           </div>
+          <label class="calendar-field calendar-reminder-field" hidden>
+            <span data-label="calendarReminder"></span>
+            <select name="reminder" class="calendar-select"></select>
+          </label>
+          <p class="calendar-form-status calendar-reminder-status" role="status" hidden></p>
           <label class="calendar-field">
             <span data-label="calendarLocation"></span>
             <input name="location" type="text" maxlength="240" dir="auto">
@@ -242,11 +255,16 @@ export function renderCalendar(container, {
   const agenda = container.querySelector('.calendar-events');
   const editor = container.querySelector('.calendar-event-form');
   const editorTitle = editor.elements.namedItem('title');
-  const timeToggle = editor.querySelector('.calendar-time-toggle');
-  const timeFields = editor.querySelector('.calendar-time-fields');
-  const clearTime = editor.querySelector('.calendar-clear-time');
+  const endFields = editor.querySelector('.calendar-end-fields');
+  const endNextDayLabel = editor.querySelector('.calendar-end-next-day');
+  const removeEnd = editor.querySelector('.calendar-remove-end');
+  const addEnd = editor.querySelector('.calendar-add-end');
   const startField = editor.elements.namedItem('start');
   const endField = editor.elements.namedItem('end');
+  const endNextDay = editor.elements.namedItem('endNextDay');
+  const reminderField = editor.querySelector('.calendar-reminder-field');
+  const reminder = editor.elements.namedItem('reminder');
+  const reminderStatus = editor.querySelector('.calendar-reminder-status');
   const editorStatus = editor.querySelector('.calendar-form-status');
   const editorCancel = editor.querySelector('[data-calendar-cancel]');
   const detailView = container.querySelector('.calendar-event-detail');
@@ -262,6 +280,10 @@ export function renderCalendar(container, {
   const deleteStatus = deletePrompt.querySelector('.calendar-form-status');
 
   for (const label of container.querySelectorAll('[data-label]')) label.textContent = t(label.dataset.label);
+  removeEnd.setAttribute('aria-label', t('calendarRemoveEnd'));
+  removeEnd.title = t('calendarRemoveEnd');
+  reminder.add(new Option(t('calendarNoReminder'), ''));
+  for (const offset of calendarReminderOffsets) reminder.add(new Option(reminderLabel(offset), String(offset)));
   holidayButton.hidden = !onHoliday;
   const settingsView = container.querySelector('.calendar-settings-view');
   const calendarView = container.querySelector('.calendar-main');
@@ -527,8 +549,16 @@ export function renderCalendar(container, {
     const start = timeValue(event.start);
     if (!event.end) return formatTime.format(start);
     const end = timeValue(event.end);
+    if (event.endNextDay) return `${formatTime.format(start)} – ${formatTime.format(end)} · ${t('calendarEndNextDay')}`;
     if (start <= end) return formatTime.formatRange(start, end);
     return `${formatTime.format(start)} – ${formatTime.format(end)}`;
+  }
+
+  function reminderLabel(minutes) {
+    if (minutes === 0) return t('calendarReminderAtStart');
+    if (minutes === 60) return t('calendarReminderHour');
+    if (minutes === 1440) return t('calendarReminderDay');
+    return t('calendarReminderMinutes', { count: formatCount.format(minutes) });
   }
 
   function appendText(parent, tag, className, text) {
@@ -617,7 +647,11 @@ export function renderCalendar(container, {
     const fields = [
       ['calendarEventDate', formatDate.format(Date.parse(detailEvent.date))],
       ['calendarStarts', detailEvent.start && formatTime.format(timeValue(detailEvent.start))],
-      ['calendarEnds', detailEvent.end && formatTime.format(timeValue(detailEvent.end))],
+      ['calendarEnds', detailEvent.end && (detailEvent.endNextDay
+        ? `${formatDate.format(Date.parse(detailEvent.date) + dayLength)}, ${formatTime.format(timeValue(detailEvent.end))}`
+        : formatTime.format(timeValue(detailEvent.end)))],
+      ['calendarReminder', detailEvent.start && calendarReminderOffsets.includes(detailEvent.reminderMinutes)
+        && reminderLabel(detailEvent.reminderMinutes)],
       ['calendarLocation', detailEvent.location],
       ['calendarNotes', detailEvent.notes],
       ['calendar', eventSource(detailEvent)],
@@ -681,12 +715,53 @@ export function renderCalendar(container, {
     else closeDetails();
   });
 
-  function showTimeFields(show) {
-    timeFields.hidden = !show;
-    timeToggle.hidden = show;
-    timeToggle.setAttribute('aria-expanded', String(show));
-    startField.disabled = !show || savingEvent;
-    endField.disabled = !show || savingEvent;
+  function fillDefaultEnd() {
+    const end = timeValue(startField.value) + 3_600_000;
+    endField.value = new Date(end).toISOString().slice(11, 16);
+    endNextDay.checked = end >= dayLength;
+  }
+
+  function reminderMinutes() {
+    return startField.value && reminder.value !== '' ? Number(reminder.value) : null;
+  }
+
+  function showTimingFields() {
+    const hasStart = Boolean(startField.value);
+    const showEnd = endMode === 'manual' || (endMode === 'auto' && hasStart);
+    endFields.hidden = !showEnd;
+    endNextDayLabel.hidden = !hasStart;
+    addEnd.hidden = !hasStart || showEnd;
+    reminderField.hidden = !hasStart;
+    endField.disabled = !showEnd || savingEvent;
+    endNextDay.disabled = !showEnd || !hasStart || savingEvent;
+    reminder.disabled = !hasStart || savingEvent;
+  }
+
+  function showReminderStatus() {
+    const schedule = calendarReminderSchedule({
+      date: dayKey(editorDay), start: startField.value, reminderMinutes: reminderMinutes(),
+    });
+    setStatus(reminderStatus, schedule?.reminderAt <= Date.now() ? 'calendarReminderPast' : undefined);
+  }
+
+  async function requestReminderPermission() {
+    try {
+      if (chrome.permissions?.request && !await chrome.permissions.request({ permissions: ['notifications'] })) {
+        return 'calendarReminderPermission';
+      }
+      if (typeof chrome.notifications?.create !== 'function') return 'calendarReminderUnavailable';
+      if (chrome.notifications.getPermissionLevel && await chrome.notifications.getPermissionLevel() !== 'granted') {
+        return 'calendarReminderPermission';
+      }
+    } catch {
+      return 'calendarReminderUnavailable';
+    }
+  }
+
+  function setEditorBusy(busy) {
+    savingEvent = busy;
+    for (const input of editor.elements) input.disabled = busy;
+    showTimingFields();
   }
 
   function openEditor(event) {
@@ -700,12 +775,16 @@ export function renderCalendar(container, {
     editorTitle.value = event?.title ?? '';
     startField.value = event?.start ?? '';
     endField.value = event?.end ?? '';
+    endNextDay.checked = event?.endNextDay === true;
+    endMode = event?.end ? 'manual' : event?.start ? 'omitted' : 'auto';
+    reminder.value = calendarReminderOffsets.includes(event?.reminderMinutes) ? String(event.reminderMinutes) : '';
     editor.elements.namedItem('location').value = event?.location ?? '';
     editor.elements.namedItem('notes').value = event?.notes ?? '';
     editorTitle.setCustomValidity('');
     endField.setCustomValidity('');
     setStatus(editorStatus);
-    showTimeFields(Boolean(startField.value || endField.value));
+    showTimingFields();
+    showReminderStatus();
     updateGrid();
     updateAgenda();
     updateViews();
@@ -742,7 +821,8 @@ export function renderCalendar(container, {
     }
     const start = startField.value;
     const end = endField.value;
-    if (start && end && end <= start) {
+    const overnight = Boolean(start && end && endNextDay.checked);
+    if (start && end && !overnight && end <= start) {
       endField.setCustomValidity(t('calendarTimeOrder'));
       endField.reportValidity();
       return;
@@ -752,16 +832,23 @@ export function renderCalendar(container, {
       title,
       start,
       end,
+      endNextDay: overnight,
+      reminderMinutes: reminderMinutes(),
       location: editor.elements.namedItem('location').value.trim(),
       notes: editor.elements.namedItem('notes').value.trim(),
     };
     if (editorEvent) draft.id = editorEvent.id;
-    savingEvent = true;
-    for (const input of editor.elements) input.disabled = true;
+    setEditorBusy(true);
+    const schedule = calendarReminderSchedule(draft);
+    const permissionIssue = schedule?.reminderAt > Date.now() ? await requestReminderPermission() : undefined;
+    if (permissionIssue) {
+      setEditorBusy(false);
+      setStatus(reminderStatus, permissionIssue);
+      reminder.focus();
+      return;
+    }
     const saved = await runChange(onSaveEvent, draft);
-    savingEvent = false;
-    for (const input of editor.elements) input.disabled = false;
-    showTimeFields(!timeFields.hidden);
+    setEditorBusy(false);
     if (saved) {
       if (draft.id && detailEvent?.id === draft.id) detailEvent = { ...detailEvent, ...draft };
       closeEditor();
@@ -770,19 +857,40 @@ export function renderCalendar(container, {
     }
   });
   editorTitle.addEventListener('input', () => editorTitle.setCustomValidity(''));
-  for (const field of [startField, endField]) {
-    field.addEventListener('input', () => endField.setCustomValidity(''));
-  }
-  timeToggle.addEventListener('click', () => {
-    showTimeFields(true);
-    startField.focus();
-  });
-  clearTime.addEventListener('click', () => {
-    startField.value = '';
-    endField.value = '';
+  startField.addEventListener('input', () => {
     endField.setCustomValidity('');
-    showTimeFields(false);
-    timeToggle.focus();
+    if (startField.value && endMode === 'auto') fillDefaultEnd();
+    if (!startField.value) {
+      if (endMode === 'auto') endField.value = '';
+      endNextDay.checked = false;
+      reminder.value = '';
+    }
+    showTimingFields();
+    showReminderStatus();
+  });
+  endField.addEventListener('input', () => {
+    endMode = 'manual';
+    endField.setCustomValidity('');
+    if (!endField.value) endNextDay.checked = false;
+  });
+  endNextDay.addEventListener('change', () => {
+    endMode = 'manual';
+    endField.setCustomValidity('');
+  });
+  reminder.addEventListener('change', showReminderStatus);
+  addEnd.addEventListener('click', () => {
+    endMode = 'auto';
+    fillDefaultEnd();
+    showTimingFields();
+    endField.focus();
+  });
+  removeEnd.addEventListener('click', () => {
+    endMode = 'omitted';
+    endField.value = '';
+    endNextDay.checked = false;
+    endField.setCustomValidity('');
+    showTimingFields();
+    (addEnd.hidden ? startField : addEnd).focus();
   });
   editorCancel.addEventListener('click', closeEditor);
   addButton.addEventListener('click', () => openEditor());

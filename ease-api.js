@@ -1,4 +1,5 @@
 import { getGoogleAccount, getSilentGoogleProfileToken, googleAccountStorageKey } from "./providers.js";
+import { validateWorkspaceSyncEnvelope } from "./workspace-sync-crypto.js";
 
 export const easeTranslationMessage = "ease-translate-online";
 export const maxOnlineTranslationLength = 4_000;
@@ -9,6 +10,7 @@ const errorCodes = new Set([
   "translatorOnlineSignIn", "translatorOnlineUnavailable", "translatorOnlineLimit",
   "translatorOnlineBusy", "translatorTooLong", "translatorFailed"
 ]);
+const syncErrorCodes = new Set(["syncUnavailable", "syncSignInRequired", "syncConflict", "syncTooLarge", "syncInvalidData"]);
 const languageCode = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/u;
 const maxUsageLength = 360;
 const maxExampleLength = 280;
@@ -21,6 +23,7 @@ let pendingSession;
 let accountVersion = 0;
 let watchingAccount = false;
 const activeRequests = new Map();
+const activeSyncRequests = new Set();
 
 class EaseTranslationError extends Error {
   constructor(code) {
@@ -43,6 +46,7 @@ function observeAccount() {
     for (const request of activeRequests.values()) {
       request.abort(new EaseTranslationError("translatorOnlineSignIn"));
     }
+    for (const request of activeSyncRequests) request.abort(new EaseTranslationError("syncSignInRequired"));
   });
   watchingAccount = true;
 }
@@ -76,14 +80,15 @@ async function requireAccount(expected) {
   if (!matchesAccount(await accountSnapshot(), expected)) throw new EaseTranslationError("translatorOnlineSignIn");
 }
 
-async function apiPost(path, body, { token, signal, milliseconds = 27_000 } = {}) {
+async function apiRequest(path, { method, body, token, signal, milliseconds = 27_000 }) {
   signal?.throwIfAborted();
   const timeout = AbortSignal.timeout(milliseconds);
-  const headers = { Accept: "application/json", "Content-Type": "application/json" };
+  const headers = { Accept: "application/json" };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
   if (token) headers.Authorization = `Bearer ${token}`;
   try {
     return await fetch(`${baseUrl}${path}`, {
-      method: "POST",
+      method,
       credentials: "omit",
       redirect: "error",
       cache: "no-store",
@@ -95,6 +100,10 @@ async function apiPost(path, body, { token, signal, milliseconds = 27_000 } = {}
     signal?.throwIfAborted();
     throw new EaseTranslationError("translatorOnlineUnavailable");
   }
+}
+
+function apiPost(path, body, options) {
+  return apiRequest(path, { ...options, method: "POST", body });
 }
 
 async function decodeResponse(response) {
@@ -320,4 +329,76 @@ export async function translateOnline(text, { source = "auto", target, engine, s
   } finally {
     if (abort) signal.removeEventListener("abort", abort);
   }
+}
+
+function validRevision(revision) {
+  return Number.isSafeInteger(revision) && revision >= 0;
+}
+
+function verifySyncedWorkspace(result, request) {
+  if (!result || !validRevision(result.revision)) throw new EaseTranslationError("syncInvalidData");
+  if (request && result.revision !== request.revision + 1) throw new EaseTranslationError("syncInvalidData");
+  if (result.revision === 0 && result.envelope === null) return { revision: 0, envelope: null };
+  if (result.revision === 0) throw new EaseTranslationError("syncInvalidData");
+  const envelope = validateWorkspaceSyncEnvelope(result.envelope);
+  if (request && Object.keys(envelope).some((field) => envelope[field] !== request.envelope[field])) {
+    throw new EaseTranslationError("syncInvalidData");
+  }
+  return { revision: result.revision, envelope };
+}
+
+async function requestWorkspaceSync(accountId, method, body, signal) {
+  signal?.throwIfAborted();
+  observeAccount();
+  const controller = new AbortController();
+  activeSyncRequests.add(controller);
+  const requestSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+  try {
+    const account = await accountSnapshot();
+    if (account.id !== accountId) throw new EaseTranslationError("syncSignInRequired");
+    requestSignal.throwIfAborted();
+
+    const url = "/v1/workspace-sync";
+    let session = await sessionFor(account);
+    await requireAccount(account);
+    let response = await apiRequest(url, { method, body, token: session.token, signal: requestSignal });
+    if (response.status === 401) {
+      invalidateSession(session);
+      requestSignal.throwIfAborted();
+      await requireAccount(account);
+      session = await sessionFor(account);
+      await requireAccount(account);
+      response = await apiRequest(url, { method, body, token: session.token, signal: requestSignal });
+    }
+    if (response.status === 401) {
+      invalidateSession(session);
+      throw new EaseTranslationError("syncSignInRequired");
+    }
+
+    const result = response.ok ? await decodeResponse(response) : null;
+    requestSignal.throwIfAborted();
+    await requireAccount(account);
+    if (response.status === 409 && method === "PUT") throw new EaseTranslationError("syncConflict");
+    if (response.status === 413) throw new EaseTranslationError("syncTooLarge");
+    if (response.status === 422) throw new EaseTranslationError("syncInvalidData");
+    if (!response.ok) throw new EaseTranslationError("syncUnavailable");
+    return verifySyncedWorkspace(result, body);
+  } catch (error) {
+    signal?.throwIfAborted();
+    controller.signal.throwIfAborted();
+    if (syncErrorCodes.has(error?.code)) throw error;
+    throw new EaseTranslationError(error?.code === "translatorOnlineSignIn" ? "syncSignInRequired" : "syncUnavailable");
+  } finally {
+    activeSyncRequests.delete(controller);
+  }
+}
+
+export function readSyncedWorkspace(accountId, signal) {
+  return requestWorkspaceSync(accountId, "GET", undefined, signal);
+}
+
+export async function writeSyncedWorkspace(accountId, revision, envelope, signal) {
+  signal?.throwIfAborted();
+  if (!validRevision(revision) || revision === Number.MAX_SAFE_INTEGER) throw new EaseTranslationError("syncInvalidData");
+  return requestWorkspaceSync(accountId, "PUT", { revision, envelope: validateWorkspaceSyncEnvelope(envelope) }, signal);
 }

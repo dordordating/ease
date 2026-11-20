@@ -5,6 +5,9 @@ import { flashcardFieldLimits } from "./flashcard-store.js";
 import { translatorLanguages } from "./translator-engine.js";
 import { takeTranslatorSelection, translatorSelectionKey } from "./translator-selection.js";
 import { renderTranslatorSites } from "./translator-sites-ui.js";
+import { renderModuleLibrary } from "./module-library.js";
+import { workspaceSyncMessage, workspaceSyncStorageKey } from "./workspace-sync.js";
+import { renderWorkspaceSync } from "./workspace-sync-ui.js";
 import { paintBrand } from "./brand.js";
 import { accountStorageKey, calendarConnectionKeys, loadConnectedEvents, renderAccount, renderCalendarConnections } from "./connections.js";
 import { getGoogleAccount, signInGoogle } from "./providers.js";
@@ -57,6 +60,7 @@ let workspaceInitialized = false;
 let providerEvents = [];
 let refreshVersion = 0;
 let accountRefresh;
+let workspaceSyncRefresh;
 let calendarDayTimer;
 let vaultTimer;
 let inlinePinTimer;
@@ -666,37 +670,19 @@ ${t("folderContextHint")}`;
 }
 
 function renderLibrary() {
-  section(t("library"), t("libraryHint"));
-  const list = node("ul", "catalog-list");
-  for (const module of modules) {
-    const item = node("li", "catalog-item");
-    item.dataset.module = module.id;
-    item.style.setProperty("--accent", module.color);
-    const copy = node("div", "catalog-copy");
-    copy.append(node("strong", "", t(module.id)), node("p", "", t(`${module.id}Hint`)));
-    item.append(glyph(module.icon, "module-glyph"), copy);
-    if (module.released && module !== clipboard) {
-      const enabled = workspace.tabs.includes(module.id);
-      const toggle = button(t(enabled ? "hide" : "add"), "secondary-button", {
-        symbol: enabled ? undefined : "plus",
-        onClick: async () => {
-          toggle.disabled = true;
-          if (await mutate("toggle-module", { id: module.id, enabled: !enabled })) {
-            showToast(t(enabled ? "moduleHidden" : "moduleAdded", { name: t(module.id) }));
-          } else {
-            toggle.disabled = false;
-          }
-        }
-      });
-      toggle.id = `toggle-${module.id}`;
-      toggle.setAttribute("aria-label", `${t(enabled ? "hide" : "add")} ${t(module.id)}`);
-      item.append(toggle);
-    } else {
-      item.append(node("span", "status-tag", t(module.released ? "available" : "comingSoon")));
+  const body = node("div");
+  const switcher = renderModuleLibrary(body, {
+    t, icon, modules, tabs: workspace.tabs, layout: workspace.libraryLayout,
+    onLayout: (libraryLayout) => mutate("preferences", { libraryLayout }),
+    async onToggle(id) {
+      const enabled = !workspace.tabs.includes(id);
+      const changed = await mutate("toggle-module", { id, enabled });
+      if (changed) showToast(t(enabled ? "moduleAdded" : "moduleHidden", { name: t(id) }));
+      return changed;
     }
-    list.append(item);
-  }
-  view.append(list);
+  });
+  section(t("library"), t("libraryHint"), switcher);
+  view.append(body);
 }
 
 function radioOption(group, value, selected, className) {
@@ -795,7 +781,12 @@ function renderSettings() {
   list.append(storage);
   view.append(list);
   accountRefresh = renderAccount(list, t, reportError, { inToolbarPopup });
+  workspaceSyncRefresh = renderWorkspaceSync(list, { locale: workspace.locale, t, send: sendWorkspaceSync });
   readActivationShortcut();
+}
+
+function sendWorkspaceSync(action, passphrase) {
+  return chrome.runtime.sendMessage({ type: workspaceSyncMessage, action, ...(passphrase === undefined ? {} : { passphrase }) });
 }
 
 function searchable(text) {
@@ -922,6 +913,7 @@ function render() {
   calendarController = undefined;
   calendarConnectionsRefresh = undefined;
   accountRefresh = undefined;
+  workspaceSyncRefresh = undefined;
   view.replaceChildren();
   if (query || activePage === "settings" || !document.getElementById(`tab-${activePage}`)) {
     view.removeAttribute("role");
@@ -1874,6 +1866,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "session" && changes[translatorSelectionKey]?.newValue) receiveTranslationSelection();
   if (area !== "local") return;
   if (changes[vaultPinAttemptsStorageKey]) refreshWorkspace();
+  if (changes[workspaceSyncStorageKey]) workspaceSyncRefresh?.();
   if (changes[storageKey]) refreshWorkspace({ ...defaultWorkspace, ...changes[storageKey].newValue });
   if (calendarConnectionKeys.some((key) => changes[key])) {
     calendarConnectionsRefresh?.().catch(() => reportError("syncFailed"));
@@ -1883,6 +1876,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
     translatorAccountId = changes[accountStorageKey].newValue?.id ?? null;
     translatorController?.update({ accountId: translatorAccountId });
     accountRefresh?.().catch(() => reportError("accountFailed"));
+    workspaceSyncRefresh?.();
   }
 });
 if (inPanel) chrome.tabs?.onActivated?.addListener(receiveTranslationSelection);
@@ -1891,6 +1885,7 @@ if (initialTranslationSelection !== null) activePage = "translate";
 translatorAccountId = (await getGoogleAccount().catch(() => null))?.id ?? null;
 await refreshWorkspace();
 workspaceInitialized = true;
+sendWorkspaceSync("wake").catch(() => {});
 if (initialTranslationSelection !== null) {
   showTranslationSelection(initialTranslationSelection);
 } else if (workspaceRoute.get("open") === "account") {

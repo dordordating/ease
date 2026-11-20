@@ -14,6 +14,8 @@ const paths = {
   panel: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16m3-11v6"/>',
   search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  grid: '<rect x="4" y="4" width="6" height="6" rx="1.2"/><rect x="14" y="4" width="6" height="6" rx="1.2"/><rect x="4" y="14" width="6" height="6" rx="1.2"/><rect x="14" y="14" width="6" height="6" rx="1.2"/>',
+  list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r=".6"/><circle cx="4.5" cy="12" r=".6"/><circle cx="4.5" cy="18" r=".6"/>',
   copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 4H6a2 2 0 0 0-2 2v11"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',

@@ -1,5 +1,6 @@
 import asyncio
 import re
+from base64 import b64decode, urlsafe_b64encode
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime, time, timedelta
@@ -12,17 +13,23 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .auth import GoogleAuthUnavailable, InvalidGoogleCredential, issue_session, validate_session, verify_google_access_token
-from .db import Database, QuotaExceeded, User
+from .db import MAX_WORKSPACE_SYNC_REVISION, Database, QuotaExceeded, User
 from .openrouter import OpenRouterRejected, OpenRouterUnavailable, translate_with_openrouter
 from .settings import Settings
 
 Tier = Literal["economy", "standard", "premium"]
 language_code = re.compile(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}")
 bearer = HTTPBearer(auto_error=False)
+max_workspace_ciphertext = 10 * 1024 * 1024 + 16
+max_workspace_base64 = (max_workspace_ciphertext * 4 + 2) // 3
+max_workspace_body = max_workspace_base64 + 1024
+base64url_invalid = re.compile(r"[^A-Za-z0-9_-]")
+base64url_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 
 class GoogleLogin(BaseModel):
@@ -37,6 +44,72 @@ class TranslationRequest(BaseModel):
     target: str = Field(min_length=2, max_length=30)
     tier: Tier = "standard"
     notes_language: str | None = Field(default=None, min_length=2, max_length=30)
+
+
+class WorkspaceEnvelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    schema_version: int = Field(alias="schema", ge=1, le=1)
+    salt: str = Field(min_length=22, max_length=22)
+    iv: str = Field(min_length=16, max_length=16)
+    ciphertext: str = Field(min_length=22, max_length=max_workspace_base64)
+
+
+class WorkspaceWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    revision: int = Field(ge=0, le=MAX_WORKSPACE_SYNC_REVISION)
+    envelope: WorkspaceEnvelope
+
+
+def encode_base64url(value: bytes) -> str:
+    return urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def decode_base64url(value: str, minimum: int, maximum: int) -> bytes:
+    size = len(value) * 3 // 4
+    padding = -len(value) % 4
+    if not minimum <= size <= maximum or padding == 3 or base64url_invalid.search(value):
+        raise ValueError("Invalid envelope encoding")
+    # Reject encodings with nonzero trailing pad bits, even if they decode to the same bytes.
+    if padding and base64url_alphabet.index(value[-1]) & ((1 << (2 * padding)) - 1):
+        raise ValueError("Invalid envelope encoding")
+    return b64decode(value + "=" * padding, altchars=b"-_", validate=True)
+
+
+async def read_workspace_write(request: Request) -> WorkspaceWrite:
+    declared_length = request.headers.get("content-length")
+    if declared_length is not None:
+        try:
+            declared_length = int(declared_length)
+        except ValueError:
+            raise HTTPException(422, "invalid_request") from None
+        if declared_length > max_workspace_body:
+            raise HTTPException(413, "request_too_large")
+
+    data = bytearray()
+    try:
+        async with asyncio.timeout(90):
+            async for chunk in request.stream():
+                if len(data) + len(chunk) > max_workspace_body:
+                    raise HTTPException(413, "request_too_large")
+                data.extend(chunk)
+    except TimeoutError:
+        raise HTTPException(408, "workspace_sync_timeout") from None
+    except ClientDisconnect:
+        raise HTTPException(400, "request_incomplete") from None
+    return WorkspaceWrite.model_validate_json(data)
+
+
+@asynccontextmanager
+async def workspace_sync_slot(request: Request):
+    slots = request.app.state.workspace_sync_slots
+    try:
+        await asyncio.wait_for(slots.acquire(), timeout=1.0)
+    except TimeoutError:
+        raise HTTPException(503, "workspace_sync_busy", headers={"Retry-After": "2"}) from None
+    try:
+        yield
+    finally:
+        slots.release()
 
 
 class RequestBodyLimit:
@@ -109,6 +182,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             app.state.database = database
             app.state.session_secret = session_secret
             app.state.translation_slots = asyncio.Semaphore(settings.max_concurrent_translations)
+            app.state.workspace_sync_slots = asyncio.Semaphore(2)
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(25, connect=5),
                 limits=httpx.Limits(max_connections=8, max_keepalive_connections=4),
@@ -122,7 +196,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="Ease API", version="1.0.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.add_middleware(RequestBodyLimit, limit=max(24_576, settings.max_translation_characters * 12 + 2048))
     app.add_middleware(
-        CORSMiddleware, allow_origins=settings.origins, allow_methods=["GET", "POST"],
+        CORSMiddleware, allow_origins=settings.origins, allow_methods=["GET", "POST", "PUT"],
         allow_headers=["Authorization", "Content-Type"], expose_headers=["Retry-After"], allow_credentials=False,
     )
 
@@ -169,6 +243,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/v1/translation-tiers")
     async def translation_tiers(_user: Annotated[User, Depends(require_user)]):
         return {"tiers": [{"id": tier, "model": model} for tier, model in settings.models.items()]}
+
+    @app.get("/v1/workspace-sync")
+    async def get_workspace_sync(request: Request, user: Annotated[User, Depends(require_user)]):
+        async with workspace_sync_slot(request):
+            snapshot = await request.app.state.database.get_workspace_sync(user.id)
+            if snapshot is None:
+                return JSONResponse({"revision": 0, "envelope": None})
+            return JSONResponse({
+                "revision": snapshot.revision,
+                "envelope": {
+                    "schema": 1,
+                    "salt": encode_base64url(snapshot.salt),
+                    "iv": encode_base64url(snapshot.iv),
+                    "ciphertext": encode_base64url(snapshot.ciphertext),
+                },
+            })
+
+    @app.put("/v1/workspace-sync")
+    async def put_workspace_sync(request: Request, user: Annotated[User, Depends(require_user)]):
+        # Keep the large body out of FastAPI's argument parsing so authentication
+        # and the concurrency limit run before the request is read.
+        async with workspace_sync_slot(request):
+            try:
+                payload = await read_workspace_write(request)
+                envelope = payload.envelope
+                salt = decode_base64url(envelope.salt, 16, 16)
+                iv = decode_base64url(envelope.iv, 12, 12)
+                ciphertext = decode_base64url(envelope.ciphertext, 16, max_workspace_ciphertext)
+            except (ValidationError, ValueError):
+                raise HTTPException(422, "invalid_request") from None
+            revision = await request.app.state.database.put_workspace_sync(
+                user.id, payload.revision, salt, iv, ciphertext
+            )
+            if revision is None:
+                raise HTTPException(409, "workspace_sync_conflict")
+            return JSONResponse({"revision": revision, "envelope": envelope.model_dump(by_alias=True)})
 
     @app.post("/v1/translate")
     async def translate(payload: TranslationRequest, request: Request, user: Annotated[User, Depends(require_user)]):

@@ -33,6 +33,7 @@ export const defaultWorkspace = {
   palette: "violet",
   density: "compact",
   size: "medium",
+  libraryLayout: "grid",
   tabs: ["clipboard", "calendar", "translate"],
   snippets: [],
   folders: [],

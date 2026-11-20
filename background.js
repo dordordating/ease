@@ -2,6 +2,7 @@ import { defaultTranslator, densities, modules, palettes, readWorkspace, shortcu
 import { localeNames } from "./locales.js";
 import { setToolbarBrand } from "./brand.js";
 import { changeCalendarPreferences, saveCalendarEvent, setCalendarHoliday } from "./calendar-store.js";
+import { registerCalendarReminderHandlers } from "./calendar-reminders.js";
 import { refreshConnectedGoogleCalendar, registerGoogleProviderHandlers } from "./providers.js";
 import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
 import { deleteFolder, hasFolder, moveSnippet, pinFolder, reorderFolder, saveFolder } from "./clipboard-store.js";
@@ -9,6 +10,7 @@ import { translatorLanguages } from "./translator-engine.js";
 import { easeTranslationMessage, handleEaseTranslationMessage } from "./ease-api.js";
 import { changeFlashcardPreferences, FlashcardError, removeFlashcard, reviewFlashcard, saveFlashcard } from "./flashcard-store.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
+import { registerWorkspaceSyncHandlers } from "./workspace-sync.js";
 import {
   configureInlineTranslator, injectInlineTranslatorOnActiveTab, registerTranslatorSiteHandlers,
   requestInlineTranslatorPermission
@@ -26,6 +28,8 @@ let pendingWrite = Promise.resolve();
 registerGoogleProviderHandlers();
 registerTranslatorSelectionHandlers();
 registerTranslatorSiteHandlers();
+registerCalendarReminderHandlers();
+registerWorkspaceSyncHandlers(queueWorkspace);
 
 function queueWorkspace(operation) {
   const result = pendingWrite.then(operation);
@@ -287,6 +291,7 @@ async function updateWorkspace(workspace, action, data, transaction) {
       if (Object.hasOwn(palettes, data.palette)) workspace.palette = data.palette;
       if (densities.includes(data.density)) workspace.density = data.density;
       if (sizes.includes(data.size)) workspace.size = data.size;
+      if (["grid", "list"].includes(data.libraryLayout)) workspace.libraryLayout = data.libraryLayout;
       break;
     case "calendar-preferences":
       changeCalendarPreferences(workspace, data);

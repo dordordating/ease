@@ -1292,11 +1292,88 @@ html[dir="rtl"] .snippet-text > :is(strong, span) {
 }
 
 .catalog-item, .setting-row {
-  display: flex;
   align-items: center;
   gap: 7px;
   min-block-size: calc(var(--control-height) + 2 * var(--row-pad));
   padding: var(--row-pad);
+}
+
+.module-library-layout {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  justify-self: end;
+  margin-inline-start: auto;
+  padding: 2px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 8px;
+  background: var(--subtle);
+}
+
+.module-library-layout-button {
+  inline-size: 25px;
+  block-size: 25px;
+  border-radius: 5px;
+}
+
+.module-library-layout-button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--stroke-subtle));
+  background: var(--surface);
+  color: var(--accent);
+}
+
+.catalog-list[data-layout="grid"] {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 108px), 1fr));
+}
+
+.catalog-item {
+  --catalog-color: var(--module-color, var(--folder-violet));
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  overflow-wrap: anywhere;
+}
+
+.catalog-list[data-layout="grid"] .catalog-item {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto 1fr auto;
+  align-items: start;
+  gap: 6px;
+}
+
+.catalog-item[data-active="true"] {
+  border-color: color-mix(in srgb, var(--catalog-color) 57%, var(--stroke-subtle));
+  background: color-mix(in srgb, var(--catalog-color) 9%, var(--surface));
+}
+
+.catalog-mark {
+  position: relative;
+  justify-self: start;
+}
+
+.catalog-mark .module-glyph {
+  background: color-mix(in srgb, var(--catalog-color) 12%, var(--surface));
+  color: var(--catalog-color);
+}
+
+.catalog-active-mark {
+  position: absolute;
+  inset-block-start: -2px;
+  inset-inline-end: -3px;
+  display: grid;
+  place-items: center;
+  inline-size: 13px;
+  block-size: 13px;
+  border: 1px solid var(--surface);
+  border-radius: 50%;
+  background: var(--catalog-color);
+  color: var(--surface);
+}
+
+.catalog-active-mark svg {
+  inline-size: 9px;
+  block-size: 9px;
+  stroke-width: 2.2;
 }
 
 .catalog-copy > strong {
@@ -1314,7 +1391,38 @@ html[dir="rtl"] .snippet-text > :is(strong, span) {
   text-align: center;
 }
 
+.catalog-item > :is(.status-tag, .catalog-toggle) {
+  min-inline-size: 0;
+  max-inline-size: min(100%, 6rem);
+  justify-self: start;
+}
+
+.catalog-item[data-active="true"] > .status-tag {
+  background: color-mix(in srgb, var(--catalog-color) 12%, var(--surface));
+  color: var(--catalog-color);
+}
+
+.catalog-toggle[aria-disabled="true"] {
+  opacity: .6;
+  cursor: default;
+}
+
+@media (forced-colors: active) {
+  .catalog-item[data-active="true"],
+  .module-library-layout-button[aria-pressed="true"] {
+    border-color: Highlight;
+  }
+
+  .catalog-active-mark {
+    forced-color-adjust: none;
+    border-color: Canvas;
+    background: Highlight;
+    color: HighlightText;
+  }
+}
+
 .setting-row {
+  display: flex;
   justify-content: space-between;
 }
 
@@ -2000,7 +2108,8 @@ html[dir="rtl"] .vault-pin-input:placeholder-shown {
 }
 
 .calendar-config-fields label,
-.calendar-field {
+.calendar-field,
+.calendar-reminder-field {
   display: grid;
   gap: 3px;
   min-inline-size: 0;
@@ -2547,8 +2656,7 @@ button.calendar-event-content:hover {
 }
 
 .calendar-detail-back,
-.calendar-time-toggle,
-.calendar-clear-time {
+.calendar-add-end {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2565,15 +2673,13 @@ button.calendar-event-content:hover {
 }
 
 .calendar-detail-back:hover,
-.calendar-time-toggle:hover,
-.calendar-clear-time:hover {
+.calendar-add-end:hover {
   background: var(--calendar-wash);
   color: var(--calendar);
 }
 
 .calendar-detail-back svg,
-.calendar-time-toggle svg,
-.calendar-clear-time svg {
+.calendar-add-end svg {
   inline-size: 13px;
   block-size: 13px;
 }
@@ -2639,8 +2745,77 @@ button.calendar-event-content:hover {
   margin-block-start: 0;
 }
 
-.calendar-time-fields .calendar-clear-time {
-  grid-column: 1 / -1;
+.calendar-end-fields {
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-inline-size: 0;
+}
+
+.calendar-time-fields .calendar-field > span {
+  min-block-size: 20px;
+}
+
+.calendar-end-fields .calendar-field > span {
+  padding-inline-end: 25px;
+  overflow-wrap: anywhere;
+}
+
+.calendar-remove-end {
+  position: absolute;
+  inset-block-start: -3px;
+  inset-inline-end: 0;
+  inline-size: 24px;
+  block-size: 24px;
+  border-color: var(--stroke-subtle);
+  border-radius: 5px;
+  background: var(--surface);
+}
+
+.calendar-remove-end svg {
+  inline-size: 13px;
+  block-size: 13px;
+}
+
+.calendar-remove-end:hover {
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+  color: var(--danger);
+}
+
+.calendar-add-end {
+  align-self: start;
+  max-inline-size: 100%;
+  margin-block-start: 23px;
+  overflow-wrap: anywhere;
+}
+
+.calendar-end-next-day {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.calendar-end-next-day input {
+  flex: none;
+  inline-size: 12px;
+  block-size: 12px;
+  margin: 1px 0 0;
+  accent-color: var(--calendar);
+}
+
+.calendar-reminder-status {
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: var(--calendar-wash);
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
 .translator,

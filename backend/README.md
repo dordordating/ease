@@ -44,6 +44,10 @@ PostgreSQL stores the user's Google subject, email, display name, account timest
 
 Include `"notes_language":"fa"` to request learning notes in Persian. For an eligible short word or phrase, the response can include `learning.usage`, `learning.example`, `learning.example_translation`, `learning.example_language`, and `learning.source_language`. The example is in the target language by default. If the notes language is the target language, the example is in the source language. The translation and notes use the same provider request.
 
+## Encrypted workspace sync
+
+`GET /v1/workspace-sync` and `PUT /v1/workspace-sync` require the same verified Ease session. The endpoint accepts an encrypted envelope with schema version, salt, IV, and ciphertext. The browser derives the key from the sync passphrase, encrypts the workspace with AES-256-GCM, and handles all restore operations. PostgreSQL stores the ciphertext with an account ID and revision. A `PUT` using a stale revision returns `409`, allowing the browser to handle conflicts before replacing any copy.
+
 Use a Google access token with the `openid`, `email`, and `profile` scopes to start a session. The Ease token expires after 30 minutes by default. For `429` responses, the `Retry-After` header gives the seconds until the quota resets.
 
 ## Run locally
