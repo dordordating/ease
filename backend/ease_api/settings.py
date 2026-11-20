@@ -10,7 +10,7 @@ OPENROUTER_MODEL = re.compile(r"[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._:+-]*", re
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True)
+    model_config = SettingsConfigDict(extra="ignore", hide_input_in_errors=True, env_ignore_empty=True)
 
     database_url: SecretStr | None = None
     pghost: str = "db"
