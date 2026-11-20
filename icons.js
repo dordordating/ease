@@ -1,6 +1,7 @@
 const paths = {
   clipboard: '<rect x="7" y="4" width="10" height="4" rx="1.5"/><path d="M17 6h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2M8 13h8M8 17h5"/>',
   calendar: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4m10-4v4M3 10h18m-13 5h2m4 0h2m-8 3h2"/>',
+  "calendar-settings": '<path d="M13 20H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v4M7 2v4m10-4v4M3 9h18"/><path d="m17 13 .5 1.4 1 .6 1.5-.3 1 1.7-1 1.1v1l1 1.1-1 1.7-1.5-.3-1 .6-.5 1.4h-2l-.5-1.4-1-.6-1.5.3-1-1.7 1-1.1v-1l-1-1.1 1-1.7 1.5.3 1-.6.5-1.4Z"/><circle cx="16" cy="18" r="1.4"/>',
   chart: '<path d="M3 3v16a2 2 0 0 0 2 2h16M7 15l4-4 3 2 6-7m-5 0h5v5"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m4 8 8 6 8-6"/>',
   translate: '<path d="M3 5h12M9 3v2m4 0c-1 6-4 9-9 11m2-8c2 4 4 6 7 7m1 5 4-9 4 9m-6.7-3h5.4"/>',

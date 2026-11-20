@@ -21,6 +21,7 @@ export function renderCalendar(container, {
   preferences: initialPreferences,
   events: initialEvents = [],
   navigation = {},
+  settingsButton,
   onPreferences,
   onSaveEvent,
   onDeleteEvent,
@@ -86,32 +87,33 @@ export function renderCalendar(container, {
   }
 
   container.innerHTML = `
-    <div class="calendar">
+    <section class="calendar calendar-settings-view" id="calendar-settings-view" aria-labelledby="calendar-settings-heading" hidden>
+      <h2 id="calendar-settings-heading" data-label="calendarSettings"></h2>
       <div class="calendar-options">
         <div class="calendar-view-switch">
           <button type="button" class="calendar-view-button" data-view="month" data-label="calendarMonthView"></button>
           <button type="button" class="calendar-view-button" data-view="week" data-label="calendarWeekView"></button>
         </div>
-        <details class="calendar-config">
-          <summary class="calendar-config-toggle">${icon('settings')}<span data-label="calendarSettings"></span></summary>
-          <div class="calendar-config-fields">
-            <label><span data-label="calendarSystem"></span>
-              <select class="calendar-select" data-calendar-system>
-                <option value="" data-label="calendarSystemDefault"></option>
-                <option value="gregory" data-label="calendarGregorian"></option>
-                <option value="persian" data-label="calendarPersian"></option>
-                <option value="islamic-civil" data-label="calendarHijri"></option>
-              </select>
-            </label>
-            <label><span data-label="calendarWeekStart"></span>
-              <select class="calendar-select" data-calendar-week-start>
-                <option value="" data-label="calendarSystemDefault"></option>
-              </select>
-            </label>
-          </div>
-        </details>
-        <p class="calendar-form-status" data-calendar-settings-status role="status" hidden></p>
       </div>
+      <div class="calendar-config-fields">
+        <label><span data-label="calendarSystem"></span>
+          <select class="calendar-select" data-calendar-system>
+            <option value="" data-label="calendarSystemDefault"></option>
+            <option value="gregory" data-label="calendarGregorian"></option>
+            <option value="persian" data-label="calendarPersian"></option>
+            <option value="islamic-civil" data-label="calendarHijri"></option>
+          </select>
+        </label>
+        <label><span data-label="calendarWeekStart"></span>
+          <select class="calendar-select" data-calendar-week-start>
+            <option value="" data-label="calendarSystemDefault"></option>
+          </select>
+        </label>
+      </div>
+      <p class="calendar-form-status" data-calendar-settings-status role="status" hidden></p>
+      <div class="calendar-connections"></div>
+    </section>
+    <div class="calendar calendar-main">
       <div class="calendar-toolbar">
         <h3 class="calendar-month" id="calendar-month-heading" aria-live="polite"></h3>
         <button type="button" class="calendar-today" data-label="today"></button>
@@ -170,7 +172,6 @@ export function renderCalendar(container, {
         </form>
         <div class="calendar-events"></div>
       </section>
-      <div class="calendar-connections"></div>
     </div>
   `;
 
@@ -196,6 +197,21 @@ export function renderCalendar(container, {
   const editorCancel = editor.querySelector('[data-calendar-cancel]');
 
   for (const label of container.querySelectorAll('[data-label]')) label.textContent = t(label.dataset.label);
+  const settingsView = container.querySelector('.calendar-settings-view');
+  const calendarView = container.querySelector('.calendar-main');
+  settingsButton?.setAttribute('aria-controls', settingsView.id);
+  settingsButton?.setAttribute('aria-expanded', 'false');
+  settingsButton?.addEventListener('click', () => {
+    const opening = settingsView.hidden;
+    settingsView.hidden = !opening;
+    calendarView.hidden = opening;
+    settingsButton.setAttribute('aria-expanded', String(opening));
+    const label = t(opening ? 'close' : 'calendarSettings');
+    settingsButton.setAttribute('aria-label', label);
+    settingsButton.title = label;
+    const workspace = container.closest('.workspace');
+    if (workspace) workspace.scrollTop = 0;
+  });
   previousButton.innerHTML = icon(rtl ? 'chevron-right' : 'chevron-left');
   nextButton.innerHTML = icon(rtl ? 'chevron-left' : 'chevron-right');
 

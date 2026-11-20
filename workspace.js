@@ -487,7 +487,12 @@ function render() {
   if (query) renderSearch();
   else if (activePage === "clipboard") renderClipboard();
   else if (activePage === "calendar") {
-    section(t("calendar"));
+    const calendarSettings = button(t("calendarSettings"), "icon-button calendar-settings-trigger", {
+      symbol: "calendar-settings",
+      iconOnly: true
+    });
+    calendarSettings.id = "calendar-settings-button";
+    section(t("calendar"), undefined, calendarSettings);
     const calendarBody = node("div");
     view.append(calendarBody);
     calendarLocale = workspace.locale;
@@ -495,6 +500,7 @@ function render() {
       locale: workspace.locale,
       t,
       icon,
+      settingsButton: calendarSettings,
       navigation: calendarNavigation,
       preferences: workspace.calendar,
       events: calendarEvents(),

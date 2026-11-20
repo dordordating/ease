@@ -406,11 +406,12 @@ body[data-surface="panel"] .module-tabs {
   padding-block: var(--section-gap) var(--app-space);
 }
 
+html, body, .workspace {
+  scrollbar-width: none;
+}
+
 body[data-surface="popup"] .workspace {
   overflow: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--stroke) transparent;
-  scrollbar-gutter: stable;
 }
 
 .section-header, .collection-heading {
@@ -1093,6 +1094,21 @@ html[dir="rtl"] :is(input, textarea):placeholder-shown {
   --calendar-wash: color-mix(in srgb, var(--calendar) 10%, var(--surface));
 }
 
+.calendar-settings-trigger {
+  border-color: var(--stroke-subtle);
+  background: var(--subtle);
+}
+
+.calendar-settings-trigger[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.calendar-settings-view h2 {
+  font-size: 14px;
+  margin-block-end: 8px;
+}
+
 .calendar-options,
 .calendar-view-switch,
 .calendar-agenda-header,
@@ -1117,7 +1133,6 @@ html[dir="rtl"] :is(input, textarea):placeholder-shown {
 }
 
 .calendar-view-button,
-.calendar-config-toggle,
 .calendar-add-event,
 .calendar-event-delete,
 .calendar-form-actions button {
@@ -1137,7 +1152,6 @@ html[dir="rtl"] :is(input, textarea):placeholder-shown {
 }
 
 .calendar-view-button:hover,
-.calendar-config-toggle:hover,
 .calendar-event-delete:hover,
 .calendar-form-actions button:hover {
   background: var(--hover);
@@ -1150,25 +1164,6 @@ html[dir="rtl"] :is(input, textarea):placeholder-shown {
   color: var(--calendar);
 }
 
-.calendar-config {
-  min-inline-size: 0;
-}
-
-.calendar-config[open] {
-  flex-basis: 100%;
-}
-
-.calendar-config-toggle {
-  border-color: var(--stroke-subtle);
-  background: var(--surface);
-  list-style: none;
-}
-
-.calendar-config-toggle::-webkit-details-marker {
-  display: none;
-}
-
-.calendar-options svg,
 .calendar-agenda svg {
   inline-size: 13px;
   block-size: 13px;
