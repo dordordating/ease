@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Ease",
+  "version": "0.1.0",
+  "description": "A fast, customizable workspace for everyday browser tasks.",
+  "minimum_chrome_version": "116",
+  "permissions": ["storage", "sidePanel", "clipboardWrite"],
+  "action": {
+    "default_title": "Ease",
+    "default_popup": "workspace.html",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "workspace.html?surface=panel"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+E",
+        "mac": "Alt+Shift+E"
+      },
+      "description": "Open the Ease workspace"
+    }
+  }
+}
