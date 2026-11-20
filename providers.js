@@ -298,18 +298,37 @@ async function refreshCalendar(interactive) {
   });
 }
 
+async function verifiedGoogleAccount(token) {
+  const identity = await googleJson(profileUrl, token, "googleProfileFailed");
+  if (typeof identity?.sub !== "string" || !identity.sub || typeof identity.email !== "string" || !identity.email
+    || identity.email_verified !== true) {
+    throw new GoogleProviderError("googleProfileFailed");
+  }
+  return {
+    id: identity.sub,
+    name: typeof identity.name === "string" ? identity.name : identity.email,
+    email: identity.email
+  };
+}
+
+export async function getSilentGoogleProfileToken(accountId) {
+  const existing = await getGoogleAccount();
+  if (!existing || existing.id !== accountId) throw new GoogleProviderError("googleChromeAccountRequired");
+  if (!googleConfigured() || !await chrome.permissions.contains(profileHosts)) {
+    throw new GoogleProviderError("googleOAuthUnavailable");
+  }
+  return authorized(profileScopes, false, async (token) => {
+    const verified = await verifiedGoogleAccount(token);
+    if (verified.id !== accountId || (await getGoogleAccount())?.id !== accountId) {
+      throw new GoogleProviderError("googleChromeAccountRequired");
+    }
+    return { token, email: verified.email };
+  });
+}
+
 async function fetchAccount() {
   return authorized(profileScopes, true, async (token) => {
-    const identity = await googleJson(profileUrl, token, "googleProfileFailed");
-    if (typeof identity?.sub !== "string" || !identity.sub || typeof identity.email !== "string" || !identity.email
-      || identity.email_verified !== true) {
-      throw new GoogleProviderError("googleProfileFailed");
-    }
-    const account = {
-      id: identity.sub,
-      name: typeof identity.name === "string" ? identity.name : identity.email,
-      email: identity.email
-    };
+    const account = await verifiedGoogleAccount(token);
     await chrome.storage.local.set({ [googleAccountStorageKey]: account });
     return account;
   });

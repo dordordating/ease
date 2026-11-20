@@ -29,14 +29,15 @@ Open the new ZIP and copy the contents of its extension folder over the files in
 - In **Calendar settings**, choose dots, counts, titles, or event cards. Week view lays out days vertically. The Calendar tab icon shows today's date, holiday status, and an event count capped at **+9**. Select a date to mark or unmark it as a holiday.
 - Choose a day and select **Add event**. You can leave the time empty or set either a start or an end. Events can also have a location and notes. Choose an event in **Events** to read its details, then edit or delete it from there if it's a local event. Local events stay on this device and can be used without signing in.
 - Use the workspace search to find calendar events by title, location, notes, or date (`YYYY-MM-DD`). Select a result to open that event's details.
-- Open **Translator** from the module rail or add it from **+** on an existing workspace. Paste text or select text on a page and press **Alt+Shift+T** to open the toolbar popup directly in Translator. The right-click **Translate with Ease** action opens the side panel. Chrome runs the translation on the device, may download a model, and checks language-pair support.
-- In **Translator settings**, enable **Ctrl + select** for the HTTPS websites you choose, and grant access to each site when Chrome asks. On an enabled page, hold **Ctrl** while selecting text to show the translation near the selection. You can also choose the source, target, result layout, and default clipboard folder in Translator.
+- Open **Translator** from the module rail or add it from **+** on an existing workspace. Paste text or select text on a page and press **Alt+Shift+T** to open the toolbar popup directly in Translator. The right-click **Translate with Ease** action opens the side panel.
+- Choose **Chrome · On device**, **Economy** (Gemma 4 31B), **Standard** (Gemini 2.5 Flash Lite), or **Precision** (GPT-5.6 Luna). Chrome is the default and may download a language model. Online translation requires Google sign-in and sends the request text to Ease API and OpenRouter. The same engine selection is available in **Translator settings**.
+- In **Translator settings**, enable **Ctrl + select** for the HTTPS websites you choose, and grant access to each site when Chrome asks. The in-page popover uses Chrome's on-device translator. You can also choose the source, target, result layout, and default clipboard folder in Translator.
 - Use **Settings → Language** to change the interface. English is the first-run default. Persian, Spanish, French, Brazilian Portuguese, Arabic, German, and Japanese are available. The Persian interface uses the bundled Vazir font.
 - In **Settings**, choose Light, Dark, or Automatic appearance, one of four accent colors, a control density, and a workspace size. The popup keeps a fixed height for its selected size. The accent color also updates the Ease logo and the toolbar icon. Use Chrome’s divider to resize the side panel itself.
 
 ## Accounts and calendar connections
 
-**Settings → Account** offers Google sign-in in OAuth-configured builds. Signing in stores the verified profile in this browser. Snippets, preferences and local events stay in the current browser profile. Ease does not have cross-device account storage.
+**Settings → Account** offers Google sign-in in OAuth-configured builds. Signing in stores the verified profile in this browser. The first online translation verifies the account with Ease API and registers it on the server. Snippets, preferences and local events stay in the current browser profile.
 
 **Calendar → Connected calendars** offers read-only connections. Ease refreshes on demand and attempts an hourly refresh while Chrome is running.
 

@@ -4,6 +4,7 @@ import { takeTranslatorSelection, translatorSelectionKey } from "./translator-se
 import { renderTranslatorSites } from "./translator-sites-ui.js";
 import { paintBrand } from "./brand.js";
 import { accountStorageKey, calendarConnectionKeys, loadConnectedEvents, renderAccount, renderCalendarConnections } from "./connections.js";
+import { getGoogleAccount, signInGoogle } from "./providers.js";
 import { icon } from "./icons.js";
 import { deviceUnlockAvailable, readDeviceUnlock, registerDeviceUnlock } from "./vault-device.js";
 import { vaultPinAttemptsStorageKey, vaultPolicyFor, vaultSessionStorageKey } from "./vault-session.js";
@@ -44,6 +45,7 @@ let translatorController;
 let translatorSiteController;
 let translatorLocale;
 const translatorDraft = {};
+let translatorAccountId = null;
 let workspaceInitialized = false;
 let providerEvents = [];
 let refreshVersion = 0;
@@ -951,7 +953,8 @@ function render() {
       onPreferences: (patch) => mutate("translator-preferences", patch),
       onCopy: copyTranslation,
       onSave: saveTranslation,
-      onShortcut: openChromeShortcuts
+      onShortcut: openChromeShortcuts,
+      onSignIn: signInForTranslation
     });
     translatorSiteController = renderTranslatorSites(body.querySelector(".translator-settings-view"), {
       t, icon, sites: workspace.translator?.inlineSites ?? [],
@@ -971,8 +974,22 @@ function render() {
 function translatorOptions() {
   return {
     preferences: { ...defaultTranslator, ...workspace.translator },
+    accountId: translatorAccountId,
     folders: workspace.folders.map((folder) => ({ ...folder, locked: folderLocked(folder) }))
   };
+}
+
+async function signInForTranslation() {
+  try {
+    const account = await signInGoogle({ requestFromPage: !inToolbarPopup && inPanel });
+    translatorAccountId = account?.id ?? null;
+    translatorController?.update({ accountId: translatorAccountId });
+    return Boolean(translatorAccountId);
+  } catch {
+    switchTo("settings", false);
+    document.getElementById("ease-account")?.scrollIntoView({ block: "nearest" });
+    return false;
+  }
 }
 
 function openChromeShortcuts() {
@@ -1701,11 +1718,16 @@ chrome.storage.onChanged.addListener((changes, area) => {
     calendarConnectionsRefresh?.().catch(() => reportError("syncFailed"));
     refreshCalendarEvents();
   }
-  if (changes[accountStorageKey]) accountRefresh?.().catch(() => reportError("accountFailed"));
+  if (changes[accountStorageKey]) {
+    translatorAccountId = changes[accountStorageKey].newValue?.id ?? null;
+    translatorController?.update({ accountId: translatorAccountId });
+    accountRefresh?.().catch(() => reportError("accountFailed"));
+  }
 });
 if (inPanel) chrome.tabs?.onActivated?.addListener(receiveTranslationSelection);
 const initialTranslationSelection = await takeTranslatorSelection();
 if (initialTranslationSelection !== null) activePage = "translate";
+translatorAccountId = (await getGoogleAccount().catch(() => null))?.id ?? null;
 await refreshWorkspace();
 workspaceInitialized = true;
 if (initialTranslationSelection !== null) {

@@ -2619,6 +2619,123 @@ button.calendar-event-content:hover {
   gap: 5px;
 }
 
+.translator-engines {
+  container-type: inline-size;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.translator-engines > legend {
+  margin-block-end: 4px;
+  padding: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 680;
+}
+
+.translator-engine-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+@container (min-width: 286px) {
+  .translator-engine-options {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.translator-engine-option {
+  position: relative;
+  display: flex;
+  min-inline-size: 0;
+  cursor: pointer;
+}
+
+.translator-engine-option > input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+}
+
+.translator-engine-option > input + span {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  min-inline-size: 0;
+  min-block-size: var(--control-height);
+  padding: 4px 5px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.translator-engine-option:hover > input:enabled:not(:checked) + span {
+  background: var(--subtle);
+  color: var(--text);
+}
+
+.translator-engine-option > input:checked + span {
+  border-color: var(--translate);
+  background: var(--translator-wash);
+  color: var(--translate);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--translate) 30%, transparent);
+}
+
+.translator-engine-option > input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.translator-engine-option > input:disabled + span {
+  opacity: .55;
+  cursor: default;
+}
+
+@media (forced-colors: active) {
+  .translator-engine-option > input:checked + span {
+    forced-color-adjust: none;
+    border-color: Highlight;
+    background: Highlight;
+    color: HighlightText;
+  }
+}
+
+.translator-cloud-details {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
+  min-inline-size: 0;
+  padding: 6px 7px;
+  border: 1px solid color-mix(in srgb, var(--translate) 18%, var(--stroke-subtle));
+  border-radius: 7px;
+  background: var(--translator-wash);
+}
+
+.translator-cloud-note {
+  min-inline-size: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.translator-cloud-sign-in {
+  justify-self: start;
+  max-inline-size: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .translator-field {
   display: grid;
   gap: 3px;

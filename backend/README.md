@@ -1,6 +1,6 @@
 # Ease API
 
-Ease API uses FastAPI and PostgreSQL. It checks Google credentials, keeps one account per Google identity, and gives signed-in users access to three OpenRouter translation tiers. The Chrome extension currently uses its on-device translator and browser-local account view. Connecting those screens to this API requires the deployed HTTPS origin.
+Ease API uses FastAPI and PostgreSQL. It checks Google credentials, keeps one account per Google identity, and gives signed-in users access to three OpenRouter translation tiers. The Chrome extension calls the deployed API from its service worker when the user chooses an online engine in Translator. Its **Precision** label maps to the `premium` API tier.
 
 ## Deploy on Coolify
 

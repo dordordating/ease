@@ -1,4 +1,4 @@
-import { defaultTranslator, densities, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
+import { defaultTranslator, densities, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes, translatorEngines } from "./workspace-data.js";
 import { localeNames } from "./locales.js";
 import { setToolbarBrand } from "./brand.js";
 import { changeCalendarPreferences, saveCalendarEvent, setCalendarHoliday } from "./calendar-store.js";
@@ -6,6 +6,7 @@ import { refreshConnectedGoogleCalendar, registerGoogleProviderHandlers } from "
 import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
 import { deleteFolder, hasFolder, moveSnippet, pinFolder, reorderFolder, saveFolder } from "./clipboard-store.js";
 import { translatorLanguages } from "./translator-engine.js";
+import { easeTranslationMessage, handleEaseTranslationMessage } from "./ease-api.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
 import {
   configureTranslatorSite, injectTranslatorOnActiveSite, normalizeTranslatorSite, registerTranslatorSiteHandlers,
@@ -291,6 +292,7 @@ async function updateWorkspace(workspace, action, data, transaction) {
       break;
     case "translator-preferences": {
       const settings = { ...defaultTranslator, ...workspace.translator };
+      if (translatorEngines.includes(data.engine)) settings.engine = data.engine;
       if (data.source === "auto" || translatorLanguages.includes(data.source)) settings.source = data.source;
       if (translatorLanguages.includes(data.target)) settings.target = data.target;
       if (["both", "result"].includes(data.layout)) settings.layout = data.layout;
@@ -458,12 +460,19 @@ async function updateWorkspace(workspace, action, data, transaction) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  if (sender.id !== chrome.runtime.id || !["ease-workspace-read", "ease-workspace-update"].includes(message?.type)) return;
+  if (sender.id !== chrome.runtime.id) return;
+  const workspaceUrl = chrome.runtime.getURL("workspace.html");
+  const fromWorkspace = sender.url === workspaceUrl || sender.url?.startsWith(`${workspaceUrl}?`);
+  if (message?.type === easeTranslationMessage) {
+    if (fromWorkspace) return handleEaseTranslationMessage(message, respond);
+    return;
+  }
+  if (!["ease-workspace-read", "ease-workspace-update"].includes(message?.type)) return;
 
   const requestSite = message.type === "ease-workspace-update" && message.action === "translator-inline-site"
     && message.data?.enabled === true && message.data.requestPermission === true;
   // Start permission UI on the first message hop so a toolbar popup can close without losing the action.
-  const permission = requestSite && sender.url?.startsWith(chrome.runtime.getURL("workspace.html"))
+  const permission = requestSite && fromWorkspace
     ? requestTranslatorSitePermission(normalizeTranslatorSite(message.data.site)) : null;
   const result = queueWorkspace(async () => {
     const permissionError = await permission;

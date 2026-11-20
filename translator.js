@@ -1,15 +1,36 @@
 import { chromeTranslate, maxTranslationLength, translatorLanguages } from "./translator-engine.js";
-import { defaultTranslator } from "./workspace-data.js";
+import { maxOnlineTranslationLength, translateOnline } from "./ease-api.js";
+import { defaultTranslator, translatorEngines } from "./workspace-data.js";
 
 const languages = new Set(translatorLanguages);
+const engineLabels = {
+  chrome: "translatorChrome", economy: "translatorEconomy", standard: "translatorStandard", premium: "translatorPremium"
+};
 const translationErrors = new Set([
   "translatorUnavailable", "translatorPairUnavailable", "translatorDetectionUnavailable",
-  "translatorNeedsDownload", "translatorTooLong", "translatorFailed"
+  "translatorNeedsDownload", "translatorTooLong", "translatorFailed", "translatorOnlineSignIn",
+  "translatorOnlineUnavailable", "translatorOnlineLimit", "translatorOnlineBusy"
 ]);
+
+const enginePicker = `
+  <fieldset class="translator-engines">
+    <legend data-label="translatorEngine"></legend>
+    <div class="translator-engine-options">
+      ${translatorEngines.map((engine) => `
+        <label class="translator-engine-option">
+          <input type="radio" name="engine" value="${engine}">
+          <span data-label="${engineLabels[engine]}"></span>
+        </label>`).join("")}
+    </div>
+  </fieldset>
+  <div class="translator-cloud-details" hidden>
+    <p class="translator-cloud-note" data-label="translatorOnlineDisclosure"></p>
+    <button type="button" class="secondary-button translator-cloud-sign-in" data-label="translatorOnlineSignInAction" hidden></button>
+  </div>`;
 
 export function renderTranslator(container, {
   locale, t, icon, settingsButton, preferences: initialPreferences, folders: initialFolders = [],
-  draft = {}, onPreferences, onCopy, onSave, onShortcut
+  accountId: initialAccountId = null, draft = {}, onPreferences, onCopy, onSave, onShortcut, onSignIn
 }) {
   const names = new Intl.DisplayNames([locale], { type: "language" });
   const numbers = new Intl.NumberFormat(locale);
@@ -18,7 +39,11 @@ export function renderTranslator(container, {
     .map(code => [code, names.of(code)])
     .sort((a, b) => a[1].localeCompare(b[1], locale));
   const preferences = { ...defaultTranslator, ...initialPreferences };
+  if (!translatorEngines.includes(preferences.engine)) preferences.engine = defaultTranslator.engine;
   let folders = initialFolders;
+  let accountId = initialAccountId;
+  let needsCloudSignIn = false;
+  let signingIn = false;
   let showSettings = false;
   let showOriginal = !draft.result;
   let writingPreferences = false;
@@ -28,6 +53,7 @@ export function renderTranslator(container, {
 
   container.innerHTML = `
     <form class="translator translator-main">
+      ${enginePicker}
       <div class="translator-language-row">
         <label class="translator-field">
           <span data-label="translatorSource"></span>
@@ -63,10 +89,7 @@ export function renderTranslator(container, {
     </form>
     <section class="translator-settings-view" id="translator-settings" aria-labelledby="translator-settings-heading" hidden>
       <h2 id="translator-settings-heading" data-label="translatorConfig"></h2>
-      <div class="translator-field">
-        <span data-label="translatorEngine"></span>
-        <strong data-label="translatorChrome"></strong>
-      </div>
+      ${enginePicker}
       <label class="translator-field">
         <span data-label="translatorLayout"></span>
         <select class="translator-select" data-translator-layout>
@@ -105,6 +128,9 @@ export function renderTranslator(container, {
   const layoutSelect = settingsView.querySelector("[data-translator-layout]");
   const folderSelect = settingsView.querySelector("[data-translator-folder]");
   const settingsFeedback = settingsView.querySelector("[data-translator-settings-feedback]");
+  const engineControls = Array.from(container.querySelectorAll("input[name=engine]"));
+  const cloudDetails = Array.from(container.querySelectorAll(".translator-cloud-details"));
+  const cloudSignInButtons = Array.from(container.querySelectorAll(".translator-cloud-sign-in"));
 
   for (const label of container.querySelectorAll("[data-label]")) label.textContent = t(label.dataset.label);
   sourceSelect.add(new Option(t("translatorAuto"), "auto"));
@@ -140,6 +166,18 @@ export function renderTranslator(container, {
     return typeof api?.availability === "function" && typeof api.create === "function";
   }
 
+  function online() {
+    return preferences.engine !== defaultTranslator.engine;
+  }
+
+  function showSignIn() {
+    return !accountId || needsCloudSignIn;
+  }
+
+  function inputLimit() {
+    return online() ? maxOnlineTranslationLength : maxTranslationLength;
+  }
+
   function setProgress(value) {
     progress.hidden = value === undefined;
     if (value !== undefined) progress.value = value;
@@ -150,10 +188,11 @@ export function renderTranslator(container, {
     request = undefined;
     draft.result = "";
     if (clearDetection) draft.detectedSource = undefined;
+    draft.engine = preferences.engine;
     draft.source = preferences.source;
     draft.target = preferences.target;
     setProgress(undefined);
-    setFeedback(nativeSupported() ? undefined : "translatorUnavailable");
+    setFeedback(online() || nativeSupported() ? undefined : "translatorUnavailable");
   }
 
   function render() {
@@ -177,13 +216,22 @@ export function renderTranslator(container, {
     layoutSelect.value = preferences.layout;
     folderSelect.value = folders.some(folder => folder.id === preferences.folderId) ? preferences.folderId : "";
 
+    for (const control of engineControls) {
+      control.checked = control.value === preferences.engine;
+      control.disabled = writingPreferences;
+    }
+    for (const details of cloudDetails) details.hidden = !online();
+    for (const signIn of cloudSignInButtons) {
+      signIn.hidden = !showSignIn() || !onSignIn;
+      signIn.disabled = signingIn;
+    }
     for (const select of [sourceSelect, targetSelect, layoutSelect, folderSelect]) {
       select.disabled = writingPreferences;
     }
     const source = sourceLanguage();
     swapButton.disabled = writingPreferences || !languages.has(source) || source === preferences.target;
     translateButton.hidden = resultOnly && !showOriginal;
-    translateButton.disabled = !nativeSupported() || !input.value.trim() || !!request || writingPreferences;
+    translateButton.disabled = (online() ? showSignIn() : !nativeSupported()) || !input.value.trim() || !!request || writingPreferences;
     const canUseResult = Boolean(draft.result) && !actionInProgress && !request && !writingPreferences;
     copyButton.disabled = !canUseResult;
     saveButton.disabled = !canUseResult;
@@ -202,14 +250,24 @@ export function renderTranslator(container, {
     for (const folder of folders) folderSelect.add(new Option(folder.name, folder.id));
   }
 
-  function update({ preferences: nextPreferences, folders: nextFolders } = {}) {
+  function update({ preferences: nextPreferences, folders: nextFolders, accountId: nextAccountId } = {}) {
     if (disposed) return;
     if (nextPreferences) {
       const priorSource = preferences.source;
       const priorTarget = preferences.target;
+      const priorEngine = preferences.engine;
       Object.assign(preferences, nextPreferences);
-      if (preferences.source !== priorSource || preferences.target !== priorTarget) {
-        resetResult(preferences.source !== priorSource);
+      if (!translatorEngines.includes(preferences.engine)) preferences.engine = defaultTranslator.engine;
+      if (preferences.engine !== priorEngine || preferences.source !== priorSource || preferences.target !== priorTarget) {
+        resetResult(preferences.engine !== priorEngine || preferences.source !== priorSource);
+        showOriginal = true;
+      }
+    }
+    if (nextAccountId !== undefined && accountId !== nextAccountId) {
+      accountId = nextAccountId;
+      needsCloudSignIn = false;
+      if (online()) {
+        resetResult();
         showOriginal = true;
       }
     }
@@ -257,8 +315,9 @@ export function renderTranslator(container, {
       setFeedback("translatorNoSelection");
       return false;
     }
-    if (text.length > maxTranslationLength) {
-      setFeedback("translatorTooLong", "error", { limit: numbers.format(maxTranslationLength) });
+    const limit = inputLimit();
+    if (text.length > (online() ? limit * 2 : limit) || (online() && Array.from(text).length > limit)) {
+      setFeedback("translatorTooLong", "error", { limit: numbers.format(limit) });
       return false;
     }
     return true;
@@ -272,7 +331,11 @@ export function renderTranslator(container, {
       setFeedback("translatorSameLanguage");
       return false;
     }
-    if (!nativeSupported()) {
+    if (online() && showSignIn()) {
+      setFeedback("translatorOnlineSignIn", "info");
+      return false;
+    }
+    if (!online() && !nativeSupported()) {
       setFeedback("translatorUnavailable", "error");
       return false;
     }
@@ -285,9 +348,10 @@ export function renderTranslator(container, {
     setFeedback("translatorWorking");
     render();
     try {
-      const translated = await chromeTranslate(text, {
+      const options = {
         source: preferences.source,
         target: preferences.target,
+        engine: preferences.engine,
         signal: pending.signal,
         detectedSource: draft.detectedSource,
         onDetected: (language) => {
@@ -300,7 +364,8 @@ export function renderTranslator(container, {
           setFeedback("translatorDownloading", "info", { progress: percentages.format(value) });
           setProgress(value);
         }
-      });
+      };
+      const translated = await (online() ? translateOnline(text, options) : chromeTranslate(text, options));
       if (!current()) return false;
       if (translated.source === preferences.target) {
         setFeedback("translatorSameLanguage");
@@ -313,7 +378,8 @@ export function renderTranslator(container, {
     } catch (error) {
       if (current() && error?.name !== "AbortError") {
         const code = translationErrors.has(error?.code) ? error.code : "translatorFailed";
-        setFeedback(code, code === "translatorNeedsDownload" ? "info" : "error", { limit: numbers.format(maxTranslationLength) });
+        if (code === "translatorOnlineSignIn") needsCloudSignIn = true;
+        setFeedback(code, code === "translatorNeedsDownload" ? "info" : "error", { limit: numbers.format(inputLimit()) });
       }
       return false;
     } finally {
@@ -370,6 +436,21 @@ export function renderTranslator(container, {
     if (workspace) workspace.scrollTop = 0;
   }
 
+  async function signIn() {
+    if (signingIn || disposed || !onSignIn) return;
+    signingIn = true;
+    render();
+    try {
+      if (await onSignIn()) {
+        needsCloudSignIn = false;
+        setFeedback();
+      }
+    } finally {
+      signingIn = false;
+      if (!disposed) render();
+    }
+  }
+
   settingsButton?.addEventListener("click", toggleSettings);
   input.addEventListener("input", () => setText(input.value));
   input.addEventListener("keydown", (event) => {
@@ -383,6 +464,10 @@ export function renderTranslator(container, {
   });
   sourceSelect.addEventListener("change", () => changePreferences({ source: sourceSelect.value }));
   targetSelect.addEventListener("change", () => changePreferences({ target: targetSelect.value }));
+  for (const control of engineControls) {
+    control.addEventListener("change", () => changePreferences({ engine: control.value }));
+  }
+  for (const button of cloudSignInButtons) button.addEventListener("click", signIn);
   layoutSelect.addEventListener("change", () => changePreferences({ layout: layoutSelect.value }));
   folderSelect.addEventListener("change", () => changePreferences({ folderId: folderSelect.value || null }));
   originalToggle.addEventListener("click", () => {
@@ -402,8 +487,8 @@ export function renderTranslator(container, {
   copyButton.addEventListener("click", () => useResult("copy"));
   saveButton.addEventListener("click", () => useResult("save"));
 
-  if (draft.source !== preferences.source || draft.target !== preferences.target) resetResult();
-  else if (!nativeSupported()) setFeedback("translatorUnavailable");
+  if (draft.engine !== preferences.engine || draft.source !== preferences.source || draft.target !== preferences.target) resetResult();
+  else if (!online() && !nativeSupported()) setFeedback("translatorUnavailable");
   showOriginal ||= !draft.result;
   renderFolderOptions();
   render();
