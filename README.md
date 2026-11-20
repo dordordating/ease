@@ -10,7 +10,7 @@ Ease is a local-first browser workspace for reusable text and quick daily checks
 
 Ease uses Manifest V3 and requires Chrome 116 or newer. It has no build step or dependencies.
 
-The optional [Ease API](backend/README.md) provides Google account registration and OpenRouter translation. The backend guide covers PostgreSQL and deployment on Coolify.
+The [Ease API](backend/README.md) provides Google account registration, online translation, encrypted sync, and market data. The backend guide covers PostgreSQL and deployment on Coolify.
 
 ### Update an existing installation
 
@@ -72,6 +72,6 @@ Open **Settings → Encrypted sync** and set a passphrase to sync workspace pref
 
 Ease asks for access to Google's sites when you sign in or connect Google Calendar. Calendar authorization is separate from sign-in. See the [Chrome OAuth integration guide](https://developer.chrome.com/docs/extensions/how-to/integrate/oauth) for stable IDs and client setup.
 
-The module library marks Markets, Email, and AI Assistant as coming soon.
+The module library marks Email and AI Assistant as coming soon.
 
 The bundled Vazir v30.1.0 font is distributed under the [SIL Open Font License](fonts/OFL.txt).
