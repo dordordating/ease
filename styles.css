@@ -1038,6 +1038,11 @@ html[dir="rtl"] .snippet-text > :is(strong, span) {
   opacity: 1;
 }
 
+html[dir="rtl"] :is(input, textarea):placeholder-shown {
+  direction: rtl;
+  text-align: right;
+}
+
 .field textarea {
   min-block-size: 62px;
   resize: vertical;
