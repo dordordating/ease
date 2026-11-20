@@ -1,0 +1,74 @@
+# Ease Chrome Web Store submission draft
+
+## Store listing
+
+**Single purpose.** Give people quick access to their saved text and daily schedule from a personal workspace in Chrome’s popup and side panel.
+
+**Short description.** Open your saved text and daily schedule in a fast, customizable Chrome workspace.
+
+**Detailed description.** Save frequently used phrases and links, then copy them with one click. Pin your favorites, assign number shortcuts, and add fill-in fields to reusable templates. See your schedule in a week or month view and create local events. Choose Gregorian, Solar Hijri, or civil Hijri, and set the first day of the week. Use Ease from the toolbar or keep it open in Chrome’s side panel.
+
+The workspace is available without an account and stores your snippets, preferences, and local events in this Chrome profile. English is the initial language. Settings also offers Persian, Spanish, French, Brazilian Portuguese, Arabic, German, and Japanese.
+
+**Optional integration copy.** Connect a published iCloud calendar feed to view events alongside your local schedule. For a release configured and verified for Google OAuth, add “Sign in with Google if you’d like to show your profile. You can also separately connect your primary Google Calendar for read-only event viewing.”
+
+## Privacy practices answers
+
+### Permission justifications
+
+Use the final release manifest as the source of truth when entering these answers.
+
+| Permission | Justification |
+| --- | --- |
+| `storage` | Saves the user’s snippets, shortcut choices, appearance and language settings, local events, and optional account and calendar connection data in this browser profile. |
+| `sidePanel` | Opens the same workspace next to the current page when the user selects the side panel control. |
+| `clipboardWrite` | Copies a saved snippet or the completed output of a snippet template when the user chooses to copy it. |
+| `identity` | Uses Chrome’s identity API for optional Google sign-in and requests separate read-only consent for Google Calendar. |
+| `alarms` | Schedules an hourly refresh for calendar feeds the user has connected while Chrome is running. |
+| Optional `https://openidconnect.googleapis.com/*` | Requested when the user selects Google sign-in or connects Google Calendar. Fetches the profile or verifies the account identity for the calendar connection. |
+| Optional `https://www.googleapis.com/*` | Requested when the user chooses to connect Google Calendar. Fetches events from the primary calendar after Google consent. |
+| Optional `https://*.icloud.com/*` | Lets the user grant access to the specific iCloud origin hosting the published calendar link they provide. Ease downloads the selected calendar feed. |
+
+The extension loads its scripts, font, and calendar parser from the package. Provider responses are used as calendar and profile data. Select the Dashboard’s answer for no remote code if this still describes the final ZIP. [Manifest V3 remote code guidance](https://developer.chrome.com/docs/extensions/develop/migrate/remote-hosted-code)
+
+### Data handled
+
+Use this inventory to match the final ZIP to the Dashboard’s data categories, including data an optional feature handles. Verify the category wording in the live Dashboard before completing the certifications. [Privacy practices guidance](https://developer.chrome.com/docs/webstore/cws-dashboard-privacy)
+
+| Data | Storage and transmission |
+| --- | --- |
+| Snippets and template text entered by the user | Saved in `chrome.storage.local`. Filled-in template values are used to copy the output on the user’s request. Ease writes to the system clipboard and does not collect clipboard history. Snippets are not uploaded by Ease. |
+| Workspace settings and locally created calendar events | Saved in `chrome.storage.local`, including event dates, times, titles, locations, and notes. This data remains in the browser profile. |
+| Google account identifier, name, and verified email address | Fetched from Google after the user initiates sign-in and stored in `chrome.storage.local`. Chrome manages the cached OAuth authorization. Ease sends the access token to Google for the authorized requests. |
+| Connected calendar event data | Retrieved directly from Google or iCloud and cached in the browser. Includes event identifiers, dates, times, titles, locations, and notes that the provider supplies. The calendar connection stores its latest refresh time. |
+| Published iCloud calendar URL | User provides the URL and grants access to its origin. The URL is saved in `chrome.storage.local` and used to request the calendar from iCloud. Treat it as sensitive because a published feed can be read by someone who has its link. |
+
+Google identity can fall under personally identifiable information. OAuth tokens and a published feed link merit review under authentication information. Snippets and event fields can contain personal communications and locations supplied by the user or their calendar. Ease does not request device geolocation, browsing history, or page content permissions.
+
+## Public privacy policy draft
+
+- **Publisher** — [Legal entity or developer name]
+- **Privacy contact** — [Monitored email or contact page]
+- **Effective date** — [Publication date]
+
+Ease is a Chrome workspace for reusable text and calendars. You can use the workspace without an account. Snippets, workspace settings, and local calendar events are stored in the browser profile on the device. Ease has no publisher-operated account or sync server and includes no advertising or analytics.
+
+When you choose to copy a saved snippet, Ease writes the text to your system clipboard. Copying a template uses the temporary values you enter to fill its fields. The extension does not read clipboard history.
+
+If you choose to sign in with Google in an OAuth-enabled build, Ease uses Chrome’s identity service to request your account identifier, name, and verified email address from Google. Ease saves these profile details locally. If you separately connect Google Calendar, Ease requests read-only access to display events from your primary calendar. If you connect Apple Calendar, Ease uses the published iCloud calendar link that you enter. Anyone who has that link can access the published calendar.
+
+Calendar refresh requests go directly to the selected provider. Ease retrieves and caches the events in the browser so it can display their dates, times, titles, locations, and notes. Refresh happens when you request it and through a scheduled refresh while Chrome is running. Ease does not sell personal data, use it for advertising, or transfer the locally saved workspace to the publisher.
+
+You can delete saved snippets and local events in Ease. Disconnecting a calendar clears its cached events and the saved connection from Ease. Signing out removes the stored Google profile and disconnects Google Calendar in Ease. You can separately revoke the Google permission in your Google Account and the calendar site permission in Chrome. Uninstall the extension to remove its local browser storage.
+
+Ease’s use and transfer of information received from Google APIs adhere to the Google API Services User Data Policy, including the Limited Use requirements. [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy)
+
+## Release checklist
+
+- [ ] Confirm the publisher name, a monitored support and privacy contact, and a publicly accessible final privacy policy URL. Publish the policy at that URL before entering it in the Dashboard.
+- [ ] Reserve the Web Store item ID and confirm the version to upload. If enabling Google, register a Chrome extension OAuth client for that ID, enable the Google Calendar API, configure the consent screen and requested scopes, and complete any Google verification the console requires for public users. Put the registered public client ID in the manifest for the release build. [Chrome OAuth integration](https://developer.chrome.com/docs/extensions/how-to/integrate/oauth)
+- [ ] Verify the exact submission build in a supported Chrome profile that permits extension installation. Test a fresh guest session, copy and template actions, shortcut assignments, local calendar editing, locale changes, and the side panel. If applicable, test Google sign-in and sign-out, calendar consent and revocation, iCloud grant and denial, refresh and disconnect, and behavior when a provider is unavailable.
+- [ ] Prepare the listing assets from the verified build. Use the 128 × 128 icon and screenshots of the actual popup, calendar, and side panel with sample data. Check the current Dashboard dimensions and file formats for screenshots and promotional images. [Listing images](https://developer.chrome.com/docs/webstore/images)
+- [ ] Build a ZIP with `manifest.json` at its root. Include the referenced JavaScript, HTML, CSS, icons, fonts, bundled calendar parser, and their licenses. Review the ZIP contents and check manifest permissions, bundle integrity, and required version fields.
+- [ ] Enter the single-purpose statement, permission justifications, privacy policy URL, data disclosures, and reviewer instructions in the Dashboard. Identify guest functionality and any OAuth requirements or limitations that affect review.
+- [ ] Submit the ZIP for review from the publisher’s Dashboard with the intended visibility and rollout options. Check approval and listing availability before announcing the release. [Chrome Web Store publishing guide](https://developer.chrome.com/docs/webstore/publish)

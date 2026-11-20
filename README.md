@@ -47,7 +47,7 @@ Ease uses Manifest V3 and requires Chrome 116 or newer. It has no build step or 
 }
 ```
 
-Calendar authorization is requested separately when the calendar is connected. See the [Chrome OAuth integration guide](https://developer.chrome.com/docs/extensions/how-to/integrate/oauth) for stable IDs and client setup.
+Ease asks for access to Google's sites when you sign in or connect Google Calendar. Calendar authorization is separate from sign-in. See the [Chrome OAuth integration guide](https://developer.chrome.com/docs/extensions/how-to/integrate/oauth) for stable IDs and client setup.
 
 The module library marks Markets, Email, Translator, and AI Assistant as coming soon.
 

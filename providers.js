@@ -12,8 +12,14 @@ const calendarScopes = [
 ];
 const profileUrl = "https://openidconnect.googleapis.com/v1/userinfo";
 const calendarUrl = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+const profileHosts = { origins: ["https://openidconnect.googleapis.com/*"] };
+const calendarHosts = { origins: [...profileHosts.origins, "https://www.googleapis.com/*"] };
 const googleProviderMessage = "ease-google-provider";
-const googleAuthenticatedActions = new Set(["sign-in", "connect-calendar", "sync-calendar"]);
+const googleActionHosts = new Map([
+  ["sign-in", profileHosts],
+  ["connect-calendar", calendarHosts],
+  ["sync-calendar", calendarHosts]
+]);
 const dayLength = 86_400_000;
 
 export function googleConfigured() {
@@ -36,18 +42,21 @@ export async function getGoogleCalendarState() {
   return { connected, lastSynced, events };
 }
 
-async function providerAction(action) {
-  if (googleAuthenticatedActions.has(action) && !googleConfigured()) {
-    throw new Error("Google has no OAuth client configuration");
+async function providerAction(action, requestAccess = false) {
+  const hosts = googleActionHosts.get(action);
+  if (hosts) {
+    if (!googleConfigured()) throw new Error("Google has no OAuth client configuration");
+    // Invoked directly by the button handler before the first asynchronous operation.
+    if (requestAccess && !await chrome.permissions.request(hosts)) throw new Error("Google host access denied");
   }
   const response = await chrome.runtime.sendMessage({ type: googleProviderMessage, action });
   if (!response?.ok) throw new Error("Google provider action failed");
   return response.value;
 }
 
-export const signInGoogle = () => providerAction("sign-in");
+export const signInGoogle = () => providerAction("sign-in", true);
 export const signOutGoogle = () => providerAction("sign-out");
-export const connectGoogleCalendar = () => providerAction("connect-calendar");
+export const connectGoogleCalendar = () => providerAction("connect-calendar", true);
 export const syncGoogleCalendar = () => providerAction("sync-calendar");
 export const disconnectGoogleCalendar = () => providerAction("disconnect-calendar");
 
@@ -202,8 +211,10 @@ async function fetchAccount() {
 }
 
 async function workerAction(action) {
-  if (googleAuthenticatedActions.has(action) && !googleConfigured()) {
-    throw new Error("Google has no OAuth client configuration");
+  const hosts = googleActionHosts.get(action);
+  if (hosts) {
+    if (!googleConfigured()) throw new Error("Google has no OAuth client configuration");
+    if (!await chrome.permissions.contains(hosts)) throw new Error("Google host access unavailable");
   }
   switch (action) {
     case "sign-in":
@@ -235,6 +246,7 @@ function queueProviderAction(action) {
 export function refreshConnectedGoogleCalendar() {
   return queueProviderAction(async () => {
     if (!googleConfigured() || !(await readStorage(googleCalendarStorageKey))?.connected) return;
+    if (!await chrome.permissions.contains(calendarHosts)) return;
     return refreshCalendar(false);
   });
 }

@@ -1,12 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Ease",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "A fast, customizable workspace for everyday browser tasks.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "sidePanel", "clipboardWrite", "identity", "alarms"],
-  "host_permissions": ["https://openidconnect.googleapis.com/*", "https://www.googleapis.com/*"],
-  "optional_host_permissions": ["https://*.icloud.com/*"],
+  "optional_host_permissions": [
+    "https://openidconnect.googleapis.com/*",
+    "https://www.googleapis.com/*",
+    "https://*.icloud.com/*"
+  ],
   "action": {
     "default_title": "Ease",
     "default_popup": "workspace.html",
