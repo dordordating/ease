@@ -1,4 +1,4 @@
-import { modules, readWorkspace, storageKey, themes } from "./workspace-data.js";
+import { densities, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
 import { localeNames } from "./locales.js";
 
 let pendingWrite = Promise.resolve();
@@ -8,6 +8,9 @@ function updateWorkspace(workspace, action, data) {
     case "preferences":
       if (Object.hasOwn(localeNames, data.locale)) workspace.locale = data.locale;
       if (themes.includes(data.theme)) workspace.theme = data.theme;
+      if (Object.hasOwn(palettes, data.palette)) workspace.palette = data.palette;
+      if (densities.includes(data.density)) workspace.density = data.density;
+      if (sizes.includes(data.size)) workspace.size = data.size;
       break;
     case "toggle-module": {
       const module = modules.find(({ id, released }) => released && id === data.id);
@@ -34,12 +37,24 @@ function updateWorkspace(workspace, action, data) {
       if (!snippet) throw new Error("Snippet no longer exists");
       if (snippet.pinned === data.pinned) break;
       snippet.pinned = data.pinned;
+      if (snippet.customShortcut) break;
       if (snippet.pinned) {
         const usedSlots = new Set(workspace.snippets.map(({ slot }) => slot));
-        snippet.slot = [1, 2, 3, 4, 5, 6, 7, 8, 9].find((slot) => !usedSlots.has(slot)) ?? null;
+        snippet.slot = shortcutSlots.find((slot) => !usedSlots.has(slot)) ?? null;
       } else {
         delete snippet.slot;
       }
+      break;
+    }
+    case "set-shortcut": {
+      const snippet = workspace.snippets.find(({ id }) => id === data.id);
+      if (!snippet) return "shortcutUnavailable";
+      if (data.slot !== null && !shortcutSlots.includes(data.slot)) throw new Error("Invalid shortcut");
+      if (data.slot !== null && workspace.snippets.some(({ id, slot }) => id !== data.id && slot === data.slot)) {
+        return "shortcutConflict";
+      }
+      snippet.slot = data.slot;
+      snippet.customShortcut = true;
       break;
     }
     case "delete-snippet":
@@ -47,7 +62,9 @@ function updateWorkspace(workspace, action, data) {
       break;
     case "restore-snippet":
       if (!workspace.snippets.some(({ id }) => id === data.snippet.id)) {
-        if (workspace.snippets.some(({ slot }) => slot === data.snippet.slot)) delete data.snippet.slot;
+        if (data.snippet.slot && workspace.snippets.some(({ slot }) => slot === data.snippet.slot)) {
+          data.snippet.slot = null;
+        }
         workspace.snippets.splice(data.index, 0, data.snippet);
       }
       break;
@@ -61,11 +78,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 
   const write = pendingWrite.then(async () => {
     const workspace = await readWorkspace();
-    updateWorkspace(workspace, message.action, message.data);
+    const error = updateWorkspace(workspace, message.action, message.data);
+    if (error) return { error };
     await chrome.storage.local.set({ [storageKey]: workspace });
-    return workspace;
+    return { workspace };
   });
   pendingWrite = write.catch(() => {});
-  write.then((workspace) => respond({ workspace }), () => respond({ error: true }));
+  write.then(respond, () => respond({ error: "saveFailed" }));
   return true;
 });

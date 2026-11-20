@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="dark" data-palette="violet" data-density="compact" data-size="medium">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,7 +13,7 @@
       <div class="topbar">
         <div class="brand">
           <img src="icons/logo.svg" width="36" height="36" alt="">
-          <div><div class="brand-name">Ease</div><small class="tagline" id="workspace-label"></small></div>
+          <div class="brand-name">Ease</div>
         </div>
         <div class="header-actions">
           <button id="panel-button" class="icon-button" type="button"></button>
@@ -25,10 +25,9 @@
         <input type="search" id="search" autocomplete="off" spellcheck="false" aria-controls="workspace">
         <kbd class="keycap" aria-hidden="true">/</kbd>
       </div>
-      <nav class="module-tabs" id="module-tabs"></nav>
     </header>
+    <nav class="module-tabs" id="module-tabs"></nav>
     <main class="workspace" id="workspace" tabindex="-1"></main>
-    <footer class="workspace-footer" id="workspace-footer"></footer>
   </div>
   <dialog class="editor-dialog" id="editor"></dialog>
   <div class="toast" id="toast" hidden>

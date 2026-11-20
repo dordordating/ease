@@ -1,13 +1,12 @@
 import { renderCalendar } from "./calendar.js";
 import { icon } from "./icons.js";
 import { isRtl, localeNames, translate } from "./locales.js";
-import { defaultWorkspace, modules, readWorkspace, storageKey, themes } from "./workspace-data.js";
+import { defaultWorkspace, densities, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
 
 const view = document.querySelector("#workspace");
 const editor = document.querySelector("#editor");
 const tabBar = document.querySelector("#module-tabs");
 const search = document.querySelector("#search");
-const footer = document.querySelector("#workspace-footer");
 const toast = document.querySelector("#toast");
 const toastMessage = document.querySelector("#toast-message");
 const toastAction = document.querySelector("#toast-action");
@@ -16,8 +15,8 @@ const settingsButton = document.querySelector("#settings-button");
 const inPanel = new URLSearchParams(location.search).get("surface") === "panel";
 
 const clipboard = modules[0];
-const library = { id: "library", icon: "plus", color: clipboard.color };
-const settings = { id: "settings", icon: "settings", color: clipboard.color };
+const library = { id: "library", icon: "plus" };
+const settings = { id: "settings", icon: "settings" };
 const destinations = [...modules, library, settings];
 let workspace = defaultWorkspace;
 let activePage = clipboard.id;
@@ -95,12 +94,12 @@ function showToast(message, action, error = false) {
 async function mutate(action, data) {
   try {
     const response = await chrome.runtime.sendMessage({ type: "ease-workspace-update", action, data });
-    if (!response?.workspace) throw new Error("Workspace update failed");
-    return true;
+    if (response?.workspace) return true;
+    showToast(t(response?.error ?? "saveFailed"), undefined, true);
   } catch {
     showToast(t("saveFailed"), undefined, true);
-    return false;
   }
+  return false;
 }
 
 function switchTo(page, focus = true) {
@@ -117,18 +116,18 @@ function switchTo(page, focus = true) {
 function renderTabs() {
   tabBar.setAttribute("aria-label", t("modulesLabel"));
   tabBar.setAttribute("role", "tablist");
+  tabBar.setAttribute("aria-orientation", "vertical");
   const tabs = [...modules.filter(({ id }) => workspace.tabs.includes(id)), library];
   tabBar.replaceChildren(...tabs.map((module) => {
     const isSelected = activePage === module.id && !query;
     const isLibrary = module === library;
     const item = button(t(module.id), `module-tab${isLibrary ? " module-tab--library" : ""}`, {
       symbol: module.icon,
-      iconOnly: isLibrary,
+      iconOnly: true,
       onClick: () => switchTo(module.id)
     });
     item.id = `tab-${module.id}`;
     item.dataset.module = module.id;
-    item.style.setProperty("--accent", module.color);
     item.setAttribute("role", "tab");
     item.setAttribute("aria-controls", "workspace");
     item.setAttribute("aria-selected", String(isSelected));
@@ -165,25 +164,16 @@ function emptyState(title, description, symbol, action) {
   view.append(empty);
 }
 
-function setFooter() {
-  const keyboardHint = activePage === "clipboard" && !query && workspace.snippets.some(({ slot }) => slot);
-  const hint = node("small", "footer-hint");
-  hint.append(glyph(keyboardHint ? "keyboard" : "device"), node("span", "", t(keyboardHint ? "keyboardHint" : "storageTitle")));
-  const shortcut = node("small", "footer-shortcut");
-  shortcut.append(node("kbd", "keycap", "/"), node("span", "", t("shortcutHint")));
-  footer.replaceChildren(hint, shortcut);
-}
-
 const displayTitle = ({ title, text }) => title || text.trim().split(/\r?\n/u)[0];
 
 function pinnedSnippets() {
   return workspace.snippets.filter(({ pinned }) => pinned);
 }
 
-function snippetList(title, snippets, { withSlots = false, count = false } = {}) {
+function snippetList(title, snippets) {
   const heading = node("div", "collection-heading");
   heading.append(node("h2", "", title));
-  if (count) heading.append(node("small", "", new Intl.NumberFormat(workspace.locale).format(snippets.length)));
+  heading.append(node("small", "", new Intl.NumberFormat(workspace.locale).format(snippets.length)));
   const list = node("ul", "snippet-list");
   snippets.forEach((snippet) => {
     const name = displayTitle(snippet);
@@ -205,7 +195,7 @@ function snippetList(title, snippets, { withSlots = false, count = false } = {})
       text.append(snippetText);
     }
     copy.append(text);
-    if (withSlots && snippet.slot) {
+    if (snippet.slot) {
       const slot = node("kbd", "snippet-slot", snippet.slot);
       slot.setAttribute("aria-hidden", "true");
       copy.append(slot);
@@ -233,6 +223,7 @@ function snippetList(title, snippets, { withSlots = false, count = false } = {})
     menu.append(
       action(snippet.pinned ? "unpin" : "pin", "pin", () => mutate("pin-snippet", { id: snippet.id, pinned: !snippet.pinned })),
       action("edit", "edit", () => editSnippet(snippet)),
+      action("shortcutAssign", "keyboard", () => editShortcut(snippet)),
       action("remove", "trash", () => removeSnippet(snippet))
     );
     details.append(summary, menu);
@@ -249,15 +240,15 @@ function renderClipboard() {
     return action;
   };
   const hasSnippets = workspace.snippets.length > 0;
-  section(t("clipboard"), t("clipboardHint"), hasSnippets ? add("primary-button") : undefined);
+  section(t("clipboard"), undefined, hasSnippets ? add("primary-button") : undefined);
   if (!hasSnippets) {
     emptyState(t("emptyTitle"), t("emptyHint"), "clipboard", add("secondary-button"));
     return;
   }
   const pinned = pinnedSnippets().sort((left, right) => (left.slot ?? 10) - (right.slot ?? 10));
   const others = workspace.snippets.filter(({ pinned }) => !pinned);
-  if (pinned.length) snippetList(t("pinned"), pinned, { withSlots: true, count: true });
-  if (others.length) snippetList(t("snippets"), others, { count: true });
+  if (pinned.length) snippetList(t("pinned"), pinned);
+  if (others.length) snippetList(t("snippets"), others);
 }
 
 function renderLibrary() {
@@ -294,33 +285,71 @@ function renderLibrary() {
   view.append(list);
 }
 
+function radioOption(group, value, selected, className) {
+  const label = node("label", className);
+  const input = node("input");
+  input.type = "radio";
+  input.name = group;
+  input.id = `${group}-${value}`;
+  input.value = value;
+  input.checked = value === selected;
+  const face = node("span");
+  label.append(input, face);
+  return { label, input, face };
+}
+
+function displayPreference(key, label, values, symbols = {}) {
+  const fieldset = node("fieldset", "choice-group");
+  const options = node("div", "choice-options");
+  fieldset.append(node("legend", "", t(label)), options);
+  for (const value of values) {
+    const choice = radioOption(`setting-${key}`, value, workspace[key], "choice-option");
+    if (key === "palette") {
+      const swatch = node("span", "palette-swatch");
+      swatch.style.setProperty("--swatch", palettes[value]);
+      swatch.setAttribute("aria-hidden", "true");
+      choice.face.append(swatch);
+    } else if (symbols[value]) {
+      choice.face.append(glyph(symbols[value]));
+    }
+    choice.face.append(node("span", "", t(value)));
+    options.append(choice.label);
+  }
+  options.addEventListener("change", async ({ target }) => {
+    if (!await mutate("preferences", { [key]: target.value })) render();
+  });
+  return fieldset;
+}
+
 function renderSettings() {
   section(t("settings"));
   const list = node("div", "settings-list");
-  function preference(key, choices) {
-    const row = node("div", "setting-row");
-    const label = node("label", "", t(key === "locale" ? "language" : "appearance"));
-    label.htmlFor = `setting-${key}`;
-    const select = node("select");
-    select.id = label.htmlFor;
-    for (const [value, text] of choices) {
-      const option = node("option", "", text);
-      option.value = value;
-      if (key === "locale") {
-        option.lang = value;
-        option.dir = isRtl(value) ? "rtl" : "ltr";
-      }
-      select.append(option);
-    }
-    select.value = workspace[key];
-    select.addEventListener("change", async () => {
-      if (!await mutate("preferences", { [key]: select.value })) select.value = workspace[key];
-    });
-    row.append(label, select);
-    list.append(row);
+  list.append(
+    displayPreference("theme", "appearance", themes, { light: "sun", dark: "moon", system: "device" }),
+    displayPreference("palette", "palette", Object.keys(palettes)),
+    displayPreference("density", "density", densities),
+    displayPreference("size", "windowSize", sizes)
+  );
+  if (inPanel) list.append(node("p", "setting-hint", t("panelSizeHint")));
+
+  const language = node("div", "setting-row language-row");
+  const label = node("label", "", t("language"));
+  label.htmlFor = "setting-locale";
+  const select = node("select");
+  select.id = label.htmlFor;
+  for (const [value, text] of Object.entries(localeNames)) {
+    const option = node("option", "", text);
+    option.value = value;
+    option.lang = value;
+    option.dir = isRtl(value) ? "rtl" : "ltr";
+    select.append(option);
   }
-  preference("locale", Object.entries(localeNames));
-  preference("theme", themes.map((theme) => [theme, t(theme)]));
+  select.value = workspace.locale;
+  select.addEventListener("change", async () => {
+    if (!await mutate("preferences", { locale: select.value })) select.value = workspace.locale;
+  });
+  language.append(label, select);
+  list.append(language);
   const storage = node("div", "setting-row storage-note");
   const copy = node("div");
   copy.append(node("strong", "", t("storageTitle")), node("p", "", t("storageHint")));
@@ -346,7 +375,7 @@ function renderSearch() {
     emptyState(t("emptySearch"), t("emptySearchHint"), "search");
     return;
   }
-  if (snippets.length) snippetList(t("snippets"), snippets, { count: true });
+  if (snippets.length) snippetList(t("snippets"), snippets);
   if (commands.length || newSnippet) {
     const heading = node("div", "collection-heading");
     heading.append(node("h2", "", t("commands")));
@@ -369,18 +398,19 @@ function renderSearch() {
 
 function render() {
   const focused = document.activeElement?.id;
-  document.documentElement.lang = workspace.locale;
-  document.documentElement.dir = isRtl(workspace.locale) ? "rtl" : "ltr";
-  document.documentElement.dataset.theme = workspace.theme;
-  document.querySelector("#workspace-label").textContent = t("localWorkspace");
+  const root = document.documentElement;
+  root.lang = workspace.locale;
+  root.dir = isRtl(workspace.locale) ? "rtl" : "ltr";
+  root.dataset.theme = workspace.theme;
+  root.dataset.palette = workspace.palette;
+  root.dataset.density = workspace.density;
+  root.dataset.size = workspace.size;
   search.placeholder = t("searchPlaceholder");
   search.setAttribute("aria-label", t("searchLabel"));
   labelButton(panelButton, t("openPanel"), "panel");
   labelButton(settingsButton, t("settings"), "settings");
   settingsButton.setAttribute("aria-pressed", String(activePage === "settings" && !query));
   if (![library.id, settings.id, ...workspace.tabs].includes(activePage)) activePage = clipboard.id;
-  const destination = destinations.find(({ id }) => id === activePage);
-  document.documentElement.style.setProperty("--module-accent", destination.color);
   renderTabs();
   view.replaceChildren();
   if (query || activePage === "settings") {
@@ -400,7 +430,6 @@ function render() {
   } else if (activePage === "library") renderLibrary();
   else if (activePage === "settings") renderSettings();
 
-  setFooter();
   if (focused && focused !== "workspace" && !editor.open) {
     const element = document.getElementById(focused);
     if (element !== document.activeElement) element?.focus({ preventScroll: true });
@@ -473,6 +502,35 @@ function editSnippet(snippet) {
   fields.append(node("p", "field-hint", t("templateTip")));
   editor.showModal();
   text.focus();
+}
+
+function editShortcut(snippet) {
+  const fields = openEditor(t("shortcutAssign"), t("save"), async () => {
+    const value = choices.querySelector("input:checked").value;
+    if (!await mutate("set-shortcut", { id: snippet.id, slot: value === "none" ? null : Number(value) })) return false;
+    showToast(t("shortcutSaved"));
+    return true;
+  });
+  const choices = node("div", "shortcut-options");
+  choices.setAttribute("role", "group");
+  choices.setAttribute("aria-label", t("shortcutAssign"));
+  const selected = String(snippet.slot ?? "none");
+  const occupied = new Map(workspace.snippets.filter(({ id, slot }) => id !== snippet.id && slot)
+    .map((item) => [item.slot, displayTitle(item)]));
+  for (const slot of [...shortcutSlots, "none"]) {
+    const option = radioOption("snippet-shortcut", String(slot), selected, "shortcut-option");
+    if (occupied.has(slot)) {
+      const note = t("shortcutTaken", { name: occupied.get(slot) });
+      option.input.disabled = true;
+      option.input.setAttribute("aria-description", note);
+      option.label.title = note;
+    }
+    option.face.append(slot === "none" ? node("span", "", t("shortcutNone")) : node("kbd", "", slot));
+    choices.append(option.label);
+  }
+  fields.append(node("p", "field-hint", t("shortcutDialogHint")), choices);
+  editor.showModal();
+  choices.querySelector("input:checked").focus();
 }
 
 const templatePattern = /(?<!\{)\{([\p{L}_][\p{L}\p{M}\p{N}\u200c_ -]{0,39})\}(?!\})/gu;
@@ -548,13 +606,12 @@ search.addEventListener("input", () => {
 });
 
 tabBar.addEventListener("keydown", (event) => {
-  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
   const allTabs = [...tabBar.querySelectorAll("button")];
   const index = allTabs.indexOf(document.activeElement);
-  const direction = isRtl(workspace.locale) ? -1 : 1;
   const next = {
-    ArrowLeft: (index - direction + allTabs.length) % allTabs.length,
-    ArrowRight: (index + direction + allTabs.length) % allTabs.length,
+    ArrowUp: (index - 1 + allTabs.length) % allTabs.length,
+    ArrowDown: (index + 1) % allTabs.length,
     Home: 0,
     End: allTabs.length - 1
   }[event.key];
@@ -598,9 +655,10 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "/") {
     event.preventDefault();
     search.focus();
-  } else if (activePage === "clipboard" && !query && /^[1-9١-٩۱-۹]$/u.test(event.key) && !event.repeat) {
+  } else if (/^[1-9١-٩۱-۹]$/u.test(event.key) && !event.repeat) {
+    // The supported ASCII, Arabic and Persian digits share the same low nibble.
     const digit = event.key.codePointAt(0) & 0xf;
-    const snippet = pinnedSnippets().find(({ slot }) => slot === digit);
+    const snippet = workspace.snippets.find(({ slot }) => slot === digit);
     if (snippet) {
       event.preventDefault();
       prepareCopy(snippet);

@@ -10,10 +10,17 @@ export const modules = [
 ];
 
 export const themes = ["dark", "light", "system"];
+export const palettes = { violet: "#774be0", blue: "#2869dc", mint: "#118466", amber: "#a86a08" };
+export const densities = ["compact", "comfortable"];
+export const sizes = ["small", "medium", "large"];
+export const shortcutSlots = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 export const defaultWorkspace = {
   locale: "en",
   theme: "dark",
+  palette: "violet",
+  density: "compact",
+  size: "medium",
   tabs: ["clipboard", "calendar"],
   snippets: []
 };
