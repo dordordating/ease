@@ -17,7 +17,7 @@ export const shortcutSlots = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 export const folderIcons = ["folder", "briefcase", "user", "star", "link"];
 export const maxPinnedFolders = 2;
 export const defaultCalendar = { system: null, view: "month", firstDay: null, eventDisplay: "dots" };
-export const defaultTranslator = { source: "auto", target: "en", layout: "both", folderId: null };
+export const defaultTranslator = { source: "auto", target: "en", layout: "both", folderId: null, inlineSites: [] };
 
 export function calendarSystemFor(locale, system) {
   return system ?? (new Intl.Locale(locale).language === "fa" ? "persian" : "gregory");

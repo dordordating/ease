@@ -8,17 +8,22 @@ import { deleteFolder, hasFolder, moveSnippet, pinFolder, reorderFolder, saveFol
 import { translatorLanguages } from "./translator-engine.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
 import {
+  configureTranslatorSite, injectTranslatorOnActiveSite, normalizeTranslatorSite, registerTranslatorSiteHandlers,
+  requestTranslatorSitePermission
+} from "./translator-site-access.js";
+import {
   createFolderPin, createFolderVault, openSnippet, rewrapFolderPin, sealSnippet, unlockFolderPin, unlockFolderVault,
   unwrapDeviceKey, wrapDeviceKey
 } from "./folder-vault.js";
 import {
-  activeVaultSession, clearVaultPinAttempts, defaultVaultPolicy, lockVaultSession, readVaultSessions,
-  reserveVaultPinAttempt, unlockVaultSession, vaultExpiryAlarm, vaultPolicyFor
+  activeVaultSession, clearVaultPinAttempts, defaultVaultPolicy, lockVaultSession, readVaultPinAttempts,
+  readVaultSessions, reserveVaultPinAttempt, unlockVaultSession, vaultExpiryAlarm, vaultPinRetryAt, vaultPolicyFor
 } from "./vault-session.js";
 
 let pendingWrite = Promise.resolve();
 registerGoogleProviderHandlers();
 registerTranslatorSelectionHandlers();
+registerTranslatorSiteHandlers();
 
 function queueWorkspace(operation) {
   const result = pendingWrite.then(operation);
@@ -83,6 +88,9 @@ function snippetMetadata({ id, folderId, pinned, slot, customShortcut }) {
 
 async function hydrateWorkspace(workspace, sessions) {
   const vaultFolders = new Map();
+  const pinAttempts = workspace.folders.some(({ vault }) => vault?.mode === "pin")
+    ? await readVaultPinAttempts()
+    : new Map();
   const folders = workspace.folders.map(({ vault, ...folder }) => {
     if (!vault) return folder;
     vaultFolders.set(folder.id, activeVaultSession(sessions, folder.id));
@@ -91,6 +99,7 @@ async function hydrateWorkspace(workspace, sessions) {
       ...folder,
       protected: true,
       vaultMode: vault.mode === "pin" ? "pin" : "password",
+      ...(vault.mode === "pin" ? { pinRetryAt: vaultPinRetryAt(pinAttempts, folder.id) } : {}),
       vaultPolicy: vaultPolicyFor(folder.vaultPolicy),
       unlockedUntil: vaultFolders.get(folder.id)?.expiresAt ?? null,
       ...(device ? { device: { credentialId: device.credentialId, salt: device.salt } } : {})
@@ -160,7 +169,10 @@ async function updateVault(workspace, action, data, transaction) {
     folder.vault = vault;
     folder.vaultPolicy = policy;
     // Commit ciphertext before granting access. Failure to start a session leaves the folder locked.
-    transaction.afterCommit = () => unlockVaultSession(sessions, folder.id, key, policy).catch(() => {});
+    transaction.afterCommit = async () => {
+      if (pin !== undefined) await clearVaultPinAttempts(folder.id);
+      await unlockVaultSession(sessions, folder.id, key, policy).catch(() => {});
+    };
     return;
   }
   if (!folder.vault) return "vaultLocked";
@@ -180,8 +192,8 @@ async function updateVault(workspace, action, data, transaction) {
       } catch {
         return usesPin ? "vaultPinInvalid" : "vaultPasswordInvalid";
       }
+      if (usesPin) await clearVaultPinAttempts(folder.id);
       await unlockVaultSession(sessions, folder.id, key, folder.vaultPolicy);
-      if (usesPin) await clearVaultPinAttempts(folder.id).catch(() => {});
       transaction.writeWorkspace = false;
       break;
     }
@@ -210,15 +222,19 @@ async function updateVault(workspace, action, data, transaction) {
       const { device } = folder.vault;
       folder.vault = await rewrapFolderPin(data.pin, folder.id, key);
       if (device) folder.vault.device = device;
-      transaction.afterCommit = () => clearVaultPinAttempts(folder.id).catch(() => {});
+      transaction.afterCommit = () => clearVaultPinAttempts(folder.id);
       break;
     }
     case "unprotect-folder": {
       const key = unlockedKey(sessions, folder);
+      const usesPin = folder.vault.mode === "pin";
       await unsealFolder(workspace, folder, key);
       delete folder.vault;
       delete folder.vaultPolicy;
-      transaction.afterCommit = () => lockVaultSession(sessions, folder.id).catch(() => {});
+      transaction.afterCommit = async () => {
+        await lockVaultSession(sessions, folder.id).catch(() => {});
+        if (usesPin) await clearVaultPinAttempts(folder.id);
+      };
       break;
     }
     case "protect-device": {
@@ -243,6 +259,7 @@ async function updateVault(workspace, action, data, transaction) {
       try {
         prf = decodeDeviceBytes(data.prf, 32);
         const key = await unwrapDeviceKey(folder.id, folder.vault.device.wrapped, prf);
+        if (folder.vault.mode === "pin") await clearVaultPinAttempts(folder.id);
         await unlockVaultSession(sessions, folder.id, key, folder.vaultPolicy);
         transaction.writeWorkspace = false;
       } catch {
@@ -279,6 +296,26 @@ async function updateWorkspace(workspace, action, data, transaction) {
       if (["both", "result"].includes(data.layout)) settings.layout = data.layout;
       if (data.folderId === null || hasFolder(workspace, data.folderId)) settings.folderId = data.folderId;
       workspace.translator = settings;
+      break;
+    }
+    case "translator-inline-site": {
+      const site = normalizeTranslatorSite(data.site);
+      if (!site) return "translatorInlineInvalid";
+      if (typeof data.enabled !== "boolean") return "translatorInlineFailed";
+      const settings = { ...defaultTranslator, ...workspace.translator };
+      try {
+        await configureTranslatorSite(site, data.enabled);
+      } catch {
+        return "translatorInlineFailed";
+      }
+      const sites = new Set(settings.inlineSites);
+      if (data.enabled) {
+        sites.add(site);
+        transaction.afterCommit = () => injectTranslatorOnActiveSite(site);
+      } else {
+        sites.delete(site);
+      }
+      workspace.translator = { ...settings, inlineSites: [...sites] };
       break;
     }
     case "calendar-holiday":
@@ -423,7 +460,14 @@ async function updateWorkspace(workspace, action, data, transaction) {
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id || !["ease-workspace-read", "ease-workspace-update"].includes(message?.type)) return;
 
+  const requestSite = message.type === "ease-workspace-update" && message.action === "translator-inline-site"
+    && message.data?.enabled === true && message.data.requestPermission === true;
+  // Start permission UI on the first message hop so a toolbar popup can close without losing the action.
+  const permission = requestSite && sender.url?.startsWith(chrome.runtime.getURL("workspace.html"))
+    ? requestTranslatorSitePermission(normalizeTranslatorSite(message.data.site)) : null;
   const result = queueWorkspace(async () => {
+    const permissionError = await permission;
+    if (permissionError) return { error: permissionError };
     const workspace = structuredClone(await readWorkspace());
     const sessions = await readVaultSessions();
     if (message.type === "ease-workspace-update") {

@@ -1209,6 +1209,35 @@ html[dir="rtl"] .snippet-text > :is(strong, span) {
   font-size: 11.5px;
 }
 
+.vault-inline-pin {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  inline-size: 100%;
+  min-inline-size: 0;
+  margin-block-start: 2px;
+}
+
+.vault-inline-pin .field {
+  inline-size: 100%;
+}
+
+.vault-state .vault-inline-feedback {
+  inline-size: 100%;
+  max-inline-size: none;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--mail) 9%, var(--surface));
+  color: var(--mail);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+}
+
+.vault-state .vault-inline-feedback[data-kind="error"] {
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--danger);
+}
+
 .vault-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1777,6 +1806,18 @@ html[dir="rtl"] .vault-pin-input:placeholder-shown {
 
 .vault-pin-input:focus {
   border-color: var(--accent);
+}
+
+.vault-inline-pin .vault-pin-input {
+  --pin-step: 31px;
+  --pin-inset: 15px;
+  min-block-size: 38px;
+  font-size: 18px;
+}
+
+.vault-inline-pin .vault-pin-input:disabled {
+  opacity: .6;
+  cursor: not-allowed;
 }
 
 .vault-pin-form .dialog-footer:has([type="submit"][hidden]) {
@@ -2743,6 +2784,99 @@ button.calendar-event-content:hover {
   display: grid;
   justify-items: start;
   gap: 5px;
+}
+
+.translator-inline-sites {
+  display: grid;
+  gap: 6px;
+  min-inline-size: 0;
+  padding: 7px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: var(--radius);
+  background: var(--subtle);
+  overflow-wrap: anywhere;
+}
+
+.translator-inline-sites h3 {
+  font-size: 12px;
+  font-weight: 710;
+}
+
+.translator-inline-sites > p:not(.translator-feedback) {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.translator-site-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 5px;
+  min-inline-size: 0;
+}
+
+.translator-site-form input {
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: var(--control-height);
+  padding: 4px 6px;
+  border: 1px solid var(--stroke);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.translator-site-form input,
+html[dir="rtl"] .translator-site-form input:placeholder-shown {
+  direction: ltr;
+  text-align: left;
+}
+
+.translator-site-form input::placeholder {
+  color: var(--quiet);
+  opacity: 1;
+}
+
+.translator-site-form button {
+  max-inline-size: 100%;
+}
+
+.translator-site-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.translator-site-list:empty {
+  display: none;
+}
+
+.translator-site-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  min-inline-size: 0;
+  padding: 4px;
+  padding-inline-start: 6px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.translator-site-row > :first-child {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  font-size: 11.5px;
+}
+
+.translator-site-row .icon-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--danger);
 }
 
 @media (prefers-reduced-motion: reduce) {

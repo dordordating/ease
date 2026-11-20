@@ -11,6 +11,7 @@ const expiryAlarm = "ease-translator-selection-expire";
 const maxSelectionLength = maxTranslationLength + 1;
 const maxPendingTabs = 16;
 const selectionLifetime = 30_000;
+const contextByRoute = { popup: "POPUP", panel: "SIDE_PANEL", tab: "TAB" };
 const activeCaptures = new Map();
 let pendingSelection = Promise.resolve();
 let pendingMenu = Promise.resolve();
@@ -30,7 +31,7 @@ function editSelections(change) {
     const now = Date.now();
     const entries = Object.fromEntries(Object.entries(saved).filter(([, selection]) => selection.expiresAt > now));
     const expired = Object.keys(entries).length !== Object.keys(saved).length;
-    const { changed, text } = await change(entries);
+    const { changed, value } = await change(entries);
     if (expired || changed) {
       if (Object.keys(entries).length) await storage.set({ [translatorSelectionKey]: entries });
       else await storage.remove(translatorSelectionKey);
@@ -43,19 +44,38 @@ function editSelections(change) {
         }
       }
     }
-    return text ?? null;
+    return value ?? null;
   });
   pendingSelection = operation.catch(() => {});
   return operation;
 }
 
-function saveSelection(tab, capture, text) {
+function saveSelection(tab, capture, selection, route) {
   return editSelections((entries) => {
     if (activeCaptures.get(tab.id) !== capture) return { changed: false };
     const key = tabKey(tab.id, tab.windowId);
+    const text = typeof selection === "string" ? selection.trim().slice(0, maxSelectionLength) : "";
     delete entries[key];
-    entries[key] = { text, expiresAt: Date.now() + selectionLifetime };
+    entries[key] = { text, route, capture, expiresAt: Date.now() + selectionLifetime };
     for (const oldKey of Object.keys(entries).slice(0, -maxPendingTabs)) delete entries[oldKey];
+    return { changed: true, value: true };
+  });
+}
+
+function updateSelectionRoute(tab, capture, details) {
+  return editSelections((entries) => {
+    const key = tabKey(tab.id, tab.windowId);
+    if (activeCaptures.get(tab.id) !== capture || entries[key]?.capture !== capture) return { changed: false };
+    entries[key] = { ...entries[key], ...details };
+    return { changed: true, value: true };
+  });
+}
+
+function discardCapture(tab, capture) {
+  return editSelections((entries) => {
+    const key = tabKey(tab.id, tab.windowId);
+    if (entries[key]?.capture !== capture) return { changed: false };
+    delete entries[key];
     return { changed: true };
   });
 }
@@ -115,51 +135,110 @@ async function scriptSelection(tabId, frameId) {
   return candidates.find((selection) => selection.text)?.text ?? "";
 }
 
-function launchSelection(tab, captureText) {
-  if (!validTab(tab)) return;
-  // sidePanel.open requires the native menu/shortcut gesture, so call it before awaiting anything.
-  let opening;
-  try {
-    opening = chrome.sidePanel.open({ tabId: tab.id });
-  } catch {
-    return;
-  }
-  discardTab(tab.id).catch(() => {});
-  const capture = Symbol();
-  activeCaptures.set(tab.id, capture);
-  (async () => {
-    try {
-      const [selection] = await Promise.all([captureText(), opening]);
-      const text = typeof selection === "string" ? selection.trim().slice(0, maxSelectionLength) : "";
-      await saveSelection(tab, capture, text);
-    } catch {
-      // A closed/restricted tab can no longer supply text or receive a side panel.
-    } finally {
-      if (activeCaptures.get(tab.id) === capture) activeCaptures.delete(tab.id);
-    }
-  })();
+async function activeTabInWindow(windowId) {
+  const [tab] = await chrome.tabs.query({ active: true, windowId });
+  return validTab(tab) ? tab : null;
 }
 
-async function panelCanTake(sender, windowId) {
-  if (sender.id !== chrome.runtime.id || !sender.documentId || typeof sender.url !== "string") return false;
+async function openSidePanel(tabId) {
+  try {
+    await chrome.sidePanel.open({ tabId });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function openPopup(windowId) {
+  try {
+    await chrome.action.openPopup({ windowId });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function openTranslationTab(tab, capture) {
+  if ((await activeTabInWindow(tab.windowId))?.id !== tab.id) return discardCapture(tab, capture);
+  const token = crypto.randomUUID();
+  if (!await updateSelectionRoute(tab, capture, { route: "tab", token })) return;
+  if (activeCaptures.get(tab.id) !== capture) return;
+  const url = chrome.runtime.getURL(`workspace.html?surface=panel&translation=${token}`);
+  const opened = await chrome.tabs.create({ windowId: tab.windowId, url, active: true });
+  if (!validTab(opened) || opened.windowId !== tab.windowId) return discardCapture(tab, capture);
+  await updateSelectionRoute(tab, capture, { destinationTabId: opened.id });
+}
+
+function runCapture(tab, operation) {
+  discardTab(tab.id).catch(() => {});
+  const capture = crypto.randomUUID();
+  activeCaptures.set(tab.id, capture);
+  operation(capture).catch(() => {
+    // A browser window can close or change before the selection is delivered.
+    return discardCapture(tab, capture).catch(() => {});
+  }).finally(() => {
+    if (activeCaptures.get(tab.id) === capture) activeCaptures.delete(tab.id);
+  });
+}
+
+function launchPanelSelection(tab, selection) {
+  // Call before any await, while the original menu or shortcut gesture is still available.
+  const opening = openSidePanel(tab.id);
+  runCapture(tab, async (capture) => {
+    if (await saveSelection(tab, capture, await selection, "panel") && !await opening) {
+      await openTranslationTab(tab, capture);
+    }
+  });
+}
+
+function launchShortcutSelection(tab) {
+  // Start reading while the original page is still focused.
+  const selection = scriptSelection(tab.id);
+  if (typeof chrome.action?.openPopup !== "function") {
+    launchPanelSelection(tab, selection);
+    return;
+  }
+  runCapture(tab, async (capture) => {
+    const text = await selection;
+    if ((await activeTabInWindow(tab.windowId))?.id !== tab.id) return discardCapture(tab, capture);
+    if (!await saveSelection(tab, capture, text, "popup") || activeCaptures.get(tab.id) !== capture) return;
+    if (await openPopup(tab.windowId)) return;
+    if ((await activeTabInWindow(tab.windowId))?.id !== tab.id) return discardCapture(tab, capture);
+    if (await updateSelectionRoute(tab, capture, { route: "panel" }) && !await openSidePanel(tab.id)) {
+      await openTranslationTab(tab, capture);
+    }
+  });
+}
+
+async function selectionRoute(sender, { tabId, windowId }) {
+  if (sender.id !== chrome.runtime.id || !sender.documentId || typeof sender.url !== "string") return null;
   const page = new URL(sender.url);
   if (page.protocol !== "chrome-extension:" || page.hostname !== chrome.runtime.id
-    || page.pathname !== "/workspace.html" || page.searchParams.get("surface") !== "panel") return false;
-  const contexts = await chrome.runtime.getContexts({ contextTypes: ["SIDE_PANEL"], documentIds: [sender.documentId] });
-  return contexts.some((context) => context.windowId === -1 || context.windowId === windowId);
+    || page.pathname !== "/workspace.html") return null;
+  const panelSurface = page.searchParams.get("surface") === "panel";
+  const token = page.searchParams.get("translation");
+  if (token && (!panelSurface || sender.tab?.id !== tabId || sender.tab.windowId !== windowId)) return null;
+  const route = token ? "tab" : panelSurface ? "panel" : "popup";
+  const contextType = contextByRoute[route];
+  const contexts = await chrome.runtime.getContexts({ contextTypes: [contextType], documentIds: [sender.documentId] });
+  if (!contexts.some((context) => context.windowId === -1 || context.windowId === windowId)) return null;
+  return { route, token };
 }
 
 async function consumeSelection(sender, { tabId, windowId }) {
-  if (!Number.isInteger(tabId) || tabId < 0 || !Number.isInteger(windowId) || windowId < 0
-    || !await panelCanTake(sender, windowId)) return null;
+  if (!validTab({ id: tabId, windowId })) return null;
+  const receiver = await selectionRoute(sender, { tabId, windowId });
+  if (!receiver) return null;
   return editSelections(async (entries) => {
-    const key = tabKey(tabId, windowId);
-    if (!Object.hasOwn(entries, key)) return { changed: false };
-    const [activeTab] = await chrome.tabs.query({ active: true, windowId });
-    if (activeTab?.id !== tabId || activeTab.windowId !== windowId) return { changed: false };
+    const key = receiver.route === "tab"
+      ? Object.keys(entries).find((key) => key.startsWith(`${windowId}:`)
+        && entries[key].token === receiver.token && entries[key].destinationTabId === tabId)
+      : tabKey(tabId, windowId);
+    if (entries[key]?.route !== receiver.route) return { changed: false };
+    if ((await activeTabInWindow(windowId))?.id !== tabId) return { changed: false };
     const { text } = entries[key];
     delete entries[key];
-    return { changed: true, text };
+    return { changed: true, value: text };
   });
 }
 
@@ -211,11 +290,11 @@ export function registerTranslatorSelectionHandlers() {
   });
   chrome.contextMenus?.onClicked?.addListener((info, tab) => {
     if (info.menuItemId !== menuId || !validTab(tab)) return;
-    launchSelection(tab, () => info.editable ? scriptSelection(tab.id, info.frameId ?? 0) : info.selectionText);
+    launchPanelSelection(tab, info.editable ? scriptSelection(tab.id, info.frameId ?? 0) : info.selectionText);
   });
   chrome.commands?.onCommand?.addListener((command, tab) => {
     // Chrome supplies a tab for browser-window commands, but it is optional outside one.
-    if (command === commandId && validTab(tab)) launchSelection(tab, () => scriptSelection(tab.id));
+    if (command === commandId && validTab(tab)) launchShortcutSelection(tab);
   });
   chrome.tabs?.onUpdated?.addListener((tabId, change) => {
     if (change.status === "loading") discardTab(tabId).catch(() => {});

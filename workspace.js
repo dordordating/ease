@@ -1,11 +1,12 @@
 import { renderCalendar } from "./calendar.js";
 import { renderTranslator } from "./translator.js";
 import { takeTranslatorSelection, translatorSelectionKey } from "./translator-selection.js";
+import { renderTranslatorSites } from "./translator-sites-ui.js";
 import { paintBrand } from "./brand.js";
 import { accountStorageKey, calendarConnectionKeys, loadConnectedEvents, renderAccount, renderCalendarConnections } from "./connections.js";
 import { icon } from "./icons.js";
 import { deviceUnlockAvailable, readDeviceUnlock, registerDeviceUnlock } from "./vault-device.js";
-import { vaultPolicyFor, vaultSessionStorageKey } from "./vault-session.js";
+import { vaultPinAttemptsStorageKey, vaultPolicyFor, vaultSessionStorageKey } from "./vault-session.js";
 import { isRtl, localeNames, translate } from "./locales.js";
 import { calendarSystemFor, defaultTranslator, defaultWorkspace, densities, folderIcons, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
 
@@ -40,6 +41,7 @@ let calendarController;
 let calendarConnectionsRefresh;
 let calendarLocale;
 let translatorController;
+let translatorSiteController;
 let translatorLocale;
 const translatorDraft = {};
 let workspaceInitialized = false;
@@ -48,6 +50,8 @@ let refreshVersion = 0;
 let accountRefresh;
 let calendarDayTimer;
 let vaultTimer;
+let inlinePinTimer;
+let inlinePinState;
 let workspaceReadVersion = 0;
 let protectedDialogFolder;
 let protectedDialogSnippet;
@@ -135,13 +139,13 @@ function showToast(message, action, error = false) {
   }, action ? 7000 : 2200);
 }
 
-async function mutate(action, data) {
+async function mutate(action, data, onError = reportError) {
   try {
     const response = await chrome.runtime.sendMessage({ type: "ease-workspace-update", action, data });
     if (response?.workspace) return true;
-    showToast(t(response?.error ?? "saveFailed"), undefined, true);
+    onError(response?.error ?? "saveFailed");
   } catch {
-    showToast(t("saveFailed"), undefined, true);
+    onError("saveFailed");
   }
   return false;
 }
@@ -440,10 +444,12 @@ function renderClipboard() {
 }
 
 function selectFolder(id) {
+  if (activeFolder !== id) inlinePinState = undefined;
   activeFolder = id;
   render();
   view.scrollTop = 0;
-  document.getElementById(`folder-chip-${id}`)?.focus();
+  const pin = view.querySelector(".vault-inline-pin input:not(:disabled)");
+  (pin ?? document.getElementById(`folder-chip-${id}`))?.focus();
 }
 
 let folderRailScroll = 0;
@@ -851,6 +857,7 @@ function renderSearch() {
 }
 
 function render() {
+  clearTimeout(inlinePinTimer);
   closeFolderContext();
   const folderRail = view.querySelector(".folder-quick");
   if (folderRail) folderRailScroll = folderRail.scrollTop;
@@ -882,10 +889,12 @@ function render() {
   }
   if (!query && activePage === "translate" && translatorController && translatorLocale === workspace.locale) {
     translatorController.update(translatorOptions());
+    translatorSiteController?.update(workspace.translator?.inlineSites ?? []);
     return;
   }
   translatorController?.dispose?.();
   translatorController = undefined;
+  translatorSiteController = undefined;
   calendarController = undefined;
   calendarConnectionsRefresh = undefined;
   accountRefresh = undefined;
@@ -944,6 +953,12 @@ function render() {
       onSave: saveTranslation,
       onShortcut: openChromeShortcuts
     });
+    translatorSiteController = renderTranslatorSites(body.querySelector(".translator-settings-view"), {
+      t, icon, sites: workspace.translator?.inlineSites ?? [],
+      requestInWorker: inToolbarPopup,
+      onUpdate: (site, enabled, onError, requestPermission) =>
+        mutate("translator-inline-site", { site, enabled, requestPermission }, onError)
+    });
   } else if (activePage === "library") renderLibrary();
   else if (activePage === "settings") renderSettings();
 
@@ -994,9 +1009,13 @@ async function saveTranslation(snippet) {
 }
 
 async function receiveTranslationSelection() {
-  if (!inPanel || !workspaceInitialized || editor.open) return;
+  if (!workspaceInitialized || editor.open) return;
   const selectedText = await takeTranslatorSelection();
   if (selectedText === null) return;
+  showTranslationSelection(selectedText);
+}
+
+function showTranslationSelection(selectedText) {
   if (activePage !== "translate" || query) switchTo("translate", false);
   translatorController?.setSelection(selectedText, { auto: Boolean(selectedText.trim()) });
 }
@@ -1224,17 +1243,85 @@ async function changeVault(action, data) {
 function renderLockedFolder(folder, container) {
   const state = node("div", "vault-state");
   const actions = node("div", "vault-actions");
-  actions.append(button(t("vaultUnlock"), "primary-button", {
-    symbol: "unlock", onClick: () => editVaultCredential(folder)
-  }));
+  state.append(glyph("lock", "vault-illustration"), node("h2", "", t("vaultLockedFolder")),
+    node("p", "", t("vaultUnlockHint")));
+  if (folder.vaultMode === "pin") {
+    state.append(renderInlinePin(folder));
+  } else {
+    actions.append(button(t("vaultUnlock"), "primary-button", {
+      symbol: "unlock", onClick: () => editVaultCredential(folder)
+    }));
+  }
   if (folder.device && supportsDeviceUnlock) {
     actions.append(button(t("vaultDevice"), "secondary-button", {
       symbol: "fingerprint", onClick: ({ currentTarget }) => unlockWithDevice(folder, currentTarget)
     }));
   }
-  state.append(glyph("lock", "vault-illustration"), node("h2", "", t("vaultLockedFolder")),
-    node("p", "", t("vaultUnlockHint")), actions);
+  if (actions.childElementCount) state.append(actions);
   container.append(state);
+}
+
+function renderInlinePin(folder) {
+  if (inlinePinState?.id !== folder.id) inlinePinState = { id: folder.id, value: "", pending: false };
+  const attempt = inlinePinState;
+  const form = node("form", "vault-inline-pin");
+  const pin = pinField(form, "vaultPin");
+  pin.id = `vault-inline-pin-${folder.id}`;
+  pin.value = attempt.value;
+  const feedback = node("p", "vault-inline-feedback");
+  feedback.id = "vault-inline-feedback";
+  feedback.setAttribute("role", "status");
+  pin.setAttribute("aria-describedby", feedback.id);
+  form.append(feedback);
+  function showRetry() {
+    const { wait, label } = pinRetryStatus(folder.pinRetryAt);
+    pin.disabled = attempt.pending || wait > 0;
+    if (!wait) {
+      const key = attempt.error === "vaultPinWait" ? undefined : attempt.error;
+      feedback.setAttribute("aria-live", "polite");
+      feedback.textContent = t(key ?? "vaultPinHint");
+      feedback.dataset.kind = key ? "error" : "info";
+      return;
+    }
+    feedback.setAttribute("aria-live", "off");
+    feedback.textContent = label;
+    feedback.dataset.kind = "info";
+    inlinePinTimer = setTimeout(showRetry, Math.min(1000, folder.pinRetryAt - Date.now()));
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (pin.disabled || pin.value.length !== 4 || attempt.pending) return;
+    attempt.pending = true;
+    attempt.error = undefined;
+    pin.disabled = true;
+    const accepted = await mutate("unlock-folder", { id: folder.id, pin: pin.value }, (code) => {
+      attempt.error = code;
+    });
+    attempt.pending = false;
+    attempt.value = "";
+    if (accepted && inlinePinState === attempt) inlinePinState = undefined;
+    await refreshWorkspace();
+    if (!accepted && inlinePinState === attempt) {
+      view.querySelector(".vault-inline-pin input:not(:disabled)")?.focus();
+    }
+  });
+  pin.addEventListener("input", () => {
+    attempt.value = pin.value;
+    attempt.error = undefined;
+    if (pin.value.length === 4) form.requestSubmit();
+    else showRetry();
+  });
+  showRetry();
+  return form;
+}
+
+function pinRetryStatus(retryAt) {
+  const wait = Math.max(0, Math.ceil(((retryAt ?? 0) - Date.now()) / 1000));
+  if (!wait) return { wait, label: "" };
+  const format = new Intl.NumberFormat(workspace.locale, { minimumIntegerDigits: 2, useGrouping: false });
+  const time = `${format.format(Math.floor(wait / 60))}:${format.format(wait % 60)}`;
+  return { wait, label: t("vaultPinRetry", { time }) };
 }
 
 function passwordField(fields, label, autocomplete) {
@@ -1310,6 +1397,7 @@ function editVaultCredential(folder, mode = "unlock", onUnlocked) {
   const setup = mode === "setup";
   const usePin = setting || folder.vaultMode === "pin";
   const autoUnlock = !setting && usePin;
+  let updatePinWait = () => {};
   const heading = setting ? (folder.vaultMode === "pin" ? "vaultChangePin" : "vaultSetPin") : "vaultUnlock";
   const fields = openEditor(t(heading), t(setting ? "save" : "vaultUnlock"), async () => {
     if (setting && repeat.value !== credential.value) {
@@ -1323,7 +1411,9 @@ function editVaultCredential(folder, mode = "unlock", onUnlocked) {
     if (!await changeVault(action, data)) {
       if (autoUnlock) {
         credential.value = "";
-        credential.focus();
+        await refreshWorkspace();
+        updatePinWait();
+        if (!credential.disabled) credential.focus();
       }
       return false;
     }
@@ -1340,7 +1430,18 @@ function editVaultCredential(folder, mode = "unlock", onUnlocked) {
     form.classList.add("vault-pin-form");
     const submit = form.querySelector('[type="submit"]');
     submit.hidden = true;
-    fields.append(node("p", "vault-hint", t("vaultPinHint")));
+    const retry = node("p", "vault-inline-feedback");
+    retry.dataset.kind = "info";
+    fields.append(retry);
+    let retryTimer;
+    updatePinWait = () => {
+      clearTimeout(retryTimer);
+      const { wait, label } = pinRetryStatus(folderFor(folder.id)?.pinRetryAt);
+      credential.disabled = wait > 0;
+      retry.textContent = label || t("vaultPinHint");
+      if (wait && editor.contains(credential)) retryTimer = setTimeout(updatePinWait, 1000);
+    };
+    editor.addEventListener("close", () => clearTimeout(retryTimer), { once: true });
     credential.addEventListener("input", () => {
       if (credential.value.length === 4 && !submit.disabled) form.requestSubmit();
     });
@@ -1351,6 +1452,7 @@ function editVaultCredential(folder, mode = "unlock", onUnlocked) {
     }));
   }
   editor.showModal();
+  updatePinWait();
   credential.focus();
 }
 
@@ -1593,6 +1695,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "session" && changes[vaultSessionStorageKey]) refreshWorkspace();
   if (area === "session" && changes[translatorSelectionKey]?.newValue) receiveTranslationSelection();
   if (area !== "local") return;
+  if (changes[vaultPinAttemptsStorageKey]) refreshWorkspace();
   if (changes[storageKey]) refreshWorkspace({ ...defaultWorkspace, ...changes[storageKey].newValue });
   if (calendarConnectionKeys.some((key) => changes[key])) {
     calendarConnectionsRefresh?.().catch(() => reportError("syncFailed"));
@@ -1601,9 +1704,13 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes[accountStorageKey]) accountRefresh?.().catch(() => reportError("accountFailed"));
 });
 if (inPanel) chrome.tabs?.onActivated?.addListener(receiveTranslationSelection);
+const initialTranslationSelection = await takeTranslatorSelection();
+if (initialTranslationSelection !== null) activePage = "translate";
 await refreshWorkspace();
 workspaceInitialized = true;
-if (workspaceRoute.get("open") === "account") {
+if (initialTranslationSelection !== null) {
+  showTranslationSelection(initialTranslationSelection);
+} else if (workspaceRoute.get("open") === "account") {
   switchTo("settings", false);
   document.getElementById("ease-account")?.scrollIntoView({ block: "nearest" });
 } else if (workspaceRoute.get("open") === "calendar") {

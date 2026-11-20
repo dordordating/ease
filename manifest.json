@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ease",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "A fast, customizable workspace for everyday browser tasks.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -17,7 +17,8 @@
   "optional_host_permissions": [
     "https://openidconnect.googleapis.com/*",
     "https://www.googleapis.com/*",
-    "https://*.icloud.com/*"
+    "https://*.icloud.com/*",
+    "https://*/*"
   ],
   "action": {
     "default_title": "Ease",
@@ -40,6 +41,12 @@
   "side_panel": {
     "default_path": "workspace.html?surface=panel"
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["translator-engine.js"],
+      "matches": ["https://*/*"]
+    }
+  ],
   "commands": {
     "_execute_action": {
       "suggested_key": {

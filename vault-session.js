@@ -12,9 +12,10 @@ const policyDurations = {
   "three-hours": 3 * 60 * minute,
   "six-hours": 6 * 60 * minute
 };
-const pinAttemptsKey = "easeVaultPinAttempts";
-const pinAttemptLimit = 5;
-const pinRetryWindow = minute;
+export const vaultPinAttemptsStorageKey = "easeVaultPinAttempts";
+const pinAttemptsBeforeWait = 3;
+const maxPinBackoffStep = 4;
+const maxPinWait = 15 * minute;
 
 export function vaultPolicyFor(policy) {
   return typeof policy === "string" && Object.hasOwn(policyDurations, policy) ? policy : defaultVaultPolicy;
@@ -65,26 +66,36 @@ export async function lockVaultSession(sessions, folderId) {
   sessions.delete(folderId);
 }
 
-async function readPinAttempts(now = Date.now()) {
-  const result = await chrome.storage.session.get(pinAttemptsKey);
-  return new Map(Object.entries(result[pinAttemptsKey] ?? {}).filter(([, attempt]) => attempt?.expiresAt > now));
+export async function readVaultPinAttempts() {
+  const result = await chrome.storage.local.get(vaultPinAttemptsStorageKey);
+  return new Map(Object.entries(result[vaultPinAttemptsStorageKey] ?? {}).filter(([, attempt]) =>
+    Number.isInteger(attempt?.count) && attempt.count > 0 && Number.isFinite(attempt.retryAt)
+  ));
+}
+
+export function vaultPinRetryAt(attempts, folderId, now = Date.now()) {
+  const attempt = attempts.get(folderId);
+  return attempt?.retryAt > now ? attempt.retryAt : null;
 }
 
 async function persistPinAttempts(attempts) {
-  await chrome.storage.session.set({ [pinAttemptsKey]: Object.fromEntries(attempts) });
+  await chrome.storage.local.set({ [vaultPinAttemptsStorageKey]: Object.fromEntries(attempts) });
 }
 
 export async function reserveVaultPinAttempt(folderId) {
   const now = Date.now();
-  const attempts = await readPinAttempts(now);
-  const count = attempts.get(folderId)?.count ?? 0;
-  if (count >= pinAttemptLimit) return false;
-  attempts.set(folderId, { count: count + 1, expiresAt: now + pinRetryWindow });
+  const attempts = await readVaultPinAttempts();
+  if (vaultPinRetryAt(attempts, folderId, now)) return false;
+  const count = Math.min(pinAttemptsBeforeWait + maxPinBackoffStep, (attempts.get(folderId)?.count ?? 0) + 1);
+  const step = count - pinAttemptsBeforeWait;
+  const retryAt = step < 0 ? 0 : now + Math.min(2 ** step * minute, maxPinWait);
+  attempts.set(folderId, { count, retryAt });
+  // Reserve before testing the PIN so an unavailable store cannot allow uncounted guesses.
   await persistPinAttempts(attempts);
   return true;
 }
 
 export async function clearVaultPinAttempts(folderId) {
-  const attempts = await readPinAttempts();
+  const attempts = await readVaultPinAttempts();
   if (attempts.delete(folderId)) await persistPinAttempts(attempts);
 }
