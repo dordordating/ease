@@ -17,6 +17,9 @@ Ease uses Manifest V3 and requires Chrome 116 or newer. It has no build step or 
 - Press **Alt+Shift+E** to open the popup, **/** inside Ease to search, and **1–9** to copy a pinned snippet by its displayed slot. If the open shortcut is unavailable, assign it at `chrome://extensions/shortcuts`.
 - Use the side panel button to keep Ease open alongside a page.
 - Open the module library (**+**) to show or hide Calendar. Calendar provides local month browsing, a Today shortcut, and a Solar Hijri view when the interface language is Persian.
-- Use **Settings → Language** to change the interface. English is the first-run default. Persian, Spanish, French, Brazilian Portuguese, Arabic, German, and Japanese are available. The appearance can follow the system or use a fixed light or dark theme.
+- Use **Settings → Language** to change the interface. English is the first-run default. Persian, Spanish, French, Brazilian Portuguese, Arabic, German, and Japanese are available. The Persian interface uses the bundled Vazir font.
+- In **Settings → Appearance**, choose **Light**, **Dark**, or **Automatic (system)**. Automatic follows the device appearance while Ease is open.
 
 Snippets and preferences are stored in the current browser profile. Cloud sync, Google sign-in, and linked services are future work. The module library marks Markets, Email, Translator, and AI Assistant as coming soon.
+
+The bundled Vazir v30.1.0 font is distributed under the [SIL Open Font License](fonts/OFL.txt).

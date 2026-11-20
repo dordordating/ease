@@ -1,3 +1,11 @@
+@font-face {
+  font-family: Vazir;
+  src: url("fonts/Vazir-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
   --surface: #15131e;
@@ -35,6 +43,10 @@
   font-size: 13px;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+:root:lang(fa) {
+  font-family: Vazir, var(--system-text);
 }
 
 @media (prefers-color-scheme: light) {
