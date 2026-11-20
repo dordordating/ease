@@ -1,4 +1,6 @@
 import { renderCalendar } from "./calendar.js";
+import { paintBrand } from "./brand.js";
+import { accountStorageKey, calendarConnectionKeys, loadConnectedEvents, renderAccount, renderCalendarConnections } from "./connections.js";
 import { icon } from "./icons.js";
 import { isRtl, localeNames, translate } from "./locales.js";
 import { defaultWorkspace, densities, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
@@ -7,6 +9,7 @@ const view = document.querySelector("#workspace");
 const editor = document.querySelector("#editor");
 const tabBar = document.querySelector("#module-tabs");
 const search = document.querySelector("#search");
+const logo = document.querySelector("#brand-logo");
 const toast = document.querySelector("#toast");
 const toastMessage = document.querySelector("#toast-message");
 const toastAction = document.querySelector("#toast-action");
@@ -26,6 +29,13 @@ let copyTimer;
 let copiedId;
 let currentWindowId;
 let inToolbarPopup = false;
+const calendarNavigation = {};
+let calendarController;
+let calendarConnectionsRefresh;
+let calendarLocale;
+let providerEvents = [];
+let refreshVersion = 0;
+let accountRefresh;
 
 document.body.dataset.surface = inPanel ? "panel" : "popup";
 panelButton.hidden = inPanel;
@@ -36,6 +46,19 @@ if (!inPanel) {
 }
 
 const t = (key, values) => translate(workspace.locale, key, values);
+const reportError = (key) => showToast(t(key), undefined, true);
+
+function calendarEvents() {
+  return [...workspace.events, ...providerEvents];
+}
+
+async function refreshCalendarEvents() {
+  const version = ++refreshVersion;
+  const events = await loadConnectedEvents();
+  if (version !== refreshVersion) return;
+  providerEvents = events;
+  calendarController?.update({ events: calendarEvents() });
+}
 
 function node(tag, className, label) {
   const element = document.createElement(tag);
@@ -107,6 +130,7 @@ function switchTo(page, focus = true) {
   query = "";
   search.value = "";
   render();
+  view.scrollTop = 0;
   if (focus) {
     const tab = document.getElementById(`tab-${page}`);
     (tab ?? view).focus();
@@ -321,6 +345,19 @@ function displayPreference(key, label, values, symbols = {}) {
   return fieldset;
 }
 
+async function readActivationShortcut() {
+  const value = document.querySelector("#activation-shortcut");
+  if (!value || !chrome.commands) return;
+  try {
+    const commands = await chrome.commands.getAll();
+    const activation = commands.find(({ name }) => name === "_execute_action");
+    value.textContent = activation?.shortcut || t("shortcutNotSet");
+    value.dir = activation?.shortcut ? "ltr" : "auto";
+  } catch {
+    value.textContent = t("shortcutNotSet");
+  }
+}
+
 function renderSettings() {
   section(t("settings"));
   const list = node("div", "settings-list");
@@ -350,12 +387,25 @@ function renderSettings() {
   });
   language.append(label, select);
   list.append(language);
+  const shortcut = node("div", "account-card");
+  const shortcutDetails = node("div", "account-details connection-actions");
+  const shortcutValue = node("kbd", "keycap", t("shortcutNotSet"));
+  shortcutValue.id = "activation-shortcut";
+  shortcutValue.dir = "auto";
+  shortcutDetails.append(shortcutValue, button(t("manageActivationShortcut"), "secondary-button", {
+    symbol: "keyboard",
+    onClick: () => chrome.tabs.create({ url: "chrome://extensions/shortcuts" }).catch(() => reportError("shortcutOpenFailed"))
+  }));
+  shortcut.append(node("h3", "", t("activationShortcut")), shortcutDetails);
+  list.append(shortcut);
   const storage = node("div", "setting-row storage-note");
   const copy = node("div");
   copy.append(node("strong", "", t("storageTitle")), node("p", "", t("storageHint")));
   storage.append(glyph("device", "module-glyph"), copy);
   list.append(storage);
   view.append(list);
+  accountRefresh = renderAccount(list, t, reportError);
+  readActivationShortcut();
 }
 
 function searchable(text) {
@@ -405,13 +455,27 @@ function render() {
   root.dataset.palette = workspace.palette;
   root.dataset.density = workspace.density;
   root.dataset.size = workspace.size;
-  search.placeholder = t("searchPlaceholder");
+  if (logo.dataset.palette !== workspace.palette) {
+    const canvas = node("canvas");
+    canvas.width = canvas.height = 96;
+    paintBrand(canvas, workspace.palette);
+    logo.src = canvas.toDataURL();
+    logo.dataset.palette = workspace.palette;
+  }
+  search.placeholder = t("searchCompact");
   search.setAttribute("aria-label", t("searchLabel"));
   labelButton(panelButton, t("openPanel"), "panel");
   labelButton(settingsButton, t("settings"), "settings");
   settingsButton.setAttribute("aria-pressed", String(activePage === "settings" && !query));
   if (![library.id, settings.id, ...workspace.tabs].includes(activePage)) activePage = clipboard.id;
   renderTabs();
+  if (!query && activePage === "calendar" && calendarController && calendarLocale === workspace.locale) {
+    calendarController.update({ preferences: workspace.calendar, events: calendarEvents() });
+    return;
+  }
+  calendarController = undefined;
+  calendarConnectionsRefresh = undefined;
+  accountRefresh = undefined;
   view.replaceChildren();
   if (query || activePage === "settings") {
     view.removeAttribute("role");
@@ -423,10 +487,27 @@ function render() {
   if (query) renderSearch();
   else if (activePage === "clipboard") renderClipboard();
   else if (activePage === "calendar") {
-    section(t("calendar"), t("calendarHint"));
+    section(t("calendar"));
     const calendarBody = node("div");
     view.append(calendarBody);
-    renderCalendar(calendarBody, { locale: workspace.locale, t, icon });
+    calendarLocale = workspace.locale;
+    calendarController = renderCalendar(calendarBody, {
+      locale: workspace.locale,
+      t,
+      icon,
+      navigation: calendarNavigation,
+      preferences: workspace.calendar,
+      events: calendarEvents(),
+      onPreferences: (patch) => mutate("calendar-preferences", patch),
+      onSaveEvent: (event) => mutate("save-event", event),
+      onDeleteEvent: (id) => mutate("delete-event", { id }),
+      renderConnections: (container) => {
+        calendarConnectionsRefresh = renderCalendarConnections(container, {
+          locale: workspace.locale, t, reportError, eventsChanged: refreshCalendarEvents
+        });
+      }
+    });
+    refreshCalendarEvents();
   } else if (activePage === "library") renderLibrary();
   else if (activePage === "settings") renderSettings();
 
@@ -585,6 +666,7 @@ async function removeSnippet(snippet) {
   }
 }
 
+window.addEventListener("focus", readActivationShortcut);
 document.querySelector(".search-icon").innerHTML = icon("search");
 settingsButton.addEventListener("click", () => switchTo(activePage === "settings" && !query ? "clipboard" : "settings", false));
 panelButton.addEventListener("click", async () => {
@@ -603,6 +685,7 @@ panelButton.addEventListener("click", async () => {
 search.addEventListener("input", () => {
   query = search.value.trim();
   render();
+  view.scrollTop = 0;
 });
 
 tabBar.addEventListener("keydown", (event) => {
@@ -672,9 +755,15 @@ try {
   showToast(t("saveFailed"), undefined, true);
 }
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes[storageKey]) {
+  if (area !== "local") return;
+  if (changes[storageKey]) {
     workspace = { ...defaultWorkspace, ...changes[storageKey].newValue };
     render();
   }
+  if (calendarConnectionKeys.some((key) => changes[key])) {
+    calendarConnectionsRefresh?.().catch(() => reportError("syncFailed"));
+    refreshCalendarEvents();
+  }
+  if (changes[accountStorageKey]) accountRefresh?.().catch(() => reportError("accountFailed"));
 });
 render();

@@ -12,18 +12,17 @@
     <header>
       <div class="topbar">
         <div class="brand">
-          <img src="icons/logo.svg" width="36" height="36" alt="">
-          <div class="brand-name">Ease</div>
+          <img id="brand-logo" src="icons/logo.svg" width="36" height="36" alt="Ease">
+        </div>
+        <div class="search-box">
+          <span class="search-icon" aria-hidden="true"></span>
+          <input type="search" id="search" autocomplete="off" spellcheck="false" aria-controls="workspace">
+          <kbd class="keycap" aria-hidden="true">/</kbd>
         </div>
         <div class="header-actions">
           <button id="panel-button" class="icon-button" type="button"></button>
           <button id="settings-button" class="icon-button" type="button"></button>
         </div>
-      </div>
-      <div class="search-box">
-        <span class="search-icon" aria-hidden="true"></span>
-        <input type="search" id="search" autocomplete="off" spellcheck="false" aria-controls="workspace">
-        <kbd class="keycap" aria-hidden="true">/</kbd>
       </div>
     </header>
     <nav class="module-tabs" id="module-tabs"></nav>

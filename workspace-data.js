@@ -14,6 +14,7 @@ export const palettes = { violet: "#774be0", blue: "#2869dc", mint: "#118466", a
 export const densities = ["compact", "comfortable"];
 export const sizes = ["small", "medium", "large"];
 export const shortcutSlots = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+export const defaultCalendar = { system: null, view: "month", firstDay: null };
 
 export const defaultWorkspace = {
   locale: "en",
@@ -22,7 +23,9 @@ export const defaultWorkspace = {
   density: "compact",
   size: "medium",
   tabs: ["clipboard", "calendar"],
-  snippets: []
+  snippets: [],
+  calendar: defaultCalendar,
+  events: []
 };
 
 export async function readWorkspace() {

@@ -1,7 +1,36 @@
 import { densities, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
 import { localeNames } from "./locales.js";
+import { setToolbarBrand } from "./brand.js";
+import { changeCalendarPreferences, saveCalendarEvent } from "./calendar-store.js";
+import { refreshConnectedGoogleCalendar, registerGoogleProviderHandlers } from "./providers.js";
+import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
 
 let pendingWrite = Promise.resolve();
+registerGoogleProviderHandlers();
+
+const syncAlarm = "ease-calendar-sync";
+async function initializeBrowser() {
+  const { palette } = await readWorkspace();
+  await Promise.all([
+    setToolbarBrand(palette),
+    chrome.alarms.create(syncAlarm, { periodInMinutes: 60 })
+  ]);
+}
+
+chrome.runtime.onInstalled?.addListener(() => { initializeBrowser().catch(() => {}); });
+chrome.runtime.onStartup?.addListener(() => { initializeBrowser().catch(() => {}); });
+chrome.storage.onChanged.addListener(({ [storageKey]: change }, area) => {
+  if (area === "local" && change?.newValue?.palette && change.newValue.palette !== change.oldValue?.palette) {
+    setToolbarBrand(change.newValue.palette).catch(() => {});
+  }
+});
+chrome.alarms?.onAlarm.addListener((alarm) => {
+  if (alarm.name !== syncAlarm) return;
+  Promise.allSettled([
+    refreshConnectedGoogleCalendar(),
+    getAppleCalendarState().then(({ connected }) => connected && syncAppleCalendar())
+  ]);
+});
 
 function updateWorkspace(workspace, action, data) {
   switch (action) {
@@ -11,6 +40,14 @@ function updateWorkspace(workspace, action, data) {
       if (Object.hasOwn(palettes, data.palette)) workspace.palette = data.palette;
       if (densities.includes(data.density)) workspace.density = data.density;
       if (sizes.includes(data.size)) workspace.size = data.size;
+      break;
+    case "calendar-preferences":
+      changeCalendarPreferences(workspace, data);
+      break;
+    case "save-event":
+      return saveCalendarEvent(workspace, data);
+    case "delete-event":
+      workspace.events = workspace.events.filter(({ id }) => id !== data.id);
       break;
     case "toggle-module": {
       const module = modules.find(({ id, released }) => released && id === data.id);

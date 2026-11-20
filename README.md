@@ -14,12 +14,41 @@ Ease uses Manifest V3 and requires Chrome 116 or newer. It has no build step or 
 
 - Select **New snippet** to save a phrase or link. Click its row to copy it. Open the row’s **More actions** menu to edit, pin, or delete it.
 - Add a named placeholder such as `{name}` to make a reusable template. Ease asks for its value when you copy the snippet.
-- Press **Alt+Shift+E** to open the popup and **/** inside Ease to search. Use **More actions → Set shortcut** on a snippet to choose an available key from **1–9**. Press that number while Ease is focused to copy the snippet. If the open shortcut is unavailable, assign it at `chrome://extensions/shortcuts`.
+- Press **Alt+Shift+E** to open the popup and **/** inside Ease to search. **Settings → Open Ease shortcut** shows the active shortcut and opens Chrome’s shortcut page if you want to change it. Use **More actions → Set shortcut** on a snippet to choose an available key from **1–9**. Press that number while Ease is focused to copy the snippet.
 - Use the side panel button to keep Ease open alongside a page.
-- Open the module library (**+**) to show or hide Calendar. Calendar provides local month browsing, a Today shortcut, and a Solar Hijri view when the interface language is Persian.
+- Open the module library (**+**) to show or hide Calendar. Switch between Week and Month, and use **Calendar settings** to choose Gregorian, Solar Hijri, or civil Hijri and the first day of the week.
+- Choose a day and select **Add event** to save an all-day event or a timed event with a start and end. Events can have a location and notes. Select a local event to edit it, or use its delete button. Local events stay on this device and can be used without signing in.
 - Use **Settings → Language** to change the interface. English is the first-run default. Persian, Spanish, French, Brazilian Portuguese, Arabic, German, and Japanese are available. The Persian interface uses the bundled Vazir font.
-- In **Settings**, choose Light, Dark, or Automatic appearance, one of four accent colors, a control density, and a workspace size. The workspace size changes the popup dimensions and the side panel content width. Use Chrome’s divider to resize the side panel itself.
+- In **Settings**, choose Light, Dark, or Automatic appearance, one of four accent colors, a control density, and a workspace size. The popup keeps a fixed height for its selected size. The accent color also updates the Ease logo and the toolbar icon. Use Chrome’s divider to resize the side panel itself.
 
-Snippets and preferences are stored in the current browser profile. Cloud sync, Google sign-in, and linked services are future work. The module library marks Markets, Email, Translator, and AI Assistant as coming soon.
+## Accounts and calendar connections
+
+**Settings → Account** offers Google sign-in in OAuth-configured builds. Signing in stores the verified profile in this browser. Snippets, preferences and local events stay in the current browser profile. Ease does not have cross-device account storage.
+
+**Calendar → Connected calendars** offers read-only connections. Ease refreshes on demand and attempts an hourly refresh while Chrome is running.
+
+- **Google Calendar** requests separate Google consent and reads events from the primary calendar for roughly six months before and after today.
+- **Apple Calendar** accepts an existing published iCloud calendar link starting with `webcal://` or `https://`. Only use a calendar you are comfortable sharing with anyone who can obtain the link. Ease caches occurrences from 90 days back through the next 366 days. Private iCloud calendars are not supported.
+
+### Configure Google for a build
+
+1. Find the extension's stable ID at `chrome://extensions`. Register an OAuth client of type **Chrome extension** for that ID in Google Cloud and configure the OAuth consent screen and test users for the project.
+2. Enable the **Google Calendar API** in the same project.
+3. Add the following object under the `oauth2` key in `manifest.json`, replacing the example string with the registered public client ID, then reload the extension.
+
+```json
+{
+  "client_id": "YOUR_CLIENT_ID.apps.googleusercontent.com",
+  "scopes": [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile"
+  ]
+}
+```
+
+Calendar authorization is requested separately when the calendar is connected. See the [Chrome OAuth integration guide](https://developer.chrome.com/docs/extensions/how-to/integrate/oauth) for stable IDs and client setup.
+
+The module library marks Markets, Email, Translator, and AI Assistant as coming soon.
 
 The bundled Vazir v30.1.0 font is distributed under the [SIL Open Font License](fonts/OFL.txt).
