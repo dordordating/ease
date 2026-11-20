@@ -38,6 +38,8 @@ let query = "";
 let toastTimer;
 let copyTimer;
 let copiedId;
+let copyInProgress = false;
+let vaultCopyFeedback;
 let currentWindowId;
 let inToolbarPopup = false;
 const calendarNavigation = {};
@@ -277,7 +279,8 @@ function folderLocked(folder) {
 }
 
 function snippetReadable(snippet) {
-  return !snippet.locked && !folderLocked(folderFor(snippet.folderId));
+  return !snippet.locked && (!vaultCopyFeedback || vaultCopyFeedback.folderId !== snippet.folderId)
+    && !folderLocked(folderFor(snippet.folderId));
 }
 
 function clearExpiredDialog() {
@@ -433,6 +436,14 @@ function renderClipboard() {
     label.dir = "auto";
     current.append(glyph(folder.icon), label);
     content.append(current);
+  }
+  if (folder && vaultCopyFeedback?.folderId === folder.id) {
+    const confirmation = node("div", "vault-copy-confirmation");
+    confirmation.setAttribute("role", "status");
+    confirmation.append(glyph(vaultCopyFeedback.copied ? "check" : "copy", "snippet-glyph"),
+      node("span", "", t(vaultCopyFeedback.copied ? "copied" : "copying")));
+    content.append(confirmation);
+    return;
   }
   if (folderLocked(folder)) {
     renderLockedFolder(folder, content);
@@ -896,7 +907,7 @@ function render() {
   }
   if (!query && activePage === "translate" && translatorController && translatorLocale === workspace.locale) {
     translatorController.update(translatorOptions());
-    translatorSiteController?.update(workspace.translator?.inlineSites ?? []);
+    translatorSiteController?.update(inlineTranslatorEnabled());
     return;
   }
   if (!query && activePage === "flashcards" && flashcardController && flashcardLocale === workspace.locale) {
@@ -969,20 +980,27 @@ function render() {
       onSignIn: signInForTranslation
     });
     translatorSiteController = renderTranslatorSites(body.querySelector(".translator-settings-view"), {
-      t, icon, sites: workspace.translator?.inlineSites ?? [],
+      t, icon, enabled: inlineTranslatorEnabled(),
       requestInWorker: inToolbarPopup,
-      onUpdate: (site, enabled, onError, requestPermission) =>
-        mutate("translator-inline-site", { site, enabled, requestPermission }, onError)
+      onUpdate: (enabled, onError, requestPermission) =>
+        mutate("translator-inline-enabled", { enabled, requestPermission }, onError)
     });
   } else if (activePage === "flashcards") {
     const add = button(t("flashcardAdd"), "primary-button", { symbol: "plus", onClick: () => editFlashcard() });
     add.id = "new-flashcard";
-    section(t("flashcards"), undefined, add);
+    const flashcardSettings = button(t("flashcardsSettings"), "icon-button flashcards-settings-button", {
+      symbol: "flashcards-settings", iconOnly: true
+    });
+    flashcardSettings.id = "flashcard-settings-button";
+    const actions = node("div", "module-title-actions");
+    actions.append(add, flashcardSettings);
+    section(t("flashcards"), undefined, actions);
     const body = node("div");
     view.append(body);
     flashcardLocale = workspace.locale;
     flashcardController = renderFlashcards(body, {
       locale: workspace.locale, t, icon, state: workspace.flashcards,
+      settingsButton: flashcardSettings, addButton: add,
       onPreferences: (patch) => mutate("flashcard-preferences", patch),
       onAdd: () => editFlashcard(),
       onEdit: editFlashcard,
@@ -1004,6 +1022,10 @@ function translatorOptions() {
     accountId: translatorAccountId,
     folders: workspace.folders.map((folder) => ({ ...folder, locked: folderLocked(folder) }))
   };
+}
+
+function inlineTranslatorEnabled() {
+  return workspace.translator?.inlineEnabled === true;
 }
 
 async function signInForTranslation() {
@@ -1691,30 +1713,53 @@ function prepareCopy(snippet) {
 }
 
 async function copySnippet(snippet, text) {
+  if (copyInProgress) return false;
   const current = workspace.snippets.find(({ id }) => id === snippet.id);
   if (!current || !snippetReadable(current)) {
     reportError("vaultLocked");
     return false;
   }
   const folder = folderFor(current.folderId);
-  if (folder?.protected && !await mutate("authorize-vault-copy", { id: current.id })) return false;
+  const feedback = folder?.protected && vaultPolicyFor(folder.vaultPolicy) === "after-copy"
+    ? { folderId: folder.id, copied: false } : undefined;
+  clearTimeout(copyTimer);
+  copyInProgress = true;
+  copiedId = undefined;
+  vaultCopyFeedback = feedback;
+  let copied = false;
   try {
+    if (folder?.protected && !await mutate("authorize-vault-copy", { id: current.id })) return false;
     await navigator.clipboard.writeText(text);
+    copied = true;
+    if (feedback) feedback.copied = true;
   } catch {
     showToast(t("copyFailed"), undefined, true);
     return false;
+  } finally {
+    copyInProgress = false;
+    if (!copied) {
+      vaultCopyFeedback = undefined;
+      render();
+    }
   }
   copiedId = snippet.id;
   render();
-  showToast(t("copied"));
-  clearTimeout(copyTimer);
+  if (!feedback || activePage !== "clipboard" || query || activeFolder !== feedback.folderId) showToast(t("copied"));
   copyTimer = setTimeout(() => {
-    if (inToolbarPopup) window.close();
+    if (inToolbarPopup) {
+      window.close();
+      return;
+    }
     copiedId = undefined;
+    if (feedback) {
+      vaultCopyFeedback = undefined;
+      render();
+      return;
+    }
     for (const row of view.querySelectorAll(".is-copied")) row.classList.remove("is-copied");
     const rowIcon = document.getElementById(`snippet-${snippet.id}`)?.querySelector(".row-copy-icon");
     if (rowIcon) rowIcon.innerHTML = icon("copy");
-  }, inToolbarPopup ? 420 : 1800);
+  }, inToolbarPopup ? (feedback ? 1000 : 420) : 1800);
   return true;
 }
 

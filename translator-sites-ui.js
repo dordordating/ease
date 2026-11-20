@@ -1,4 +1,4 @@
-import { normalizeTranslatorSite, requestTranslatorSitePermission } from "./translator-site-access.js";
+import { requestInlineTranslatorPermission } from "./translator-site-access.js";
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -7,89 +7,58 @@ function element(tag, className, text) {
   return node;
 }
 
-export function renderTranslatorSites(parent, { t, icon, sites: initialSites, requestInWorker, onUpdate }) {
+export function renderTranslatorSites(parent, { t, enabled: initialEnabled, requestInWorker, onUpdate }) {
   const section = element("section", "translator-inline-sites");
   const title = element("h3", "", t("translatorInline"));
   const hint = element("p", "", t("translatorInlineHint"));
-  const form = element("form", "translator-site-form");
-  const label = element("label", "translator-field");
-  const input = element("input");
-  input.type = "text";
-  input.dir = "ltr";
-  input.autocomplete = "url";
-  input.spellcheck = false;
-  input.placeholder = t("translatorInlinePlaceholder");
-  label.append(element("span", "", t("translatorInlineSite")), input);
-  const enable = element("button", "secondary-button", t("translatorInlineEnable"));
-  enable.type = "submit";
+  const privacy = element("p", "", t("translatorInlinePrivacy"));
+  const control = element("button", "secondary-button translator-inline-switch");
+  control.type = "button";
+  control.setAttribute("role", "switch");
+  const indicator = element("span", "translator-inline-switch-indicator");
+  indicator.setAttribute("aria-hidden", "true");
+  control.append(element("span", "", t("translatorInlineEnable")), indicator);
   const status = element("p", "translator-feedback");
   status.setAttribute("role", "status");
   status.hidden = true;
-  const list = element("ul", "translator-site-list");
-  form.append(label, enable);
-  section.append(title, hint, form, status, list);
+  section.append(title, hint, privacy, control, status);
   parent.append(section);
+  let enabled;
 
-  function report(key, values, kind = "error") {
+  function report(key, kind = "error") {
     status.hidden = !key;
-    status.textContent = key ? t(key, values) : "";
+    status.textContent = key ? t(key) : "";
     status.dataset.kind = kind;
   }
 
-  function update(sites) {
-    list.replaceChildren();
-    list.hidden = !sites.length;
-    for (const site of sites) {
-      const row = element("li", "translator-site-row");
-      const name = element("span", "", new URL(site).hostname);
-      name.title = site;
-      name.dir = "ltr";
-      const remove = element("button", "icon-button");
-      const removeLabel = t("translatorInlineRemove", { site: name.textContent });
-      remove.type = "button";
-      remove.title = removeLabel;
-      remove.setAttribute("aria-label", removeLabel);
-      remove.innerHTML = icon("close");
-      remove.addEventListener("click", async () => {
-        remove.disabled = true;
-        report();
-        if (!await onUpdate(site, false, (code) => report(code))) remove.disabled = false;
-      });
-      row.append(name, remove);
-      list.append(row);
-    }
+  function update(value) {
+    enabled = value === true;
+    control.setAttribute("aria-checked", String(enabled));
   }
 
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    if (enable.disabled) return;
-    const site = normalizeTranslatorSite(input.value);
-    if (!site) {
-      report("translatorInlineInvalid");
-      return;
-    }
-    enable.disabled = true;
+  control.addEventListener("click", async () => {
+    if (control.disabled) return;
+    const next = !enabled;
+    control.disabled = true;
     report();
     try {
-      const permissionError = requestInWorker ? null : await requestTranslatorSitePermission(site);
+      // Permission prompts in a toolbar popup are requested on the first worker message hop.
+      const permissionError = next && !requestInWorker ? await requestInlineTranslatorPermission() : null;
       if (permissionError) {
         report(permissionError);
         return;
       }
-      if (await onUpdate(site, true, (code) => report(code), requestInWorker)) {
-        input.value = "";
-        report("translatorInlineEnabled", { site: new URL(site).hostname }, "info");
+      if (await onUpdate(next, (code) => report(code), next && requestInWorker)) {
+        update(next);
+        if (next) report("translatorInlineEnabled", "info");
       }
     } catch {
       report("translatorInlineFailed");
     } finally {
-      enable.disabled = false;
+      control.disabled = false;
     }
   });
 
-  chrome.tabs?.query?.({ active: true, currentWindow: true }).then(([tab]) => {
-    if (!input.value) input.value = normalizeTranslatorSite(tab?.url) ?? "";
-  }).catch(() => {});
-  update(initialSites);
+  update(initialEnabled);
   return { update };
 }

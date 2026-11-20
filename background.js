@@ -10,8 +10,8 @@ import { easeTranslationMessage, handleEaseTranslationMessage } from "./ease-api
 import { changeFlashcardPreferences, FlashcardError, removeFlashcard, reviewFlashcard, saveFlashcard } from "./flashcard-store.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
 import {
-  configureTranslatorSite, injectTranslatorOnActiveSite, normalizeTranslatorSite, registerTranslatorSiteHandlers,
-  requestTranslatorSitePermission
+  configureInlineTranslator, injectInlineTranslatorOnActiveTab, registerTranslatorSiteHandlers,
+  requestInlineTranslatorPermission
 } from "./translator-site-access.js";
 import {
   createFolderPin, createFolderVault, openSnippet, rewrapFolderPin, sealSnippet, unlockFolderPin, unlockFolderVault,
@@ -301,24 +301,16 @@ async function updateWorkspace(workspace, action, data, transaction) {
       workspace.translator = settings;
       break;
     }
-    case "translator-inline-site": {
-      const site = normalizeTranslatorSite(data.site);
-      if (!site) return "translatorInlineInvalid";
+    case "translator-inline-enabled": {
       if (typeof data.enabled !== "boolean") return "translatorInlineFailed";
       const settings = { ...defaultTranslator, ...workspace.translator };
       try {
-        await configureTranslatorSite(site, data.enabled);
+        await configureInlineTranslator(data.enabled);
       } catch {
         return "translatorInlineFailed";
       }
-      const sites = new Set(settings.inlineSites);
-      if (data.enabled) {
-        sites.add(site);
-        transaction.afterCommit = () => injectTranslatorOnActiveSite(site);
-      } else {
-        sites.delete(site);
-      }
-      workspace.translator = { ...settings, inlineSites: [...sites] };
+      workspace.translator = { ...settings, inlineEnabled: data.enabled, inlineSites: [] };
+      if (data.enabled) transaction.afterCommit = injectInlineTranslatorOnActiveTab;
       break;
     }
     case "flashcard-preferences":
@@ -484,13 +476,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (fromWorkspace) return handleEaseTranslationMessage(message, respond);
     return;
   }
-  if (!["ease-workspace-read", "ease-workspace-update"].includes(message?.type)) return;
+  if (!fromWorkspace || !["ease-workspace-read", "ease-workspace-update"].includes(message?.type)) return;
 
-  const requestSite = message.type === "ease-workspace-update" && message.action === "translator-inline-site"
+  const requestInline = message.type === "ease-workspace-update" && message.action === "translator-inline-enabled"
     && message.data?.enabled === true && message.data.requestPermission === true;
   // Start permission UI on the first message hop so a toolbar popup can close without losing the action.
-  const permission = requestSite && fromWorkspace
-    ? requestTranslatorSitePermission(normalizeTranslatorSite(message.data.site)) : null;
+  const permission = requestInline ? requestInlineTranslatorPermission() : null;
   const result = queueWorkspace(async () => {
     const permissionError = await permission;
     if (permissionError) return { error: permissionError };

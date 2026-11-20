@@ -27,10 +27,10 @@ const enginePicker = `
       ${translatorEngines.map((engine) => `
         <label class="translator-engine-option">
           <input type="radio" name="engine" value="${engine}">
-          <span>
+          <span class="translator-engine-face">
             <span class="translator-engine-name" data-label="${engineLabels[engine]}"></span>
-            ${engine === defaultTranslator.engine ? "" : '<span class="translator-ai-badge" lang="en">AI</span>'}
           </span>
+          ${engine === defaultTranslator.engine ? "" : '<span class="translator-ai-badge" lang="en">AI</span>'}
         </label>`).join("")}
     </div>
   </fieldset>
@@ -101,6 +101,10 @@ export function renderTranslator(container, {
           </details>
         </section>
       </div>
+      <div class="translator-loading" role="status" hidden>
+        <span class="translator-loading-orbit" aria-hidden="true"></span>
+        <span data-label="translatorWorking"></span>
+      </div>
       <div class="translator-actions" hidden>
         <button type="button" class="secondary-button translator-save">${icon("folder")}<span data-label="translatorSave"></span></button>
         <button type="button" id="translator-flashcard" class="secondary-button translator-flashcard" hidden>${icon("flashcards")}<span data-label="translatorAddFlashcard"></span></button>
@@ -149,6 +153,7 @@ export function renderTranslator(container, {
   const learningDetails = form.querySelector(".translator-learning");
   const learningRows = Array.from(learningDetails.querySelectorAll("[data-learning]"));
   const feedback = form.querySelector(".translator-feedback");
+  const loading = form.querySelector(".translator-loading");
   const progress = form.querySelector(".translator-progress");
   const layoutSelect = settingsView.querySelector("[data-translator-layout]");
   const folderSelect = settingsView.querySelector("[data-translator-folder]");
@@ -266,8 +271,8 @@ export function renderTranslator(container, {
     saveButton.disabled = !canUseResult;
     flashcardButton.hidden = !onFlashcard || !draft.result;
     flashcardButton.disabled = !canUseResult;
-    result.hidden = !draft.result && !request;
-    result.setAttribute("aria-busy", String(Boolean(request)));
+    result.hidden = !draft.result;
+    loading.hidden = !request || !online();
     if (output.textContent !== (draft.result ?? "")) output.textContent = draft.result ?? "";
     output.tabIndex = draft.result ? 0 : -1;
     output.lang = preferences.target;
@@ -384,7 +389,7 @@ export function renderTranslator(container, {
     const pending = new AbortController();
     request = pending;
     const current = () => !disposed && request === pending && !pending.signal.aborted;
-    setFeedback("translatorWorking");
+    setFeedback(online() ? undefined : "translatorWorking");
     render();
     try {
       const options = {

@@ -41,6 +41,7 @@ async function runModel(api, options, { signal, onProgress, unavailable }, run) 
     if (availability === "downloadable" && globalThis.navigator?.userActivation?.isActive === false) {
       throw new TranslationError("translatorNeedsDownload");
     }
+    if (availability === "downloadable" || availability === "downloading") onProgress?.(0);
     model = await api.create({
       ...options,
       signal,
@@ -124,8 +125,13 @@ async function detectLanguage(text, signal, onProgress) {
   try {
     return await detectWithModel(text, signal, onProgress);
   } catch (error) {
-    if (error?.code !== "translatorDetectionUnavailable") throw error;
-    return detectWithExtension(text, signal);
+    if (error?.code !== "translatorDetectionUnavailable" && error?.code !== "translatorNeedsDownload") throw error;
+    try {
+      return await detectWithExtension(text, signal);
+    } catch (fallbackError) {
+      if (fallbackError?.code !== "translatorDetectionUnavailable") throw fallbackError;
+      throw error;
+    }
   }
 }
 

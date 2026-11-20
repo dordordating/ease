@@ -21,7 +21,7 @@ export const folderIcons = ["folder", "briefcase", "user", "star", "link"];
 export const maxPinnedFolders = 2;
 export const defaultCalendar = { system: null, view: "month", firstDay: null, eventDisplay: "dots" };
 export const translatorEngines = ["chrome", "economy", "standard", "premium"];
-export const defaultTranslator = { engine: "chrome", source: "auto", target: "en", layout: "both", folderId: null, inlineSites: [] };
+export const defaultTranslator = { engine: "chrome", source: "auto", target: "en", layout: "both", folderId: null, inlineEnabled: false, inlineSites: [] };
 
 export function calendarSystemFor(locale, system) {
   return system ?? (new Intl.Locale(locale).language === "fa" ? "persian" : "gregory");

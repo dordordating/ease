@@ -4,6 +4,10 @@
   globalThis[installed] = true;
 
   const editableSelector = "input, textarea, select, [role='textbox'], [role='searchbox'], [contenteditable]:not([contenteditable='false' i])";
+  const onlineMessage = "ease-translator-inline-online";
+  const engineLabels = {
+    chrome: "translatorChrome", economy: "translatorEconomy", standard: "translatorStandard", premium: "translatorPremium"
+  };
   const popoverStyle = `
     :host {
       all: initial !important;
@@ -146,6 +150,33 @@
     return engine;
   }
 
+  async function translateOnline(text, signal) {
+    signal.throwIfAborted();
+    const requestId = crypto.randomUUID();
+    let abort;
+    try {
+      const pending = chrome.runtime.sendMessage({ type: onlineMessage, requestId, text });
+      const reply = await Promise.race([
+        pending,
+        new Promise((_, reject) => {
+          abort = () => {
+            Promise.resolve().then(() => chrome.runtime.sendMessage({
+              type: onlineMessage, requestId, cancel: true
+            })).catch(() => {});
+            reject(signal.reason);
+          };
+          signal.addEventListener("abort", abort, { once: true });
+          if (signal.aborted) abort();
+        })
+      ]);
+      signal.throwIfAborted();
+      if (reply?.ok && typeof reply.text === "string") return { text: reply.text };
+      throw Object.assign(new Error("Inline translation failed"), { code: reply?.code ?? "translatorOnlineUnavailable" });
+    } finally {
+      if (abort) signal.removeEventListener("abort", abort);
+    }
+  }
+
   function positionPopover(job) {
     if (!job.host || !job.sample.range.startContainer.isConnected) {
       closePopover();
@@ -228,7 +259,7 @@
     const title = document.createElement("strong");
     title.textContent = label;
     const subtitle = document.createElement("small");
-    subtitle.textContent = localized(job, "translatorChrome", "On-device");
+    subtitle.textContent = localized(job, engineLabels[job.settings.engine] ?? "translatorChrome", "On-device");
     heading.append(title, subtitle);
     const close = document.createElement("button");
     close.type = "button";
@@ -254,7 +285,8 @@
     run.className = "run";
     run.textContent = localized(job, "translatorRun", "Translate");
     run.hidden = true;
-    run.addEventListener("click", async () => {
+    run.addEventListener("click", async (event) => {
+      if (!event.isTrusted) return;
       run.disabled = true;
       const settings = await readSettings();
       if (current !== job) return;
@@ -264,6 +296,7 @@
       }
       if (settings.source !== job.settings.source) job.detectedSource = undefined;
       job.settings = settings;
+      subtitle.textContent = localized(job, engineLabels[settings.engine] ?? "translatorChrome", "On-device");
       await translate(job);
       run.disabled = false;
     });
@@ -294,16 +327,21 @@
       schedulePosition();
     };
     try {
-      const { chromeTranslate } = await loadEngine();
-      controller.signal.throwIfAborted();
-      const translated = await chromeTranslate(job.sample.text, {
-        source: job.settings.source,
-        target: job.settings.target,
-        signal: controller.signal,
-        detectedSource: job.detectedSource,
-        onDetected: (language) => { job.detectedSource = language; },
-        onProgress: updateProgress
-      });
+      let translated;
+      if (job.settings.engine && job.settings.engine !== "chrome") {
+        translated = await translateOnline(job.sample.text, controller.signal);
+      } else {
+        const { chromeTranslate } = await loadEngine();
+        controller.signal.throwIfAborted();
+        translated = await chromeTranslate(job.sample.text, {
+          source: job.settings.source,
+          target: job.settings.target,
+          signal: controller.signal,
+          detectedSource: job.detectedSource,
+          onDetected: (language) => { job.detectedSource = language; },
+          onProgress: updateProgress
+        });
+      }
       if (current !== job || controller.signal.aborted) return;
       job.status.hidden = true;
       job.result.textContent = translated.text;
@@ -371,6 +409,7 @@
     closePopover();
   }, true);
   window.addEventListener("scroll", schedulePosition, { capture: true, passive: true });
+  window.addEventListener("pagehide", closePopover);
   window.addEventListener("resize", schedulePosition, { passive: true });
   window.visualViewport?.addEventListener("scroll", schedulePosition, { passive: true });
   window.visualViewport?.addEventListener("resize", schedulePosition, { passive: true });

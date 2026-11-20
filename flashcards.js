@@ -1,4 +1,4 @@
-import { flashcardQueue } from "./flashcard-store.js";
+import { flashcardIntervalLimits, flashcardQueue, flashcardReviewIntervals } from "./flashcard-store.js";
 import { translatorLanguages } from "./translator-engine.js";
 
 const directionLabels = {
@@ -11,6 +11,12 @@ const ratingLabels = {
   hard: "flashcardsHard",
   good: "flashcardsGood",
   easy: "flashcardsEasy"
+};
+const intervalLabels = {
+  again: "flashcardsAgainInterval",
+  hard: "flashcardsHardInterval",
+  good: "flashcardsGoodInterval",
+  easy: "flashcardsEasyInterval"
 };
 
 function element(tag, className, text) {
@@ -48,7 +54,7 @@ function matchingVoice(voices, language) {
 }
 
 export function renderFlashcards(container, {
-  locale, t, icon, state: initialState, onPreferences, onAdd, onEdit, onDelete, onReview
+  locale, t, icon, state: initialState, settingsButton, addButton, onPreferences, onAdd, onEdit, onDelete, onReview
 }) {
   const names = new Intl.DisplayNames([locale], { type: "language" });
   const numbers = new Intl.NumberFormat(locale);
@@ -56,6 +62,7 @@ export function renderFlashcards(container, {
   const synthesis = globalThis.speechSynthesis;
   let state = initialState;
   let view = "study";
+  let showingSettings = false;
   let query = "";
   let currentReview;
   let revealed = false;
@@ -89,10 +96,8 @@ export function renderFlashcards(container, {
   const navigation = element("div", "flashcards-nav");
   navigation.setAttribute("role", "group");
   navigation.setAttribute("aria-label", t("flashcards"));
-  const nav = Object.fromEntries(["study", "browse", "settings"].map((name, index) => {
-    const label = t(["flashcardsStudy", "flashcardsBrowse", "flashcardsSettings"][index]);
-    const control = button(label, "flashcards-nav-button", () => switchView(name),
-      name === "settings" ? "settings" : undefined, name === "settings");
+  const nav = Object.fromEntries([["study", "flashcardsStudy"], ["browse", "flashcardsBrowse"]].map(([name, label]) => {
+    const control = button(t(label), "flashcards-nav-button", () => switchView(name));
     navigation.append(control);
     return [name, control];
   }));
@@ -103,11 +108,20 @@ export function renderFlashcards(container, {
   language.addEventListener("change", () => savePreferences({ language: language.value }));
   const languageField = field(t("flashcardLanguage"), language, "flashcards-field flashcards-language");
   const pane = element("div", "flashcards-pane");
+  const settingsView = element("section", "flashcards-settings-view");
+  settingsView.id = "flashcards-settings";
+  const settingsHeading = element("h2", undefined, t("flashcardsSettings"));
+  settingsHeading.id = "flashcards-settings-heading";
+  settingsView.setAttribute("aria-labelledby", settingsHeading.id);
+  const settingsPane = element("div", "flashcards-settings-pane");
+  settingsView.append(settingsHeading, settingsPane);
   const status = element("p", "flashcards-feedback");
   status.setAttribute("role", "status");
   status.hidden = true;
   module.append(navigation, languageField, pane, status);
-  container.append(module);
+  container.append(module, settingsView);
+  settingsButton?.setAttribute("aria-controls", settingsView.id);
+  settingsButton?.addEventListener("click", toggleSettings);
 
   function feedback(key) {
     status.textContent = key ? t(key) : "";
@@ -128,6 +142,24 @@ export function renderFlashcards(container, {
     render();
   }
 
+  function reflectSettings() {
+    if (!settingsButton) return;
+    const label = t(showingSettings ? "close" : "flashcardsSettings");
+    settingsButton.title = label;
+    settingsButton.setAttribute("aria-label", label);
+    settingsButton.setAttribute("aria-expanded", String(showingSettings));
+  }
+
+  function toggleSettings() {
+    stopSpeaking();
+    showingSettings = !showingSettings;
+    settingsPane.replaceChildren();
+    feedback();
+    render();
+    const workspace = container.closest(".workspace");
+    if (workspace) workspace.scrollTop = 0;
+  }
+
   async function savePreferences(patch) {
     if (busy) return;
     feedback();
@@ -136,7 +168,7 @@ export function renderFlashcards(container, {
     try {
       accepted = await onPreferences(patch) === true;
     } catch {
-      // Restore the last saved settings when the write fails.
+      // Leave the draft fields available for a retry.
     }
     if (disposed) return;
     setBusy(false);
@@ -150,7 +182,8 @@ export function renderFlashcards(container, {
     busy = value;
     language.disabled = busy;
     module.setAttribute("aria-busy", String(busy));
-    pane.querySelectorAll("[data-flashcards-write]").forEach(control => { control.disabled = busy; });
+    settingsView.setAttribute("aria-busy", String(busy));
+    container.querySelectorAll("[data-flashcards-write]").forEach(control => { control.disabled = busy; });
   }
 
   function summary(queue) {
@@ -242,7 +275,7 @@ export function renderFlashcards(container, {
     if (disposed) return;
     setBusy(false);
     if (!accepted) feedback("flashcardReviewChanged");
-    if (view === "study") {
+    if (view === "study" && !showingSettings) {
       if (accepted) render();
       pane.querySelector(accepted ? ".flashcards-reveal, .flashcards-empty h2" : `.flashcards-rating[data-rating="${rating}"]`)
         ?.focus({ preventScroll: true });
@@ -354,47 +387,75 @@ export function renderFlashcards(container, {
     pane.append(filter, list, noResults);
   }
 
-  function showSettings() {
+  function renderSettingsForm() {
     const form = element("form", "flashcards-preferences");
     const direction = element("select", "flashcards-select");
     for (const [value, label] of Object.entries(directionLabels)) direction.add(new Option(t(label), value));
     direction.value = state.direction;
+    direction.dataset.flashcardsWrite = "";
     const limits = element("div", "flashcards-limits");
-    function limitInput(label, value, max) {
+    function numberInput(group, label, value, min, max) {
       const input = element("input", "flashcards-limit");
       input.type = "number";
       input.required = true;
-      input.min = "0";
+      input.min = String(min);
       input.max = String(max);
       input.value = String(value);
-      limits.append(field(t(label), input));
+      input.dataset.flashcardsWrite = "";
+      group.append(field(t(label), input));
       return input;
     }
-    const newLimit = limitInput("flashcardsNewLimit", state.newPerDay, 100);
-    const reviewLimit = limitInput("flashcardsReviewLimit", state.reviewsPerDay, 500);
+    const newLimit = numberInput(limits, "flashcardsNewLimit", state.newPerDay, 0, 100);
+    const reviewLimit = numberInput(limits, "flashcardsReviewLimit", state.reviewsPerDay, 0, 500);
+    const intervals = element("fieldset", "flashcards-intervals");
+    const intervalFields = element("div", "flashcards-limits");
+    intervals.append(element("legend", undefined, t("flashcardsIntervals")), intervalFields);
+    const savedIntervals = flashcardReviewIntervals(state);
+    const reviewIntervals = Object.fromEntries(Object.entries(intervalLabels).map(([rating, label]) => [
+      rating, numberInput(intervalFields, label, savedIntervals[rating], 1, flashcardIntervalLimits[rating])
+    ]));
     const save = element("button", "primary-button", t("save"));
     save.type = "submit";
     save.dataset.flashcardsWrite = "";
-    form.append(field(t("flashcardsDirection"), direction), limits, save);
+    form.append(field(t("flashcardsDirection"), direction), limits, intervals, save);
+    form.addEventListener("input", () => feedback());
     form.addEventListener("submit", event => {
       event.preventDefault();
-      savePreferences({ direction: direction.value, newPerDay: newLimit.valueAsNumber, reviewsPerDay: reviewLimit.valueAsNumber });
+      const values = Object.fromEntries(Object.entries(reviewIntervals).map(([rating, input]) => [rating, input.valueAsNumber]));
+      if (values.hard > values.good || values.good > values.easy) {
+        feedback("flashcardsIntervalOrder");
+        (values.hard > values.good ? reviewIntervals.good : reviewIntervals.easy).focus();
+        return;
+      }
+      savePreferences({
+        direction: direction.value, newPerDay: newLimit.valueAsNumber, reviewsPerDay: reviewLimit.valueAsNumber,
+        reviewIntervals: values
+      });
     });
-    pane.append(form);
+    settingsPane.append(form);
   }
 
   function render() {
     clearTimeout(dueTimer);
     pronunciation = undefined;
+    module.hidden = showingSettings;
+    settingsView.hidden = !showingSettings;
+    if (addButton) addButton.hidden = showingSettings;
+    reflectSettings();
+    if (showingSettings) {
+      if (!settingsPane.childElementCount) renderSettingsForm();
+      settingsView.append(status);
+      setBusy(busy);
+      return;
+    }
+    module.append(status);
     const focusedFilter = pane.querySelector(".flashcards-filter:focus");
     const selection = focusedFilter && [focusedFilter.selectionStart, focusedFilter.selectionEnd];
     language.value = state.language;
     for (const [name, control] of Object.entries(nav)) control.setAttribute("aria-pressed", String(name === view));
     const cards = state.cards.filter(card => card.language === state.language);
-    languageField.hidden = view === "settings";
     pane.replaceChildren();
     if (view === "browse") showBrowse(cards);
-    else if (view === "settings") showSettings();
     else showStudy(cards);
     setBusy(busy);
     const nextFilter = selection && pane.querySelector(".flashcards-filter");
@@ -420,6 +481,11 @@ export function renderFlashcards(container, {
       disposed = true;
       clearTimeout(dueTimer);
       stopSpeaking();
+      settingsButton?.removeEventListener("click", toggleSettings);
+      settingsButton?.removeAttribute("aria-controls");
+      showingSettings = false;
+      reflectSettings();
+      if (addButton) addButton.hidden = false;
       synthesis?.removeEventListener("voiceschanged", updatePronunciation);
     }
   };

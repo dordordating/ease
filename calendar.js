@@ -449,10 +449,11 @@ export function renderCalendar(container, {
       section.className = 'calendar-week-day';
       section.setAttribute('role', 'listitem');
       section.append(makeDayButton(day, today, dayEvents, mode, true));
-      if (dayEvents.length && (mode === 'cards' || mode === 'titles')) {
+      const showCards = mode === 'cards' && day >= selectedDay;
+      if (dayEvents.length && (showCards || mode === 'titles')) {
         const events = document.createElement('div');
         events.className = 'calendar-week-events';
-        if (mode === 'cards') events.append(...dayEvents.map(event => eventItem(event, true)));
+        if (showCards) events.append(...dayEvents.map(event => eventItem(event, true)));
         else events.append(titleMarkers(dayEvents, 2));
         section.append(events);
       }
@@ -462,7 +463,7 @@ export function renderCalendar(container, {
 
   function renderMonthCards(firstDate, end) {
     monthCards.replaceChildren();
-    for (let day = firstDate; day < end; day += 1) {
+    for (let day = Math.max(firstDate, selectedDay); day < end; day += 1) {
       const dayEvents = eventsByDate.get(dayKey(day));
       if (!dayEvents?.length) continue;
       const group = document.createElement('section');

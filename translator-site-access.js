@@ -1,95 +1,226 @@
+import { handleEaseTranslationMessage, maxOnlineTranslationLength } from "./ease-api.js";
 import { isRtl, translate } from "./locales.js";
-import { defaultTranslator, readWorkspace } from "./workspace-data.js";
+import { maxTranslationLength, translatorLanguages } from "./translator-engine.js";
+import { defaultTranslator, readWorkspace, translatorEngines } from "./workspace-data.js";
 
-const prefix = "ease-translator-site-";
+const legacyScriptPrefix = "ease-translator-site-";
+const scriptId = "ease-translator-inline-global";
 const scriptPath = "translator-inline.js";
-const inlineMessage = "ease-translator-inline-settings";
+const httpsPattern = "https://*/*";
+const httpsPermission = { origins: [httpsPattern] };
+const inlineSettingsMessage = "ease-translator-inline-settings";
+const inlineOnlineMessage = "ease-translator-inline-online";
+const requestIdPattern = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu;
 const inlineLabels = [
-  "translatorRun", "translatorChrome", "translatorOutput", "translatorUnavailable",
-  "translatorPairUnavailable", "translatorDetectionUnavailable", "translatorNeedsDownload",
-  "translatorDownloading", "translatorWorking", "translatorFailed", "translatorTooLong", "close"
+  "translatorRun", "translatorChrome", "translatorEconomy", "translatorStandard", "translatorPremium",
+  "translatorOutput", "translatorUnavailable", "translatorPairUnavailable", "translatorDetectionUnavailable",
+  "translatorNeedsDownload", "translatorDownloading", "translatorWorking", "translatorFailed", "translatorTooLong",
+  "translatorOnlineSignIn", "translatorOnlineUnavailable", "translatorOnlineLimit", "translatorOnlineBusy", "close"
 ];
+const onlineErrorKeys = new Set([
+  "translatorOnlineSignIn", "translatorOnlineUnavailable", "translatorOnlineLimit", "translatorOnlineBusy",
+  "translatorFailed", "translatorTooLong"
+]);
+const activeOnlineRequests = new Map();
 
-export function normalizeTranslatorSite(value) {
-  if (typeof value !== "string" || !value.trim()) return null;
-  const candidate = value.trim();
+function eligiblePage(value) {
+  if (typeof value !== "string") return null;
   try {
-    const url = new URL(candidate.includes("://") ? candidate : `https://${candidate}`);
-    if (url.protocol !== "https:" || !url.hostname || url.hostname.includes("*")
-      || url.username || url.password || url.port) return null;
-    return url.origin;
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password) return null;
+    if (url.hostname === "chromewebstore.google.com"
+      || (url.hostname === "chrome.google.com" && /^\/webstore(?:\/|$)/u.test(url.pathname))) return null;
+    return url;
   } catch {
     return null;
   }
 }
 
-export const translatorSitePattern = (site) => `${site}/*`;
+function hostPermission(url) {
+  return { origins: [`https://${url.hostname}/*`] };
+}
 
-export async function requestTranslatorSitePermission(site) {
-  if (!site) return "translatorInlineInvalid";
+export async function requestInlineTranslatorPermission() {
   try {
-    const granted = await chrome.permissions.request({ origins: [translatorSitePattern(site)] });
+    const granted = await chrome.permissions.request(httpsPermission);
     return granted ? null : "translatorInlineDenied";
   } catch {
     return "translatorInlineFailed";
   }
 }
 
-async function siteScriptId(site) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(site));
-  return prefix + Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+export async function configureInlineTranslator(enabled) {
+  const registered = await chrome.scripting.getRegisteredContentScripts();
+  const ids = registered.map(({ id }) => id);
+  if (enabled) {
+    if (!await chrome.permissions.contains(httpsPermission)) throw new Error("Inline permission is missing");
+    if (!ids.includes(scriptId)) {
+      await chrome.scripting.registerContentScripts([{
+        id: scriptId,
+        js: [scriptPath],
+        matches: [httpsPattern],
+        persistAcrossSessions: true,
+        runAt: "document_idle"
+      }]);
+    }
+  }
+  const stale = ids.filter((id) => id.startsWith(legacyScriptPrefix) || (!enabled && id === scriptId));
+  if (stale.length) await chrome.scripting.unregisterContentScripts({ ids: stale });
 }
 
-function registeredScript(site, id) {
-  return { id, js: [scriptPath], matches: [translatorSitePattern(site)], persistAcrossSessions: true, runAt: "document_idle" };
+export async function injectInlineTranslatorOnActiveTab() {
+  try {
+    const tabs = await chrome.tabs.query({ active: true });
+    await Promise.allSettled(tabs.map(async ({ id, url }) => {
+      const page = eligiblePage(url);
+      if (Number.isInteger(id) && page && await chrome.permissions.contains(hostPermission(page))) {
+        await chrome.scripting.executeScript({ target: { tabId: id }, files: [scriptPath] });
+      }
+    }));
+  } catch {
+    // Persistent registration also covers the next navigation to an eligible site.
+  }
 }
 
-export async function configureTranslatorSite(site, enabled) {
-  const id = await siteScriptId(site);
-  const [current] = await chrome.scripting.getRegisteredContentScripts({ ids: [id] });
-  if (!enabled) {
-    if (current) await chrome.scripting.unregisterContentScripts({ ids: [id] });
+async function restoreLegacySites(sites, registered) {
+  const existing = new Set(registered.map(({ id }) => id));
+  const scripts = await Promise.all([...new Set(sites)].map(async (site) => {
+    const page = eligiblePage(site);
+    if (!page || page.origin !== site || !await chrome.permissions.contains(hostPermission(page))) return null;
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(site));
+    const id = legacyScriptPrefix + Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return existing.has(id) ? null : {
+      id, js: [scriptPath], matches: hostPermission(page).origins, persistAcrossSessions: true, runAt: "document_idle"
+    };
+  }));
+  const missing = scripts.filter(Boolean);
+  if (missing.length) await chrome.scripting.registerContentScripts(missing);
+}
+
+async function restoreInlineRegistration() {
+  const { translator } = await readWorkspace();
+  if (translator?.inlineEnabled) {
+    if (await chrome.permissions.contains(httpsPermission)) await configureInlineTranslator(true);
     return;
   }
-  if (!await chrome.permissions.contains({ origins: [translatorSitePattern(site)] })) {
-    throw new Error("Site permission is missing");
-  }
-  if (!current) await chrome.scripting.registerContentScripts([registeredScript(site, id)]);
-}
-
-export async function injectTranslatorOnActiveSite(site) {
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!Number.isInteger(tab?.id) || normalizeTranslatorSite(tab.url) !== site) return;
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: [scriptPath] });
-  } catch {
-    // The persistent registration also runs on the next navigation to this site.
+  // Retain previously granted individual sites until the user changes the global setting.
+  const registered = await chrome.scripting.getRegisteredContentScripts();
+  if (registered.some(({ id }) => id === scriptId)) await chrome.scripting.unregisterContentScripts({ ids: [scriptId] });
+  if (Array.isArray(translator?.inlineSites) && translator.inlineSites.length) {
+    await restoreLegacySites(translator.inlineSites, registered);
   }
 }
 
-async function activeSiteSettings(sender) {
-  if (sender.id !== chrome.runtime.id || !Number.isInteger(sender.tab?.id)
-    || typeof sender.url !== "string" || !sender.url.startsWith("https://")) return null;
-  const site = normalizeTranslatorSite(sender.url);
-  if (!site) return null;
+function contentSenderPage(sender) {
+  if (sender.id !== chrome.runtime.id || sender.frameId !== 0 || !Number.isInteger(sender.tab?.id)
+    || (sender.documentLifecycle && sender.documentLifecycle !== "active")) return null;
+  const page = eligiblePage(sender.url);
+  if (!page || (sender.origin && sender.origin !== page.origin)) return null;
+  return page;
+}
+
+async function activeSitePreferences(sender, page) {
+  const tab = await chrome.tabs.get(sender.tab.id);
+  if (!tab.active || eligiblePage(tab.url)?.origin !== page.origin) return null;
   const workspace = await readWorkspace();
   const preferences = { ...defaultTranslator, ...workspace.translator };
-  if (!preferences.inlineSites.includes(site)
-    || !await chrome.permissions.contains({ origins: [translatorSitePattern(site)] })) return null;
-
+  const globallyEnabled = preferences.inlineEnabled === true;
+  const legacyEnabled = Array.isArray(preferences.inlineSites) && preferences.inlineSites.includes(page.origin);
+  if ((!globallyEnabled && !legacyEnabled) || !await chrome.permissions.contains(hostPermission(page))) return null;
   return {
-    source: preferences.source,
-    target: preferences.target,
-    locale: workspace.locale,
-    dir: isRtl(workspace.locale) ? "rtl" : "ltr",
-    strings: Object.fromEntries(inlineLabels.map((label) => [label, translate(workspace.locale, label)]))
+    source: translatorLanguages.includes(preferences.source) ? preferences.source : defaultTranslator.source,
+    target: translatorLanguages.includes(preferences.target) ? preferences.target : defaultTranslator.target,
+    // Previously enabled sites were granted for on-device translation.
+    engine: globallyEnabled && translatorEngines.includes(preferences.engine) ? preferences.engine : defaultTranslator.engine,
+    locale: workspace.locale
   };
 }
 
+async function activeSiteSettings(sender, page) {
+  const settings = await activeSitePreferences(sender, page);
+  if (!settings) return null;
+  const { engine, locale } = settings;
+  const limit = new Intl.NumberFormat(locale).format(engine === "chrome" ? maxTranslationLength : maxOnlineTranslationLength);
+  return {
+    ...settings,
+    dir: isRtl(locale) ? "rtl" : "ltr",
+    strings: Object.fromEntries(inlineLabels.map((label) => [label, translate(locale, label, { limit })]))
+  };
+}
+
+function cancelInlineRequest(pending) {
+  if (!pending || pending.cancelled) return;
+  pending.cancelled = true;
+  if (pending.started) handleEaseTranslationMessage({ requestId: pending.id, cancel: true }, () => {});
+}
+
+function cancelInlineTab(tabId) {
+  for (const pending of activeOnlineRequests.values()) {
+    if (pending.tabId === tabId) cancelInlineRequest(pending);
+  }
+}
+
+function handleInlineOnline(message, sender, page, respond) {
+  const { requestId, text } = message;
+  if (!sender.documentId || typeof requestId !== "string" || !requestIdPattern.test(requestId)) {
+    respond({ ok: false, code: "translatorFailed" });
+    return false;
+  }
+  const key = `${sender.tab.id}:${sender.documentId}:${requestId}`;
+  if (message.cancel === true) {
+    cancelInlineRequest(activeOnlineRequests.get(key));
+    respond({ ok: true });
+    return false;
+  }
+  if (activeOnlineRequests.has(key) || typeof text !== "string" || !text.trim()) {
+    respond({ ok: false, code: "translatorFailed" });
+    return false;
+  }
+  if (text.length > maxOnlineTranslationLength * 2 || Array.from(text).length > maxOnlineTranslationLength) {
+    respond({ ok: false, code: "translatorTooLong" });
+    return false;
+  }
+
+  const pending = { id: crypto.randomUUID(), tabId: sender.tab.id, cancelled: false, started: false };
+  activeOnlineRequests.set(key, pending);
+  async function run() {
+    const settings = await activeSitePreferences(sender, page);
+    if (!settings || settings.engine === "chrome" || pending.cancelled) {
+      return { ok: false, code: "translatorOnlineUnavailable" };
+    }
+    pending.started = true;
+    const answer = await new Promise((resolve) => handleEaseTranslationMessage({
+      requestId: pending.id, text, source: settings.source, target: settings.target, engine: settings.engine
+    }, resolve));
+    const latest = await activeSitePreferences(sender, page);
+    if (pending.cancelled || !latest
+      || latest.engine !== settings.engine || latest.source !== settings.source || latest.target !== settings.target) {
+      return { ok: false, code: "translatorOnlineUnavailable" };
+    }
+    if (answer?.ok && typeof answer.result?.text === "string") return { ok: true, text: answer.result.text };
+    const code = onlineErrorKeys.has(answer?.code) ? answer.code : "translatorFailed";
+    return { ok: false, code };
+  }
+
+  run().then(respond, () => respond({ ok: false, code: "translatorOnlineUnavailable" }))
+    .finally(() => activeOnlineRequests.delete(key));
+  return true;
+}
+
 export function registerTranslatorSiteHandlers() {
+  const restore = () => restoreInlineRegistration().catch(() => {});
+  chrome.runtime.onInstalled?.addListener(restore);
+  chrome.runtime.onStartup?.addListener(restore);
+  chrome.tabs?.onRemoved?.addListener(cancelInlineTab);
+  chrome.tabs?.onUpdated?.addListener((tabId, change) => {
+    if (change.status === "loading") cancelInlineTab(tabId);
+  });
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
-    if (message?.type !== inlineMessage || sender.id !== chrome.runtime.id) return;
-    activeSiteSettings(sender).then((settings) => respond({ settings }), () => respond({ settings: null }));
+    if (message?.type !== inlineSettingsMessage && message?.type !== inlineOnlineMessage) return;
+    const page = contentSenderPage(sender);
+    if (!page) return;
+    if (message.type === inlineOnlineMessage) return handleInlineOnline(message, sender, page, respond);
+    activeSiteSettings(sender, page).then((settings) => respond({ settings }), () => respond({ settings: null }));
     return true;
   });
 }

@@ -15,9 +15,14 @@ const contextByRoute = { popup: "POPUP", panel: "SIDE_PANEL", tab: "TAB" };
 const activeCaptures = new Map();
 let pendingSelection = Promise.resolve();
 let pendingMenu = Promise.resolve();
+let lastShortcut = 0;
 
 function validTab(tab) {
-  return Number.isInteger(tab?.id) && tab.id >= 0 && Number.isInteger(tab.windowId) && tab.windowId >= 0;
+  return validId(tab?.id) && validId(tab.windowId);
+}
+
+function validId(id) {
+  return Number.isInteger(id) && id >= 0;
 }
 
 function tabKey(tabId, windowId) {
@@ -112,7 +117,7 @@ function readPageSelection(limit) {
   return { focused, text: document.getSelection()?.toString().trim().slice(0, limit) ?? "" };
 }
 
-async function scriptSelection(tabId, frameId) {
+async function scriptSelection(tabId, frameId, requireFocus = false) {
   function execute(target) {
     return chrome.scripting.executeScript({ target: { tabId, ...target }, func: readPageSelection, args: [maxSelectionLength] });
   }
@@ -128,16 +133,18 @@ async function scriptSelection(tabId, frameId) {
     }
   }
 
-  const selections = results.map(({ result }) => result).filter(Boolean);
-  const focused = selections.filter((selection) => selection.focused);
-  const candidates = focused.length ? focused : selections;
+  const focused = results.filter(({ result }) => result?.focused);
+  if (!focused.length && requireFocus) return "";
+  const available = frameId === undefined ? results.filter(({ frameId }) => frameId === 0) : results;
+  const matches = focused.length ? focused : available;
+  const candidates = matches.map(({ result }) => result).filter(Boolean);
   if (candidates.some((selection) => selection.blocked)) return "";
   return candidates.find((selection) => selection.text)?.text ?? "";
 }
 
 async function activeTabInWindow(windowId) {
   const [tab] = await chrome.tabs.query({ active: true, windowId });
-  return validTab(tab) ? tab : null;
+  return validTab(tab) && tab.windowId === windowId ? tab : null;
 }
 
 async function openSidePanel(tabId) {
@@ -191,9 +198,9 @@ function launchPanelSelection(tab, selection) {
   });
 }
 
-function launchShortcutSelection(tab) {
+function launchShortcutSelection(tab, requireFocus = false) {
   // Start reading while the original page is still focused.
-  const selection = scriptSelection(tab.id);
+  const selection = scriptSelection(tab.id, undefined, requireFocus);
   if (typeof chrome.action?.openPopup !== "function") {
     launchPanelSelection(tab, selection);
     return;
@@ -210,6 +217,20 @@ function launchShortcutSelection(tab) {
   });
 }
 
+function translateShortcut(command, tab) {
+  if (command !== commandId) return;
+  const request = ++lastShortcut;
+  if (validTab(tab)) {
+    launchShortcutSelection(tab);
+    return;
+  }
+  // Chrome may omit the tab. Only use the last focused active tab, and require
+  // the injected document to confirm it still has browser focus.
+  chrome.tabs.query({ active: true, lastFocusedWindow: true }).then(([active]) => {
+    if (request === lastShortcut && validTab(active)) launchShortcutSelection(active, true);
+  }).catch(() => {});
+}
+
 async function selectionRoute(sender, { tabId, windowId }) {
   if (sender.id !== chrome.runtime.id || !sender.documentId || typeof sender.url !== "string") return null;
   const page = new URL(sender.url);
@@ -217,44 +238,63 @@ async function selectionRoute(sender, { tabId, windowId }) {
     || page.pathname !== "/workspace.html") return null;
   const panelSurface = page.searchParams.get("surface") === "panel";
   const token = page.searchParams.get("translation");
-  if (token && (!panelSurface || sender.tab?.id !== tabId || sender.tab.windowId !== windowId)) return null;
+  if (token && (!panelSurface || !validTab(sender.tab))) return null;
   const route = token ? "tab" : panelSurface ? "panel" : "popup";
   const contextType = contextByRoute[route];
   const contexts = await chrome.runtime.getContexts({ contextTypes: [contextType], documentIds: [sender.documentId] });
-  if (!contexts.some((context) => context.windowId === -1 || context.windowId === windowId)) return null;
-  return { route, token };
+  const context = contexts.find(({ windowId }) => validId(windowId) || windowId === -1);
+  if (!context) return null;
+  const ownerWindow = token ? sender.tab.windowId : context.windowId;
+  if (token && validId(context.windowId) && context.windowId !== ownerWindow) return null;
+  if (token && validId(context.tabId) && context.tabId !== sender.tab.id) return null;
+  if (validId(ownerWindow) && windowId !== undefined && ownerWindow !== windowId) return null;
+  if (token && tabId !== undefined && sender.tab.id !== tabId) return null;
+  return {
+    route,
+    token,
+    windowId: validId(ownerWindow) ? ownerWindow : windowId,
+    tabId: token ? sender.tab.id : tabId
+  };
 }
 
-async function consumeSelection(sender, { tabId, windowId }) {
-  if (!validTab({ id: tabId, windowId })) return null;
-  const receiver = await selectionRoute(sender, { tabId, windowId });
+async function consumeSelection(sender, message) {
+  const receiver = await selectionRoute(sender, message);
   if (!receiver) return null;
+  const { windowId } = receiver;
+  if (!validId(windowId)) return { text: null, needsWindow: true };
   return editSelections(async (entries) => {
+    const tab = await activeTabInWindow(windowId);
+    if (!tab || (receiver.tabId !== undefined && receiver.tabId !== tab.id)) return { changed: false };
+    const tabId = tab.id;
     const key = receiver.route === "tab"
       ? Object.keys(entries).find((key) => key.startsWith(`${windowId}:`)
         && entries[key].token === receiver.token && entries[key].destinationTabId === tabId)
       : tabKey(tabId, windowId);
     if (entries[key]?.route !== receiver.route) return { changed: false };
-    if ((await activeTabInWindow(windowId))?.id !== tabId) return { changed: false };
     const { text } = entries[key];
     delete entries[key];
-    return { changed: true, value: text };
+    return { changed: true, value: { text, tabId, windowId } };
   });
 }
 
 async function currentTab() {
+  const currentWindow = await chrome.windows?.getCurrent?.().catch(() => null);
+  if (validId(currentWindow?.id)) return activeTabInWindow(currentWindow.id);
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return validTab(tab) ? tab : null;
 }
 
 export async function takeTranslatorSelection() {
   try {
-    const tab = await currentTab();
-    if (!tab) return null;
-    const { text } = await chrome.runtime.sendMessage({ type: takeMessage, tabId: tab.id, windowId: tab.windowId });
-    if (typeof text !== "string") return null;
-    const activeTab = await currentTab();
-    return activeTab?.id === tab.id && activeTab.windowId === tab.windowId ? text : null;
+    let selection = await chrome.runtime.sendMessage({ type: takeMessage });
+    if (selection?.needsWindow) {
+      const tab = await currentTab();
+      if (!tab) return null;
+      selection = await chrome.runtime.sendMessage({ type: takeMessage, tabId: tab.id, windowId: tab.windowId });
+    }
+    if (typeof selection?.text !== "string" || !validId(selection.windowId) || !validId(selection.tabId)) return null;
+    const active = await activeTabInWindow(selection.windowId);
+    return active?.id === selection.tabId ? selection.text : null;
   } catch {
     return null;
   }
@@ -292,10 +332,7 @@ export function registerTranslatorSelectionHandlers() {
     if (info.menuItemId !== menuId || !validTab(tab)) return;
     launchPanelSelection(tab, info.editable ? scriptSelection(tab.id, info.frameId ?? 0) : info.selectionText);
   });
-  chrome.commands?.onCommand?.addListener((command, tab) => {
-    // Chrome supplies a tab for browser-window commands, but it is optional outside one.
-    if (command === commandId && validTab(tab)) launchShortcutSelection(tab);
-  });
+  chrome.commands?.onCommand?.addListener(translateShortcut);
   chrome.tabs?.onUpdated?.addListener((tabId, change) => {
     if (change.status === "loading") discardTab(tabId).catch(() => {});
   });
@@ -306,7 +343,7 @@ export function registerTranslatorSelectionHandlers() {
   });
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (message?.type !== takeMessage || sender.id !== chrome.runtime.id) return;
-    consumeSelection(sender, message).then((text) => respond({ text }), () => respond({ text: null }));
+    consumeSelection(sender, message).then((selection) => respond(selection ?? { text: null }), () => respond({ text: null }));
     return true;
   });
 }

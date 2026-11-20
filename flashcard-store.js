@@ -6,8 +6,10 @@ const ratings = new Set(["again", "hard", "good", "easy"]);
 const preferenceLimits = { newPerDay: 100, reviewsPerDay: 500 };
 const maximumCards = 1_000;
 const maximumInterval = 3_650;
-const retryDelay = 10 * 60_000;
 const activityDays = 90;
+const defaultReviewIntervals = Object.freeze({ again: 10, hard: 1, good: 3, easy: 7 });
+
+export const flashcardIntervalLimits = Object.freeze({ again: 1_440, hard: 365, good: 365, easy: 365 });
 
 export const flashcardFieldLimits = Object.freeze({
   term: 1_000, answer: 1_000, usage: 720, example: 560, exampleTranslation: 560
@@ -18,6 +20,7 @@ export const defaultFlashcards = Object.freeze({
   direction: "recognition",
   newPerDay: 10,
   reviewsPerDay: 50,
+  reviewIntervals: defaultReviewIntervals,
   cards: Object.freeze([]),
   activity: Object.freeze({})
 });
@@ -33,8 +36,25 @@ function invalid() {
   return new FlashcardError("flashcardInvalid");
 }
 
+function validInterval(rating, value) {
+  return Number.isInteger(value) && value >= 1 && value <= flashcardIntervalLimits[rating];
+}
+
+function orderedIntervals({ hard, good, easy }) {
+  return hard <= good && good <= easy;
+}
+
+export function flashcardReviewIntervals(state) {
+  const saved = state?.reviewIntervals;
+  const intervals = { ...defaultReviewIntervals };
+  for (const rating of ratings) {
+    if (validInterval(rating, saved?.[rating])) intervals[rating] = saved[rating];
+  }
+  return orderedIntervals(intervals) ? intervals : { ...defaultReviewIntervals };
+}
+
 function stateWithDefaults(state) {
-  return { ...defaultFlashcards, ...state };
+  return { ...defaultFlashcards, ...state, reviewIntervals: flashcardReviewIntervals(state) };
 }
 
 function activeDirections(direction) {
@@ -96,6 +116,15 @@ export function changeFlashcardPreferences(state, patch) {
     if (!Number.isInteger(patch[key]) || patch[key] < 0 || patch[key] > maximum) throw invalid();
     next[key] = patch[key];
   }
+  if (Object.hasOwn(patch, "reviewIntervals")) {
+    const intervals = patch.reviewIntervals;
+    if (!intervals || typeof intervals !== "object" || Array.isArray(intervals)) throw invalid();
+    for (const [rating, value] of Object.entries(intervals)) {
+      if (!ratings.has(rating) || !validInterval(rating, value)) throw invalid();
+      next.reviewIntervals[rating] = value;
+    }
+    if (!orderedIntervals(next.reviewIntervals)) throw new FlashcardError("flashcardsIntervalOrder");
+  }
   return next;
 }
 
@@ -140,15 +169,15 @@ export function removeFlashcard(state, id) {
   return { ...next, cards: next.cards.filter(card => card.id !== id) };
 }
 
-function nextSchedule(previous, rating, now) {
+function nextSchedule(previous, rating, now, minimums) {
   const reviews = (previous?.reviews ?? 0) + 1;
-  if (rating === "again") return { reviews, intervalDays: 0, dueAt: now + retryDelay };
+  if (rating === "again") return { reviews, intervalDays: 0, dueAt: now + minimums.again * 60_000 };
 
   const days = previous?.intervalDays ?? 0;
   const intervals = {
-    hard: Math.max(1, Math.round(days * 1.2)),
-    good: Math.max(3, Math.round(days * 2.3)),
-    easy: Math.max(7, Math.round(days * 3.5))
+    hard: Math.max(minimums.hard, Math.round(days * 1.2)),
+    good: Math.max(minimums.good, Math.round(days * 2.3)),
+    easy: Math.max(minimums.easy, Math.round(days * 3.5))
   };
   const intervalDays = Math.min(maximumInterval, intervals[rating]);
   return { reviews, intervalDays, dueAt: startOfLocalDayAfter(now, intervalDays) };
@@ -179,7 +208,8 @@ export function reviewFlashcard(state, result, now = Date.now()) {
     throw new FlashcardError("flashcardReviewChanged");
   }
 
-  const updated = { ...card, progress: { ...card.progress, [direction]: nextSchedule(previous, rating, now) } };
+  const schedule = nextSchedule(previous, rating, now, next.reviewIntervals);
+  const updated = { ...card, progress: { ...card.progress, [direction]: schedule } };
   const activity = { ...next.activity, [day]: { ...next.activity[day], [next.language]: { introduced, reviewed } } };
   const previousDays = Object.keys(activity).filter(key => key !== day).sort().slice(1 - activityDays);
   next.cards = next.cards.map(item => item.id === id ? updated : item);
