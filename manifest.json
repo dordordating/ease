@@ -1,10 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Ease",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "A fast, customizable workspace for everyday browser tasks.",
   "minimum_chrome_version": "116",
-  "permissions": ["storage", "sidePanel", "clipboardWrite", "identity", "alarms"],
+  "permissions": [
+    "storage",
+    "sidePanel",
+    "clipboardWrite",
+    "identity",
+    "alarms"
+  ],
   "optional_host_permissions": [
     "https://openidconnect.googleapis.com/*",
     "https://www.googleapis.com/*",
@@ -39,5 +45,13 @@
       },
       "description": "Open the Ease workspace"
     }
+  },
+  "oauth2": {
+    "client_id": "652222000350-u2ufio5vuk8tnc52e2b9c99ucl780vdi.apps.googleusercontent.com",
+    "scopes": [
+      "openid",
+      "https://www.googleapis.com/auth/userinfo.email",
+      "https://www.googleapis.com/auth/userinfo.profile"
+    ]
   }
 }

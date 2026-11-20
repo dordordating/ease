@@ -3,7 +3,7 @@ import { paintBrand } from "./brand.js";
 import { accountStorageKey, calendarConnectionKeys, loadConnectedEvents, renderAccount, renderCalendarConnections } from "./connections.js";
 import { icon } from "./icons.js";
 import { deviceUnlockAvailable, readDeviceUnlock, registerDeviceUnlock } from "./vault-device.js";
-import { vaultSessionStorageKey } from "./vault-session.js";
+import { vaultPolicyFor, vaultSessionStorageKey } from "./vault-session.js";
 import { isRtl, localeNames, translate } from "./locales.js";
 import { calendarSystemFor, defaultWorkspace, densities, folderIcons, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
 
@@ -68,6 +68,7 @@ async function refreshCalendarEvents() {
   providerEvents = events;
   calendarController?.update({ events: calendarEvents() });
   if (query) render();
+  refreshCalendarDay();
 }
 
 function node(tag, className, label) {
@@ -159,22 +160,31 @@ function updateCalendarTab(button, today = new Date()) {
   const year = String(today.getFullYear()).padStart(4, "0");
   const month = String(today.getMonth() + 1).padStart(2, "0");
   const day = String(today.getDate()).padStart(2, "0");
-  const isHoliday = holidays.includes(`${year}-${month}-${day}`);
+  const dateKey = `${year}-${month}-${day}`;
+  const isHoliday = holidays.includes(dateKey);
+  const eventCount = calendarEvents().filter(({ date }) => date === dateKey).length;
   const localeInfo = new Intl.Locale(locale);
   const weekend = (localeInfo.getWeekInfo?.() ?? localeInfo.weekInfo)?.weekend
     ?? (localeInfo.language === "fa" ? [5] : [6, 7]);
   const isWeekend = weekend.includes(today.getDay() || 7);
   const kind = isHoliday ? "holiday" : isWeekend ? "weekend" : "normal";
   const labelKey = isHoliday ? "calendarTabHoliday" : isWeekend ? "calendarTabWeekend" : "calendarTabToday";
-  const label = t(labelKey, { date: fullDate });
+  const countFormat = new Intl.NumberFormat(locale, { useGrouping: false });
+  const label = [t(labelKey, { date: fullDate })];
+  if (eventCount) label.push(t("calendarEventCount", { count: countFormat.format(eventCount) }));
   const mark = node("span", "calendar-date-icon");
   mark.dataset.dayKind = kind;
   mark.setAttribute("aria-hidden", "true");
   mark.append(node("span", "calendar-date-number", dayNumber));
   if (kind !== "normal") mark.append(node("span", "calendar-date-accent"));
+  if (eventCount) {
+    const badge = node("span", "calendar-event-badge", eventCount > 9 ? `+${countFormat.format(9)}` : countFormat.format(eventCount));
+    badge.dir = "ltr";
+    mark.append(badge);
+  }
   button.replaceChildren(mark);
-  button.setAttribute("aria-label", label);
-  button.title = label;
+  button.setAttribute("aria-label", label.join(" · "));
+  button.title = label.join(" · ");
 }
 
 function refreshCalendarDay() {
@@ -310,6 +320,7 @@ function snippetList(title, snippets, showFolder = false, container = view) {
     const name = displayTitle(snippet);
     const isCopied = copiedId === snippet.id;
     const row = node("li", `snippet-row${isCopied ? " is-copied" : ""}`);
+    allowDrag(row, "snippet", snippet.id);
     const copy = node("button", "snippet-copy");
     copy.id = `snippet-${snippet.id}`;
     copy.type = "button";
@@ -392,10 +403,14 @@ function renderClipboard() {
   const content = node("div", "clipboard-content");
   layout.append(renderFolderBar(), content);
   view.append(layout);
+  layout.querySelector(".folder-quick").scrollTop = folderRailScroll;
   if (activeFolder !== "all") {
-    const label = node("div", "folder-current", folder?.name ?? t("noFolder"));
+    const current = node("div", "folder-current");
+    current.dataset.folderColor = folder?.color ?? "default";
+    const label = node("span", "folder-current-name", folder?.name ?? t("noFolder"));
     label.dir = "auto";
-    content.append(label);
+    current.append(glyph(folder?.icon ?? "folder"), label);
+    content.append(current);
   }
   if (folderLocked(folder)) {
     renderLockedFolder(folder, content);
@@ -420,90 +435,197 @@ function selectFolder(id) {
   document.getElementById(`folder-chip-${id ?? "unfiled"}`)?.focus();
 }
 
+let folderRailScroll = 0;
+let clipboardDrag;
+let folderContext;
+
+function clearClipboardDrag() {
+  clipboardDrag = undefined;
+  for (const item of view.querySelectorAll(".is-dragging, .is-drop-target, [data-drop-edge]")) {
+    item.classList.remove("is-dragging", "is-drop-target");
+    delete item.dataset.dropEdge;
+  }
+}
+
+function allowDrag(element, kind, id) {
+  element.draggable = true;
+  element.addEventListener("dragstart", (event) => {
+    if (!event.dataTransfer) return;
+    clearClipboardDrag();
+    clipboardDrag = { kind, id };
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(`application/x-ease-${kind}`, id);
+    element.classList.add("is-dragging");
+  });
+  element.addEventListener("dragend", clearClipboardDrag);
+}
+
+function allowFolderDrop(chip, folder) {
+  function dropEdge(event) {
+    const rect = chip.getBoundingClientRect();
+    return event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+  }
+
+  function acceptsDrag() {
+    if (clipboardDrag?.kind === "folder") return folder.id !== null && clipboardDrag.id !== folder.id;
+    if (clipboardDrag?.kind !== "snippet") return false;
+    const snippet = workspace.snippets.find(({ id }) => id === clipboardDrag.id);
+    return snippet && snippetReadable(snippet) && (snippet.folderId ?? null) !== folder.id;
+  }
+
+  chip.addEventListener("dragover", (event) => {
+    if (!acceptsDrag()) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    if (clipboardDrag.kind === "folder") chip.dataset.dropEdge = dropEdge(event);
+    else chip.classList.add("is-drop-target");
+  });
+  chip.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget instanceof Node && chip.contains(event.relatedTarget)) return;
+    chip.classList.remove("is-drop-target");
+    delete chip.dataset.dropEdge;
+  });
+  chip.addEventListener("drop", (event) => {
+    if (!acceptsDrag()) return;
+    event.preventDefault();
+    const drag = clipboardDrag;
+    clearClipboardDrag();
+    if (drag.kind === "folder") {
+      mutate("reorder-folder", { id: drag.id, targetId: folder.id, position: dropEdge(event) });
+      return;
+    }
+    const snippet = workspace.snippets.find(({ id }) => id === drag.id);
+    if (folderLocked(folder)) editVaultPassword(folder, false, () => completeSnippetMove(snippet, folder));
+    else completeSnippetMove(snippet, folder);
+  });
+}
+
+function closeFolderContext() {
+  if (!folderContext) return;
+  if (folderContext.matches(":popover-open")) folderContext.hidePopover();
+  folderContext.remove();
+  folderContext = undefined;
+}
+
+function openFolderContext(folder, anchor, point) {
+  closeFolderContext();
+  const menu = node("div", "folder-context-menu");
+  menu.setAttribute("popover", "auto");
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", t("folderContext"));
+  const group = node("div", "folder-menu-group");
+  function action(key, symbol, run) {
+    const item = button(t(key), "folder-menu-item", {
+      symbol,
+      onClick: () => {
+        closeFolderContext();
+        anchor.focus();
+        run();
+      }
+    });
+    item.setAttribute("role", "menuitem");
+    if (key === "deleteFolder") item.dataset.action = "delete";
+    group.append(item);
+  }
+
+  const position = workspace.folders.findIndex(({ id }) => id === folder.id);
+  const before = workspace.folders[position - 1];
+  const after = workspace.folders[position + 1];
+  if (folderLocked(folder)) {
+    action("vaultUnlock", "unlock", () => editVaultPassword(folder));
+  } else {
+    action("editFolder", "edit", () => editFolder(folder));
+    if (folder.protected) {
+      action("vaultLock", "lock", () => changeVault("lock-folder", { id: folder.id }));
+      action("vaultPolicySettings", "settings", () => editVaultPolicy(folder));
+      if (folder.device) action("vaultDeviceRemove", "fingerprint", () => removeDeviceUnlock(folder));
+      else if (supportsDeviceUnlock) action("vaultDeviceEnable", "fingerprint", () => enableDeviceUnlock(folder));
+      action("vaultRemove", "unlock", () => removeVaultPassword(folder));
+    } else {
+      action("vaultProtect", "lock", () => editVaultPassword(folder, true));
+    }
+    action("deleteFolder", "trash", () => deleteFolder(folder));
+  }
+  if (before) action("folderMoveUp", "chevron-up", () => mutate("reorder-folder", { id: folder.id, targetId: before.id, position: "before" }));
+  if (after) action("folderMoveDown", "chevron-down", () => mutate("reorder-folder", { id: folder.id, targetId: after.id, position: "after" }));
+
+  menu.append(group);
+  menu.addEventListener("toggle", (event) => {
+    if (event.newState === "closed" && folderContext === menu) closeFolderContext();
+  });
+  menu.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeFolderContext();
+      anchor.focus();
+      return;
+    }
+    const options = [...group.children];
+    const index = options.indexOf(document.activeElement);
+    const next = {
+      ArrowDown: (index + 1) % options.length,
+      ArrowUp: (index - 1 + options.length) % options.length,
+      Home: 0,
+      End: options.length - 1
+    }[event.key];
+    if (next === undefined) return;
+    event.preventDefault();
+    options[next].focus();
+  });
+  folderContext = menu;
+  document.body.append(menu);
+  menu.showPopover();
+  const rect = anchor.getBoundingClientRect();
+  const bounds = menu.getBoundingClientRect();
+  const left = point?.x ?? rect.left;
+  const top = point?.y ?? rect.top;
+  menu.style.left = `${Math.max(4, Math.min(left - bounds.width, innerWidth - bounds.width - 4))}px`;
+  menu.style.top = `${Math.max(4, Math.min(top, innerHeight - bounds.height - 4))}px`;
+  group.firstElementChild.focus();
+}
+
 function renderFolderBar() {
   const bar = node("nav", "folder-bar");
   bar.setAttribute("aria-label", t("clipboardFolders"));
   const quick = node("div", "folder-quick");
   const all = { id: "all", name: t("allFolders"), icon: "clipboard" };
   const unfiled = { id: null, name: t("noFolder"), icon: "folder" };
-  const selected = folderFor(activeFolder);
-  const quickFolders = [all, ...workspace.folders.filter(({ pinned }) => pinned)];
-  if (activeFolder === null) quickFolders.push(unfiled);
-  else if (selected && !selected.pinned) quickFolders.push(selected);
-
-  function filterButton(folder, className) {
-    const selected = activeFolder === folder.id;
-    const item = button(folder.name, className, { symbol: folder.icon, onClick: () => selectFolder(folder.id) });
-    item.title = folder.name;
-    const label = item.lastElementChild;
-    label.className = "folder-label";
-    label.dir = "auto";
-    item.setAttribute("aria-pressed", String(selected));
-    if (folderLocked(folder)) {
-      item.classList.add("is-locked");
-      item.append(glyph("lock", "folder-lock-mark"));
-      item.setAttribute("aria-description", t("vaultLockedFolder"));
-    }
-    return item;
-  }
-
-  for (const folder of quickFolders) {
-    const chip = filterButton(folder, "folder-chip");
+  for (const folder of [all, unfiled, ...workspace.folders]) {
+    const chip = button(folder.name, "folder-chip", { symbol: folder.icon, onClick: () => selectFolder(folder.id) });
     chip.id = `folder-chip-${folder.id ?? "unfiled"}`;
+    chip.title = folder.name;
+    chip.dataset.folderColor = folder.color ?? "default";
+    chip.lastElementChild.className = "folder-label";
+    chip.lastElementChild.dir = "auto";
+    chip.setAttribute("aria-pressed", String(activeFolder === folder.id));
+    if (folderLocked(folder)) {
+      chip.classList.add("is-locked");
+      chip.append(glyph("lock", "folder-lock-mark"));
+      chip.setAttribute("aria-description", t("vaultLockedFolder"));
+    }
+    if (folder.id !== "all") allowFolderDrop(chip, folder);
+    if (folder.id && folder.id !== "all") {
+      chip.title = `${folder.name}
+${t("folderContextHint")}`;
+      chip.setAttribute("aria-haspopup", "menu");
+      allowDrag(chip, "folder", folder.id);
+      chip.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        openFolderContext(folder, chip, event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined);
+      });
+      chip.addEventListener("keydown", (event) => {
+        if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+        event.preventDefault();
+        openFolderContext(folder, chip);
+      });
+    }
     quick.append(chip);
   }
   const actions = node("div", "folder-actions");
-  const create = button(t("newFolder"), "icon-button", { symbol: "folder-plus", iconOnly: true, onClick: () => editFolder() });
+  const create = button(t("newFolder"), "icon-button", { symbol: "plus", iconOnly: true, onClick: () => editFolder() });
   create.id = "new-folder";
   actions.append(create);
-
-  if (workspace.folders.length || activeFolder === null) {
-    const overflow = node("details", "folder-overflow");
-    const summary = node("summary", "icon-button");
-    summary.id = "folder-overflow-button";
-    labelButton(summary, t("manageFolders"), "more");
-    const menu = node("div", "folder-menu");
-    if (selected) {
-      const management = node("div", "folder-menu-group");
-      const menuAction = (key, symbol, run) => button(t(key), "folder-menu-item", {
-        symbol,
-        onClick: () => {
-          overflow.open = false;
-          summary.focus();
-          run();
-        }
-      });
-      if (folderLocked(selected)) {
-        management.append(menuAction("vaultUnlock", "unlock", () => editVaultPassword(selected)));
-      } else {
-        management.append(
-          menuAction("editFolder", "edit", () => editFolder(selected)),
-          menuAction(selected.pinned ? "folderUnpinned" : "folderPinned", "pin",
-            () => mutate("pin-folder", { id: selected.id, pinned: !selected.pinned }))
-        );
-        if (selected.protected) {
-          management.append(menuAction("vaultLock", "lock", () => changeVault("lock-folder", { id: selected.id })));
-          if (selected.device) management.append(menuAction("vaultDeviceRemove", "fingerprint", () => removeDeviceUnlock(selected)));
-          else if (supportsDeviceUnlock) management.append(menuAction("vaultDeviceEnable", "fingerprint", () => enableDeviceUnlock(selected)));
-          management.append(menuAction("vaultRemove", "unlock", () => removeVaultPassword(selected)));
-        } else {
-          management.append(menuAction("vaultProtect", "lock", () => editVaultPassword(selected, true)));
-        }
-        const remove = menuAction("deleteFolder", "trash", () => deleteFolder(selected));
-        remove.dataset.action = "delete";
-        management.append(remove);
-      }
-      menu.append(management);
-    }
-    const folders = node("div", "folder-menu-group");
-    for (const folder of [unfiled, ...workspace.folders]) {
-      folders.append(filterButton(folder, activeFolder === folder.id ? "folder-menu-item folder-menu-active" : "folder-menu-item"));
-    }
-    menu.append(folders);
-    overflow.append(summary, menu);
-    actions.append(overflow);
-  }
-
   bar.append(quick, actions);
   return bar;
 }
@@ -718,6 +840,9 @@ function renderSearch() {
 }
 
 function render() {
+  closeFolderContext();
+  const folderRail = view.querySelector(".folder-quick");
+  if (folderRail) folderRailScroll = folderRail.scrollTop;
   const focused = document.activeElement?.id;
   const root = document.documentElement;
   root.lang = workspace.locale;
@@ -865,33 +990,44 @@ function editSnippet(snippet) {
       text.reportValidity();
       return false;
     }
-    const initialFolder = snippet ? snippet.folderId ?? null : activeFolder === "all" ? null : activeFolder;
-    const folderId = destination ? destination.value || null : initialFolder;
+    const folderId = destination.value || null;
     const changeFolder = !snippet || folderId !== (snippet.folderId ?? null);
     return mutate("save-snippet", {
       id: snippet?.id, title: title.value, text: text.value, ...(changeFolder ? { folderId } : {})
     });
   }, folder?.id);
   protectedDialogSnippet = snippet?.id;
-  const title = field(fields, { label: `${t("snippetTitle")} (${t("optional")})`, value: snippet?.title, placeholder: t("snippetTitlePlaceholder"), maxLength: 100 });
   const text = field(fields, { label: t("snippetText"), value: snippet?.text, placeholder: t("snippetTextPlaceholder"), required: true, maxLength: 20000, multiline: true });
-  const destination = workspace.folders.length ? node("select") : undefined;
-  if (destination) {
-    const row = node("label", "field folder-select");
-    const choices = [{ id: "", name: t("noFolder") }, ...workspace.folders];
-    for (const folder of choices) {
-      const option = node("option", "", folder.name);
-      option.value = folder.id;
-      option.dir = "auto";
-      option.disabled = folderLocked(folder);
-      destination.append(option);
-    }
-    const selectedId = snippet ? snippet.folderId : activeFolder;
-    destination.value = folderFor(selectedId)?.id ?? "";
-    row.append(node("span", "", t("folder")), destination);
-    fields.append(row);
+  const hint = node("p", "snippet-enter-hint", t("snippetEnterHint"));
+  hint.id = "snippet-enter-hint";
+  text.setAttribute("aria-describedby", hint.id);
+  text.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229
+      || event.ctrlKey || event.metaKey || event.altKey) return;
+    event.preventDefault();
+    if (!text.form.querySelector('[type="submit"]').disabled) text.form.requestSubmit();
+  });
+  fields.append(hint);
+  const advanced = node("details", "snippet-advanced");
+  const advancedFields = node("div", "snippet-advanced-fields");
+  advanced.append(node("summary", "", t("snippetAdvanced")), advancedFields);
+  fields.append(advanced);
+  const title = field(advancedFields, { label: `${t("snippetTitle")} (${t("optional")})`, value: snippet?.title, placeholder: t("snippetTitlePlaceholder"), maxLength: 100 });
+  const destination = node("select");
+  const row = node("label", "field folder-select");
+  const choices = [{ id: "", name: t("noFolder") }, ...workspace.folders];
+  for (const folder of choices) {
+    const option = node("option", "", folder.name);
+    option.value = folder.id;
+    option.dir = "auto";
+    option.disabled = folderLocked(folder);
+    destination.append(option);
   }
-  fields.append(node("p", "field-hint", t("templateTip")));
+  const selectedId = snippet ? snippet.folderId : activeFolder;
+  destination.value = folderFor(selectedId)?.id ?? "";
+  row.append(node("span", "", t("folder")), destination);
+  advancedFields.append(row);
+  advancedFields.append(node("p", "field-hint", t("templateTip")));
   editor.showModal();
   text.focus();
 }
@@ -900,7 +1036,8 @@ function editFolder(folder) {
   const id = folder?.id ?? crypto.randomUUID();
   const fields = openEditor(t(folder ? "editFolder" : "newFolder"), t("save"), async () => {
     const chosenIcon = choices.querySelector("input:checked").value;
-    if (!await mutate(folder ? "update-folder" : "create-folder", { id, name: name.value, icon: chosenIcon })) return false;
+    const color = colors.querySelector("input:checked").value;
+    if (!await mutate(folder ? "update-folder" : "create-folder", { id, name: name.value, icon: chosenIcon, color })) return false;
     if (!folder) {
       activeFolder = id;
       if (folderFor(id)) selectFolder(id);
@@ -921,14 +1058,30 @@ function editFolder(folder) {
   }
   picker.append(node("legend", "", t("folderIcon")), choices);
   fields.append(picker);
+  const colorPicker = node("fieldset", "choice-group folder-color-options");
+  const colors = node("div", "choice-options");
+  for (const color of ["default", ...Object.keys(palettes)]) {
+    const choice = radioOption("folder-color", color, folder?.color ?? "default", "choice-option");
+    const label = t(color === "default" ? "folderColorDefault" : color);
+    choice.input.setAttribute("aria-label", label);
+    choice.label.title = label;
+    const swatch = node("span", "folder-color-dot");
+    swatch.setAttribute("aria-hidden", "true");
+    swatch.style.setProperty("--swatch", palettes[color] ?? "var(--accent)");
+    choice.face.append(swatch);
+    colors.append(choice.label);
+  }
+  colorPicker.append(node("legend", "", t("folderColor")), colors);
+  fields.append(colorPicker);
   editor.showModal();
   name.focus();
 }
 
 function deleteFolder(folder) {
+  const wasSelected = activeFolder === folder.id;
   const fields = openEditor(t("deleteFolder"), t("remove"), async () => {
     if (!await mutate("delete-folder", { id: folder.id })) return false;
-    selectFolder(null);
+    if (wasSelected) selectFolder(null);
     showToast(t("folderDeleted"));
     return true;
   }, folder.protected ? folder.id : undefined);
@@ -949,16 +1102,13 @@ function moveSnippet(snippet) {
       onClick: async () => {
         if (!selected) {
           for (const option of list.children) option.disabled = true;
-          if (!await mutate("move-snippet", { id: snippet.id, folderId: folder.id, expectedFolderId: from })) {
+          if (!await completeSnippetMove(snippet, folder)) {
             for (const [index, option] of Array.from(list.children).entries()) {
               option.disabled = folderLocked(folderFor(choices[index].id));
             }
             item.focus();
             return;
           }
-          showToast(t("snippetMoved", { name: folder.name }), async () => {
-            if (await mutate("move-snippet", { id: snippet.id, folderId: from, expectedFolderId: folder.id })) toast.hidden = true;
-          });
         }
         editor.close();
       }
@@ -973,6 +1123,15 @@ function moveSnippet(snippet) {
   fields.append(list);
   editor.showModal();
   list.querySelector(".folder-picker-active")?.focus();
+}
+
+async function completeSnippetMove(snippet, folder) {
+  const from = snippet.folderId ?? null;
+  if (!await mutate("move-snippet", { id: snippet.id, folderId: folder.id, expectedFolderId: from })) return false;
+  showToast(t("snippetMoved", { name: folder.name }), async () => {
+    if (await mutate("move-snippet", { id: snippet.id, folderId: from, expectedFolderId: folder.id })) toast.hidden = true;
+  });
+  return true;
 }
 
 async function changeVault(action, data) {
@@ -1006,7 +1165,39 @@ function passwordField(fields, label, autocomplete) {
   return input;
 }
 
-function editVaultPassword(folder, setup = false) {
+const vaultPolicyLabels = {
+  "after-copy": ["vaultPolicyAfterCopy", "vaultAfterCopyHint"],
+  "one-minute": ["vaultPolicyOneMinute", "vaultOneMinuteHint"],
+  "five-minutes": ["vaultPolicyFiveMinutes", "vaultAutoLock"]
+};
+
+function addVaultPolicyField(fields, folder) {
+  const row = node("label", "field vault-policy-field");
+  const select = node("select");
+  const label = node("span", "", t("vaultPolicy"));
+  label.id = "vault-policy-label";
+  select.setAttribute("aria-labelledby", label.id);
+  for (const [value, [key]] of Object.entries(vaultPolicyLabels)) {
+    const option = node("option", "", t(key));
+    option.value = value;
+    select.append(option);
+  }
+  select.value = vaultPolicyFor(folder.vaultPolicy);
+  row.append(label, select);
+  fields.append(row);
+  return select;
+}
+
+function editVaultPolicy(folder) {
+  const fields = openEditor(t("vaultPolicySettings"), t("save"), () => (
+    changeVault("set-vault-policy", { id: folder.id, policy: policy.value })
+  ), folder.id);
+  const policy = addVaultPolicyField(fields, folder);
+  editor.showModal();
+  policy.focus();
+}
+
+function editVaultPassword(folder, setup = false, onUnlocked) {
   const fields = openEditor(t(setup ? "vaultProtect" : "vaultUnlock"), t(setup ? "save" : "vaultUnlock"), async () => {
     const count = Array.from(password.value).length;
     if (setup && (count < 8 || count > 128)) {
@@ -1020,17 +1211,20 @@ function editVaultPassword(folder, setup = false) {
       return false;
     }
     const action = setup ? "protect-folder" : "unlock-folder";
-    if (!await changeVault(action, { id: folder.id, password: password.value })) return false;
+    if (!await changeVault(action, { id: folder.id, password: password.value, ...(setup ? { policy: policy.value } : {}) })) return false;
     if (setup) showToast(t("vaultProtected"));
+    if (onUnlocked) await onUnlocked();
     return true;
   });
-  fields.append(node("p", "vault-hint", t(setup ? "vaultSetupHint" : "vaultAutoLock")));
+  const lockHint = vaultPolicyLabels[vaultPolicyFor(folder.vaultPolicy)][1];
+  fields.append(node("p", "vault-hint", t(setup ? "vaultSetupHint" : lockHint)));
   const password = passwordField(fields, "vaultPassword", setup ? "new-password" : "current-password");
   const repeat = setup ? passwordField(fields, "vaultRepeat", "new-password") : undefined;
   if (setup) fields.append(node("p", "vault-hint", t("vaultPasswordLength")));
-  else if (folder.device && supportsDeviceUnlock) {
+  const policy = setup ? addVaultPolicyField(fields, folder) : undefined;
+  if (!setup && folder.device && supportsDeviceUnlock) {
     fields.append(button(t("vaultDevice"), "secondary-button", {
-      symbol: "fingerprint", onClick: ({ currentTarget }) => unlockWithDevice(folder, currentTarget)
+      symbol: "fingerprint", onClick: ({ currentTarget }) => unlockWithDevice(folder, currentTarget, onUnlocked)
     }));
   }
   editor.showModal();
@@ -1043,11 +1237,12 @@ function removeVaultPassword(folder) {
   editor.showModal();
 }
 
-async function unlockWithDevice(folder, trigger) {
+async function unlockWithDevice(folder, trigger, onUnlocked) {
   trigger.disabled = true;
   try {
     const prf = await readDeviceUnlock(folder.device);
     const unlocked = await changeVault("unlock-device", { id: folder.id, prf });
+    if (unlocked && onUnlocked) await onUnlocked();
     if (unlocked && editor.contains(trigger)) editor.close();
     else if (!unlocked) trigger.disabled = false;
   } catch {
@@ -1142,6 +1337,8 @@ async function copySnippet(snippet, text) {
     reportError("vaultLocked");
     return false;
   }
+  const folder = folderFor(current.folderId);
+  if (folder?.protected && !await mutate("authorize-vault-copy", { id: current.id })) return false;
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -1218,7 +1415,7 @@ tabBar.addEventListener("keydown", (event) => {
   switchTo(allTabs[next].dataset.module);
 });
 
-const openMenus = ".snippet-actions[open], .folder-overflow[open]";
+const openMenus = ".snippet-actions[open]";
 document.addEventListener("click", (event) => {
   for (const menu of view.querySelectorAll(openMenus)) {
     if (!menu.contains(event.target)) menu.open = false;

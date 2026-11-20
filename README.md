@@ -12,15 +12,15 @@ Ease uses Manifest V3 and requires Chrome 116 or newer. It has no build step or 
 
 ## Use the workspace
 
-- Select **New snippet** to save a phrase or link. Click its row to copy it. Open the row’s **More actions** menu to edit, pin, or delete it.
-- Use **New folder** in Clipboard to organize snippets. New snippets default to the folder you're viewing. Use **More actions → Move to folder** on a snippet to move it, with an option to undo. Pin up to two folders for direct access. Deleting a folder keeps its snippets in **Unfiled**. Search includes snippets from every folder and shows the folder with each result.
-- To protect a folder, open it and choose **Manage folders → Set folder password**. The password encrypts snippet titles and text in local storage. Folder names and shortcut assignments remain visible. Ease cannot recover a forgotten password. Unlocked folders lock again after five minutes or when you select **Lock folder**.
+- Select **New snippet** and enter the text. Press **Enter** to save or **Shift+Enter** for a new line. **Advanced** contains the title and folder. Click a saved snippet to copy it, or open its **More actions** menu to edit, pin, or delete it.
+- The Clipboard rail lists all folders. Use the final **+** to create a folder and choose its icon and color. Right-click a folder or press **Shift+F10** while it is focused to open its actions. Drag folders to reorder them and drag snippets onto folders to move them. Moves can be undone. Deleting a folder keeps its snippets in **Unfiled**. Search includes unlocked snippets from every folder.
+- To protect a folder, choose **Set folder password** from its context menu. The password encrypts snippet titles and text in local storage. Folder names and shortcut assignments remain visible. Ease cannot recover a forgotten password. Choose a one-minute timeout, a five-minute timeout, or a lock on each copy with a five-minute idle timeout.
 - On supported devices, use **Set up device unlock** while the folder is open. Chrome handles verification through a platform credential and WebAuthn PRF. Keep the folder password as a fallback. Use the side panel if the system prompt closes the toolbar popup.
 - Add a named placeholder such as `{name}` to make a reusable template. Ease asks for its value when you copy the snippet.
 - Press **Alt+Shift+E** to open the popup and **/** inside Ease to search. **Settings → Open Ease shortcut** shows the active shortcut and opens Chrome’s shortcut page if you want to change it. Use **More actions → Set shortcut** on a snippet to choose an available key from **1–9**. Press that number while Ease is focused to copy the snippet.
 - Use the side panel button to keep Ease open alongside a page.
 - Open the module library (**+**) to show or hide Calendar. Switch between Week and Month, and use **Calendar settings** to choose Gregorian, Solar Hijri, or civil Hijri and the first day of the week.
-- In **Calendar settings**, choose dots, counts, titles, or event cards. Week view lays out days vertically. The Calendar tab icon shows today's date in the selected calendar and distinguishes local weekends from dates you mark as holidays. Select a date to mark or unmark it as a holiday.
+- In **Calendar settings**, choose dots, counts, titles, or event cards. Week view lays out days vertically. The Calendar tab icon shows today's date, holiday status, and an event count capped at **+9**. Select a date to mark or unmark it as a holiday.
 - Choose a day and select **Add event**. You can leave the time empty or set either a start or an end. Events can also have a location and notes. Choose an event in **Events** to read its details, then edit or delete it from there if it's a local event. Local events stay on this device and can be used without signing in.
 - Use the workspace search to find calendar events by title, location, notes, or date (`YYYY-MM-DD`). Select a result to open that event's details.
 - Use **Settings → Language** to change the interface. English is the first-run default. Persian, Spanish, French, Brazilian Portuguese, Arabic, German, and Japanese are available. The Persian interface uses the bundled Vazir font.
@@ -39,7 +39,7 @@ Ease uses Manifest V3 and requires Chrome 116 or newer. It has no build step or 
 
 1. Find the extension's stable ID at `chrome://extensions`. Register an OAuth client of type **Chrome extension** for that ID in Google Cloud and configure the OAuth consent screen and test users for the project.
 2. Enable the **Google Calendar API** in the same project.
-3. Add the following object under the `oauth2` key in `manifest.json`, replacing the example string with the registered public client ID, then reload the extension.
+3. Use the following object under the `oauth2` key in `manifest.json`. Replace any existing test client ID with the registered public client ID for your extension, then reload it.
 
 ```json
 {

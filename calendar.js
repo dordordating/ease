@@ -355,7 +355,7 @@ export function renderCalendar(container, {
       : 'calendar-event calendar-event-content');
     appendText(button, 'span', 'calendar-event-title', eventTitle(event));
     appendText(button, 'span', 'calendar-event-time', eventTime(event));
-    if (event.location) appendText(button, 'span', 'calendar-event-location', event.location);
+    if (event.notes?.trim()) appendText(button, 'span', 'calendar-event-notes', event.notes);
     if (event.readOnly) appendText(button, 'span', 'calendar-event-provider', eventSource(event));
     return button;
   }
@@ -806,8 +806,8 @@ export function renderCalendar(container, {
   }
 
   todayButton.addEventListener('click', () => showDay(localToday(), { select: true }));
-  previousButton.addEventListener('click', () => showDay(movePeriod(-1), { select: true }));
-  nextButton.addEventListener('click', () => showDay(movePeriod(1), { select: true }));
+  previousButton.addEventListener('click', () => showDay(movePeriod(-1)));
+  nextButton.addEventListener('click', () => showDay(movePeriod(1)));
 
   holidayButton.addEventListener('click', async () => {
     if (savingHoliday) return;

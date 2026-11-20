@@ -29,6 +29,8 @@ const paths = {
   keyboard: '<rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M10 14h8"/>',
   "chevron-left": '<path d="m15 6-6 6 6 6"/>',
   "chevron-right": '<path d="m9 6 6 6-6 6"/>',
+  "chevron-up": '<path d="m6 15 6-6 6 6"/>',
+  "chevron-down": '<path d="m6 9 6 6 6-6"/>',
   device: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>',
   moon: '<path d="M20.5 15.6A9 9 0 0 1 8.4 3.5 9 9 0 1 0 20.5 15.6Z"/>',

@@ -1,4 +1,4 @@
-import { folderIcons, maxPinnedFolders } from "./workspace-data.js";
+import { folderIcons, maxPinnedFolders, palettes } from "./workspace-data.js";
 
 function cleanFolderName(name) {
   return typeof name === "string" ? name.normalize("NFKC").replace(/\s+/gu, " ").trim() : "";
@@ -8,14 +8,17 @@ export function hasFolder(workspace, id) {
   return workspace.folders.some((folder) => folder.id === id);
 }
 
-export function saveFolder(workspace, { id, name, icon }, create) {
+export function saveFolder(workspace, { id, name, icon, color }, create) {
   const cleanName = cleanFolderName(name);
   if (!cleanName) return "folderRequired";
   if (typeof id !== "string" || !id || !folderIcons.includes(icon)) throw new Error("Invalid folder");
+  if (color !== undefined && color !== "default" && (typeof color !== "string" || !Object.hasOwn(palettes, color))) {
+    throw new Error("Invalid folder color");
+  }
 
   const existing = workspace.folders.find((folder) => folder.id === id);
   if (create && existing) {
-    if (existing.name === cleanName && existing.icon === icon) return;
+    if (existing.name === cleanName && existing.icon === icon && (existing.color ?? "default") === (color ?? "default")) return;
     throw new Error("Folder ID is already in use");
   }
   if (!create && !existing) return "folderMissing";
@@ -25,8 +28,10 @@ export function saveFolder(workspace, { id, name, icon }, create) {
     return "folderDuplicate";
   }
 
-  if (existing) Object.assign(existing, { name: cleanName, icon });
-  else workspace.folders = [...workspace.folders, { id, name: cleanName, icon, pinned: false }];
+  const changes = { name: cleanName, icon };
+  if (color !== undefined) changes.color = color;
+  if (existing) Object.assign(existing, changes);
+  else workspace.folders = [...workspace.folders, { id, ...changes, pinned: false }];
 }
 
 export function pinFolder(workspace, { id, pinned }) {
@@ -36,6 +41,20 @@ export function pinFolder(workspace, { id, pinned }) {
   if (folder.pinned === pinned) return;
   if (pinned && workspace.folders.filter((item) => item.pinned).length >= maxPinnedFolders) return "folderPinLimit";
   folder.pinned = pinned;
+}
+
+export function reorderFolder(workspace, { id, targetId, position }) {
+  if (position !== "before" && position !== "after") throw new Error("Invalid folder position");
+  const folder = workspace.folders.find((item) => item.id === id);
+  if (!folder) return "folderMissing";
+  if (id === targetId) return;
+
+  const order = workspace.folders.filter((item) => item.id !== id);
+  const targetIndex = order.findIndex((item) => item.id === targetId);
+  if (targetIndex === -1) return "folderMissing";
+  const insertionIndex = position === "after" ? targetIndex + 1 : targetIndex;
+  order.splice(insertionIndex, 0, folder);
+  workspace.folders = order;
 }
 
 export function deleteFolder(workspace, { id }) {

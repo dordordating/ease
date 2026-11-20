@@ -1,6 +1,15 @@
 export const vaultSessionStorageKey = "easeVaultSessions";
 export const vaultExpiryAlarm = "ease-vault-expiry";
-const sessionDuration = 5 * 60_000;
+export const defaultVaultPolicy = "five-minutes";
+const policyDurations = {
+  "after-copy": 5 * 60_000,
+  "one-minute": 60_000,
+  "five-minutes": 5 * 60_000
+};
+
+export function vaultPolicyFor(policy) {
+  return typeof policy === "string" && Object.hasOwn(policyDurations, policy) ? policy : defaultVaultPolicy;
+}
 
 export function activeVaultSession(sessions, folderId) {
   const session = sessions.get(folderId);
@@ -32,9 +41,9 @@ export async function readVaultSessions() {
   return sessions;
 }
 
-export async function unlockVaultSession(sessions, folderId, key) {
+export async function unlockVaultSession(sessions, folderId, key, policy) {
   const next = new Map(sessions);
-  next.set(folderId, { key, expiresAt: Date.now() + sessionDuration });
+  next.set(folderId, { key, expiresAt: Date.now() + policyDurations[vaultPolicyFor(policy)] });
   await persistSessions(next);
   sessions.set(folderId, next.get(folderId));
 }
