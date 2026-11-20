@@ -10,6 +10,8 @@ Ease is a local-first browser workspace for reusable text and quick daily checks
 
 Ease uses Manifest V3 and requires Chrome 116 or newer. It has no build step or dependencies.
 
+The optional [Ease API](backend/README.md) provides Google account registration and OpenRouter translation. The backend guide covers PostgreSQL and deployment on Coolify.
+
 ### Update an existing installation
 
 Open the new ZIP and copy the contents of its extension folder over the files in the folder already loaded by Chrome. Then select **Reload** on the existing Ease card at `chrome://extensions`. Using the same Chrome profile and installation folder keeps the extension ID, local data, and OAuth registration. Removing Ease or loading a different extracted folder can leave you without the previous install's local data.
