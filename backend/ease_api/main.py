@@ -19,6 +19,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .auth import GoogleAuthUnavailable, InvalidGoogleCredential, issue_session, validate_session, verify_google_access_token
 from .db import MAX_WORKSPACE_SYNC_REVISION, Database, QuotaExceeded, User
+from .mail_imap import router as mail_imap_router
 from .mail_oauth import mail_oauth_router
 from .market_pairs import MARKET_SYMBOLS, parse_pair
 from .markets import MarketsService
@@ -200,6 +201,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Ease API", version="1.0.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.include_router(mail_oauth_router(settings))
+    app.include_router(mail_imap_router)
     app.add_middleware(RequestBodyLimit, limit=max(24_576, settings.max_translation_characters * 12 + 2048))
     app.add_middleware(
         CORSMiddleware, allow_origins=settings.origins, allow_methods=["GET", "POST", "PUT"],

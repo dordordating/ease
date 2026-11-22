@@ -1080,10 +1080,16 @@ const moduleSearchSources = {
   markets: marketSearchSource,
   mail: () => ({
     label: "mail",
-    entries: workspace.tabs.includes("mail") ? inboxMessages(mailAccounts).filter(message => message.url).map(message => ({
+    entries: workspace.tabs.includes("mail") ? inboxMessages(mailAccounts).map(message => ({
       title: message.subject || t("mailNoSubject"), detail: message.sender || message.email,
       keywords: [message.subject, message.sender, message.email],
-      open: () => chrome.tabs.create({ url: message.url }).catch(() => reportError("mailUnavailable"))
+      open() {
+        if (message.url) chrome.tabs.create({ url: message.url }).catch(() => reportError("mailUnavailable"));
+        else {
+          switchTo("mail", false);
+          mailController?.showMessage(message);
+        }
+      }
     })) : []
   }),
   translate: () => ({

@@ -8,6 +8,11 @@ export const mailProviders = Object.freeze({
   gmail: { host: "https://www.googleapis.com/*", authorization: "https://accounts.google.com", label: "Gmail" },
   outlook: { host: "https://graph.microsoft.com/*", authorization: "https://login.microsoftonline.com", label: "Outlook" }
 });
+export const imapPresets = Object.freeze({
+  icloud: { host: "imap.mail.me.com", label: "iCloud Mail" },
+  yahoo: { host: "imap.mail.yahoo.com", label: "Yahoo Mail" },
+  custom: { label: "IMAP" }
+});
 
 export class MailError extends Error {
   constructor(code, status) {
@@ -21,9 +26,9 @@ export function mailPermission(provider) {
   return { origins: [mailProviders[provider].host] };
 }
 
-async function jsonRequest(url, { body, token } = {}) {
+async function jsonRequest(url, { body, token, milliseconds = 10_000 } = {}) {
   try {
-    const options = { credentials: "omit", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(10_000) };
+    const options = { credentials: "omit", redirect: "error", cache: "no-store", signal: AbortSignal.timeout(milliseconds) };
     if (body) {
       options.method = "POST";
       options.body = JSON.stringify(body);
@@ -60,6 +65,53 @@ async function jsonRequest(url, { body, token } = {}) {
 
 function text(value, maximum) {
   return typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]/gu, " ").trim().slice(0, maximum) : "";
+}
+
+export function imapAccount(data) {
+  const { preset, email, username, password, security } = data ?? {};
+  if (!Object.hasOwn(imapPresets, preset) || typeof email !== "string" || email.length > 254
+    || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email.trim())
+    || typeof username !== "string" || !username.trim() || username.length > 254
+    || typeof password !== "string" || !password || password.length > 1024
+    || /[\u0000-\u001f\u007f]/u.test(username + password)) throw new MailError("mailImapInvalid");
+  const input = imapPresets[preset].host ?? data.host;
+  if (typeof input !== "string" || !input.trim() || input.length > 253 || /[\s:/\\?#@%\[\]]/u.test(input.trim())) {
+    throw new MailError("mailImapInvalid");
+  }
+  let host;
+  try {
+    host = new URL(`https://${input.trim().replace(/\.$/u, "")}`).hostname;
+  } catch {
+    throw new MailError("mailImapInvalid");
+  }
+  if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]*[a-z][a-z0-9-]*$/u.test(host)) {
+    throw new MailError("mailImapInvalid");
+  }
+  return {
+    provider: "imap", preset, email: email.trim(),
+    connection: { host, security: preset === "custom" && security === "starttls" ? "starttls" : "tls", username, password }
+  };
+}
+
+export async function imapMessages(connection) {
+  try {
+    const { messages, unread } = await jsonRequest(`${broker}/imap/sync`, { body: connection, milliseconds: 17_000 });
+    if (!Array.isArray(messages) || messages.length > inboxSize || !Number.isSafeInteger(unread) || unread < 0) {
+      throw new MailError("mailImapUnavailable");
+    }
+    return {
+      unread,
+      messages: messages.filter(row => row && typeof row.id === "string" && /^\d{1,10}$/u.test(row.id)
+        && Number.isFinite(row.received) && row.received > 0 && row.received <= 8.64e15).map(row => ({
+        id: row.id, received: row.received, subject: text(row.subject, 300), sender: text(row.sender, 254), unread: row.unread === true
+      }))
+    };
+  } catch (error) {
+    if (error?.status === 401) throw new MailError("mailReconnect");
+    if (error?.status === 422) throw new MailError("mailImapInvalid");
+    if (error?.status === 429) throw new MailError("mailImapBusy");
+    throw new MailError("mailImapUnavailable");
+  }
 }
 
 function expiry(result, savedRefreshToken) {

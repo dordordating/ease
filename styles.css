@@ -5077,3 +5077,30 @@ a.mail-row-open:hover {
   color: var(--accent);
   font-size: 11px;
 }
+
+.mail-imap-form {
+  display: grid;
+  gap: 7px;
+  min-inline-size: 0;
+  padding: 8px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: var(--radius);
+  background: var(--subtle);
+}
+
+.mail-imap-form h3 {
+  margin: 0;
+  font-size: 12px;
+}
+
+.mail-imap-transport {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.mail-imap-transport .secondary-button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+  color: var(--accent);
+}

@@ -1,5 +1,6 @@
 import {
-  authorizeMailbox, mailConfig, mailPermission, mailboxMessages, mailboxProfile, mailProviders, MailError, refreshMailToken
+  authorizeMailbox, imapAccount, imapMessages, mailConfig, mailPermission, mailboxMessages, mailboxProfile,
+  mailProviders, MailError, refreshMailToken
 } from "./mail-api.js";
 import { readWorkspace } from "./workspace-data.js";
 
@@ -55,9 +56,14 @@ function changed() {
 
 async function snapshot() {
   const saved = await accounts();
-  return saved.map(({ id, provider, email, messages = [], unread = 0, updatedAt = null, issue = null }) => (
-    { id, provider, email, messages, unread, updatedAt, issue }
-  ));
+  return saved.map(({ id, provider, email, preset, connection, messages = [], unread = 0, updatedAt = null, issue = null }) => {
+    const account = { id, provider, email, messages, unread, updatedAt, issue };
+    if (provider === "imap") {
+      const { host, security, username } = connection;
+      account.imap = { preset, host, security, username };
+    }
+    return account;
+  });
 }
 
 async function maintainAlarm() {
@@ -75,19 +81,23 @@ async function renew(account) {
 async function refreshAccount(record) {
   let account = record;
   try {
-    if (!await chrome.permissions.contains(mailPermission(account.provider))) throw new MailError("mailPermission");
-    if (account.expiresAt - Date.now() < 60_000) account = await renew(account);
     let inbox;
-    try {
-      inbox = await mailboxMessages(account, account.accessToken);
-    } catch (error) {
-      if (error.status !== 401) throw error;
-      account = await renew(account);
-      inbox = await mailboxMessages(account, account.accessToken);
+    if (account.provider === "imap") inbox = await imapMessages(account.connection);
+    else {
+      if (!await chrome.permissions.contains(mailPermission(account.provider))) throw new MailError("mailPermission");
+      if (account.expiresAt - Date.now() < 60_000) account = await renew(account);
+      try {
+        inbox = await mailboxMessages(account, account.accessToken);
+      } catch (error) {
+        if (error.status !== 401) throw error;
+        account = await renew(account);
+        inbox = await mailboxMessages(account, account.accessToken);
+      }
     }
     await save({ ...account, ...inbox, issue: null, updatedAt: Date.now() });
   } catch (error) {
-    const issue = ["mailPermission", "mailReconnect"].includes(error?.code) ? error.code : "mailUnavailable";
+    const issue = ["mailPermission", "mailReconnect", "mailImapBusy", "mailImapUnavailable"].includes(error?.code)
+      ? error.code : "mailUnavailable";
     await save({ ...account, issue });
   }
 }
@@ -96,7 +106,8 @@ function refreshInbox(force = false) {
   if (refreshing) return refreshing;
   refreshing = queue(async () => {
     const now = Date.now();
-    const ready = (await accounts()).filter(account => force || now - (account.updatedAt ?? 0) >= staleAfter);
+    const ready = (await accounts()).filter(account => (account.provider !== "imap" || account.issue !== "mailReconnect")
+      && (force || now - (account.updatedAt ?? 0) >= staleAfter));
     // Limit providers and partial failures to small batches, retaining other accounts' snapshots.
     for (let start = 0; start < ready.length; start += 3) {
       await Promise.all(ready.slice(start, start + 3).map(refreshAccount));
@@ -107,20 +118,40 @@ function refreshInbox(force = false) {
   return refreshing;
 }
 
+function saveLinked(account, replaceId) {
+  return queue(async () => {
+    const linked = await accounts();
+    const previous = linked.find(item => item.id === account.id);
+    const replacing = linked.find(item => item.id === replaceId && item.provider === "imap");
+    if (replaceId && !replacing) throw new MailError("mailReconnect");
+    if (!previous && !replacing && linked.length >= maxAccounts) throw new MailError("mailAccountLimit");
+    await access("readwrite", (target) => {
+      if (replacing && replacing.id !== account.id) target.delete(replacing.id);
+      return target.put({ ...previous, ...account, issue: null });
+    });
+    await maintainAlarm();
+    await changed();
+  });
+}
+
+async function connectImap(data, replaceId) {
+  const account = imapAccount(data);
+  const { host, username, security } = account.connection;
+  const key = new TextEncoder().encode(JSON.stringify([host, username, security]));
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", key));
+  account.id = "imap:" + Array.from(digest, value => value.toString(16).padStart(2, "0")).join("");
+  const inbox = await imapMessages(account.connection);
+  await saveLinked({ ...account, ...inbox, updatedAt: Date.now() }, replaceId);
+  return snapshot();
+}
+
 async function connect(provider, permission) {
   if (!await permission) throw new MailError("mailPermission");
   if (!(await mailConfig())[provider]) throw new MailError("mailNotConfigured");
   const credentials = await authorizeMailbox(provider);
   const identity = await mailboxProfile(provider, credentials.accessToken);
   const id = provider + ":" + identity.externalId;
-  await queue(async () => {
-    const linked = await accounts();
-    const previous = linked.find(account => account.id === id);
-    if (!previous && linked.length >= maxAccounts) throw new MailError("mailAccountLimit");
-    await save({ ...previous, id, provider, email: identity.email, ...credentials, issue: null, updatedAt: null });
-    await maintainAlarm();
-    await changed();
-  });
+  await saveLinked({ id, provider, email: identity.email, ...credentials, updatedAt: null });
   // This check is queued after the previous batch if an inbox refresh was already running.
   if (refreshing) await refreshing.catch(() => {});
   return refreshInbox();
@@ -157,6 +188,13 @@ export function registerMailHandlers() {
         ? chrome.permissions.request(mailPermission(message.provider))
         : chrome.permissions.contains(mailPermission(message.provider))).catch(() => false);
       connecting = connect(message.provider, permission).finally(() => { connecting = undefined; });
+      result = connecting;
+    } else if (message.action === "connect-imap") {
+      if (connecting) {
+        respond({ ok: false, error: "mailConnecting" });
+        return;
+      }
+      connecting = connectImap(message.data, message.replaceId).finally(() => { connecting = undefined; });
       result = connecting;
     } else if (message.action === "disconnect" && typeof message.id === "string" && message.id.length <= 540) {
       result = queue(async () => {

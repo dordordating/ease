@@ -1057,7 +1057,7 @@ export function renderCalendar(container, {
     update, openEvent,
     openFollowUp({ title, url }) {
       const mailUrl = mailMessageLink(null, url);
-      if (!mailUrl || !editor.hidden) return;
+      if (!editor.hidden) return;
       showDay(localToday(), { select: true });
       openEditor(undefined, { title, mailUrl });
       editor.scrollIntoView({ block: 'nearest' });

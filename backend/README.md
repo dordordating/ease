@@ -31,6 +31,12 @@ Mail connects separately from the Ease account. The extension fetches inbox head
 
 Clients with unverified or restricted OAuth consent can be limited to approved test users. For Gmail testing, refresh-token expiration depends on the OAuth consent-screen publishing status.
 
+### IMAP connections
+
+The iCloud and Yahoo presets use their public IMAP hosts with provider-issued application passwords. Other providers can use an IMAP hostname and password on implicit TLS (993) or STARTTLS (143). The server only connects to publicly routable addresses pinned to the lookup result and checks the certificate against the requested hostname. Providers that require an OAuth-only, POP-only, or private-network connection require a different connector.
+
+Allow outbound TCP 993 and 143 from the Ease API container. The API reads the inbox in read-only mode and returns recent From and Subject headers, timestamps, read status, and the unread total. It keeps request credentials and the snapshot in memory for the request, with no database storage. The extension stores IMAP credentials and snapshots on the device. Keep reverse-proxy request-body logging disabled for `/v1/mail/imap/sync`.
+
 ## Translation tiers and limits
 
 | Tier | Default OpenRouter model | Override |
