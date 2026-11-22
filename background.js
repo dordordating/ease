@@ -13,7 +13,7 @@ import { refreshConnectedGoogleCalendar, registerGoogleProviderHandlers } from "
 import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
 import { deleteFolder, hasFolder, moveSnippet, pinFolder, reorderFolder, saveFolder } from "./clipboard-store.js";
 import { registerClipboardHistoryHandlers, suppressClipboardHistoryText } from "./clipboard-history-background.js";
-import { translatorLanguages } from "./translator-engine.js";
+import { translationLanguagePreferences } from "./translator-engine.js";
 import { easeTranslationMessage, handleEaseTranslationMessage, registerEaseSessionHandlers } from "./ease-api.js";
 import { changeFlashcardPreferences, FlashcardError, removeFlashcard, reviewFlashcard, saveFlashcard } from "./flashcard-store.js";
 import { registerFlashcardReminderHandlers } from "./flashcard-reminders.js";
@@ -312,10 +312,8 @@ async function updateWorkspace(workspace, action, data, transaction) {
       changeCalendarPreferences(workspace, data);
       break;
     case "translator-preferences": {
-      const settings = { ...defaultTranslator, ...workspace.translator };
+      const settings = { ...defaultTranslator, ...workspace.translator, ...translationLanguagePreferences(workspace.translator, data) };
       if (translatorEngines.includes(data.engine)) settings.engine = data.engine;
-      if (data.source === "auto" || translatorLanguages.includes(data.source)) settings.source = data.source;
-      if (translatorLanguages.includes(data.target)) settings.target = data.target;
       if (["both", "result"].includes(data.layout)) settings.layout = data.layout;
       if (data.folderId === null || hasFolder(workspace, data.folderId)) settings.folderId = data.folderId;
       workspace.translator = settings;

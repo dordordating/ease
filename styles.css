@@ -6,6 +6,22 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Ease Persian Numerals";
+  src: url("fonts/EasePersianNumerals-Regular.woff") format("woff");
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+06F0-06F9;
+}
+
+@font-face {
+  font-family: "Ease Persian Numerals";
+  src: url("fonts/EasePersianNumerals-Bold.woff") format("woff");
+  font-weight: 700;
+  font-display: swap;
+  unicode-range: U+06F0-06F9;
+}
+
 :root {
   color-scheme: light;
   --surface: #fff;
@@ -43,14 +59,14 @@
   --control-height: 32px;
   --radius: 11px;
   --system-text: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  font-family: var(--system-text);
+  font-family: "Ease Persian Numerals", var(--system-text);
   font-size: 13px;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 }
 
 :root:lang(fa) {
-  font-family: Vazir, var(--system-text);
+  font-family: "Ease Persian Numerals", Vazir, var(--system-text);
 }
 
 :root[data-theme="dark"] {
@@ -2862,6 +2878,19 @@ button.calendar-event-content:hover {
   gap: 5px;
 }
 
+.translator-language-caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 5px;
+}
+
+.translator-target-language {
+  color: var(--translate);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
 .translator-engines {
   container-type: inline-size;
   min-inline-size: 0;
@@ -3077,13 +3106,24 @@ button.calendar-event-content:hover {
 .translator-input-header .translator-submit {
   flex: 0 1 auto;
   min-inline-size: 0;
-  max-inline-size: 64%;
+  max-inline-size: 70%;
   min-block-size: 26px;
   padding: 3px 7px;
+  gap: 5px;
 }
 
 .translator-submit span {
   min-inline-size: 0;
+}
+
+.translator-submit-shortcut {
+  min-block-size: 15px;
+  padding-inline: 3px;
+  border-color: color-mix(in srgb, currentColor 36%, transparent);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  color: inherit;
+  font: 600 10px/1 var(--system-text);
+  white-space: nowrap;
 }
 
 .translator-result-header .translator-copy {

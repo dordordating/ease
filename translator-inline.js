@@ -195,7 +195,7 @@
         })
       ]);
       signal.throwIfAborted();
-      if (reply?.ok && typeof reply.text === "string") return { text: reply.text };
+      if (reply?.ok && typeof reply.text === "string") return reply;
       throw Object.assign(new Error("Inline translation failed"), { code: reply?.code ?? "translatorOnlineUnavailable" });
     } finally {
       if (abort) signal.removeEventListener("abort", abort);
@@ -252,6 +252,13 @@
     return typeof value === "string" && value ? value : fallback;
   }
 
+  function updateTarget(job, { target, targetLabel }) {
+    const label = targetLabel || localized(job, "translatorOutput", "Translation");
+    job.title.textContent = label;
+    job.card.setAttribute("aria-label", label);
+    job.result.lang = target ?? "";
+  }
+
   function stylePopover(shadow) {
     try {
       if (!stylesheet) {
@@ -275,14 +282,12 @@
     const card = document.createElement("section");
     card.className = "card";
     card.setAttribute("role", "region");
-    card.setAttribute("aria-label", label);
     card.lang = job.settings.locale ?? "";
     card.dir = job.settings.dir === "rtl" ? "rtl" : "ltr";
 
     const header = document.createElement("header");
     const heading = document.createElement("div");
     const title = document.createElement("strong");
-    title.textContent = label;
     const subtitle = document.createElement("small");
     subtitle.textContent = localized(job, engineLabels[job.settings.engine] ?? "translatorChrome", "On-device");
     heading.append(title, subtitle);
@@ -321,6 +326,7 @@
       }
       if (settings.source !== job.settings.source) job.detectedSource = undefined;
       job.settings = settings;
+      updateTarget(job, settings);
       subtitle.textContent = localized(job, engineLabels[settings.engine] ?? "translatorChrome", "On-device");
       await translate(job);
       run.disabled = false;
@@ -328,7 +334,8 @@
     card.append(header, status, progress, result, run);
     shadow.append(card);
     document.documentElement.append(host);
-    Object.assign(job, { host, card, status, progress, result, run });
+    Object.assign(job, { host, card, title, status, progress, result, run });
+    updateTarget(job, job.settings);
     schedulePosition();
   }
 
@@ -369,6 +376,7 @@
         });
       }
       if (current !== job || controller.signal.aborted) return;
+      if (online && translated.target) updateTarget(job, translated);
       job.status.hidden = true;
       job.result.textContent = translated.text;
       job.result.hidden = false;

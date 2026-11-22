@@ -7,6 +7,37 @@ export const translatorLanguages = Object.freeze([
 ]);
 export const maxTranslationLength = 6_000;
 
+export function selectableLanguage(code) {
+  if (!code || translatorLanguages.includes(code)) return code;
+  try {
+    const { language, script } = new Intl.Locale(code).maximize();
+    const scripted = `${language}-${script}`;
+    if (translatorLanguages.includes(scripted)) return scripted;
+    if (translatorLanguages.includes(language)) return language;
+  } catch {
+    // Browser language preferences may include unsupported tags.
+  }
+}
+
+function languagePreference(value, fallback) {
+  return value === "auto" || translatorLanguages.includes(value) ? value : fallback;
+}
+
+export function translationLanguagePreferences(preferences, patch = {}) {
+  const source = languagePreference(patch.source, languagePreference(preferences?.source, "auto"));
+  const target = languagePreference(patch.target, languagePreference(preferences?.target, "en"));
+  if (source !== target) return { source, target };
+  if (source === "auto") return { source, target: "en" };
+  if (patch.source === source && patch.target !== target) return { source, target: "auto" };
+  return { source: "auto", target };
+}
+
+export function resolveTranslationTarget({ source, target }, locale) {
+  if (target !== "auto") return target;
+  const preferred = [locale, ...(globalThis.navigator?.languages ?? []), "en", "es"];
+  return preferred.map(selectableLanguage).find(language => language && language !== source);
+}
+
 class TranslationError extends Error {
   constructor(code) {
     super(code);

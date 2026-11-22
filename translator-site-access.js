@@ -1,6 +1,6 @@
 import { handleEaseTranslationMessage, maxOnlineTranslationLength, onlineTranslationErrorCodes } from "./ease-api.js";
 import { isRtl, translate } from "./locales.js";
-import { maxTranslationLength, translatorLanguages } from "./translator-engine.js";
+import { maxTranslationLength, resolveTranslationTarget, translationLanguagePreferences } from "./translator-engine.js";
 import { readTranslationHistory, recordTranslationHistory } from "./translation-history-store.js";
 import { defaultTranslator, readWorkspace, translatorEngines } from "./workspace-data.js";
 
@@ -128,13 +128,19 @@ async function activeSitePreferences(sender, page) {
   const globallyEnabled = preferences.inlineEnabled === true;
   const legacyEnabled = Array.isArray(preferences.inlineSites) && preferences.inlineSites.includes(page.origin);
   if (!globallyEnabled && !legacyEnabled) return null;
+  const pair = translationLanguagePreferences(preferences);
   return {
-    source: translatorLanguages.includes(preferences.source) ? preferences.source : defaultTranslator.source,
-    target: translatorLanguages.includes(preferences.target) ? preferences.target : defaultTranslator.target,
+    source: pair.source,
+    target: resolveTranslationTarget(pair, workspace.locale),
     // Previously enabled sites were granted for on-device translation.
     engine: globallyEnabled && translatorEngines.includes(preferences.engine) ? preferences.engine : defaultTranslator.engine,
     locale: workspace.locale
   };
+}
+
+function inlineTargetLabel({ locale, target }) {
+  const language = new Intl.DisplayNames([locale], { type: "language" }).of(target);
+  return translate(locale, "translatorOutputTo", { language });
 }
 
 async function activeSiteSettings(sender, page) {
@@ -144,6 +150,7 @@ async function activeSiteSettings(sender, page) {
   const limit = new Intl.NumberFormat(locale).format(engine === "chrome" ? maxTranslationLength : maxOnlineTranslationLength);
   return {
     ...settings,
+    targetLabel: inlineTargetLabel(settings),
     historyEnabled: engine === "chrome" && await historyEnabled(),
     dir: isRtl(locale) ? "rtl" : "ltr",
     strings: Object.fromEntries(inlineLabels.map((label) => [label, translate(locale, label, { limit })]))
@@ -241,7 +248,7 @@ function handleInlineOnline(message, sender, page, respond) {
         })).catch(() => {});
       }
       if (pending.cancelled) return { ok: false, code: "translatorOnlineUnavailable" };
-      return { ok: true, text: answer.result.text };
+      return { ok: true, text: answer.result.text, target: settings.target, targetLabel: inlineTargetLabel(settings) };
     }
     const code = onlineErrorKeys.has(answer?.code) ? answer.code : "translatorFailed";
     return { ok: false, code };

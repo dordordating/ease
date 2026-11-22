@@ -1,4 +1,7 @@
-import { chromeTranslate, maxTranslationLength, translatorLanguages } from "./translator-engine.js";
+import {
+  chromeTranslate, maxTranslationLength, resolveTranslationTarget, selectableLanguage,
+  translationLanguagePreferences, translatorLanguages
+} from "./translator-engine.js";
 import { maxOnlineTranslationLength, onlineTranslationErrorCodes, translateOnline } from "./ease-api.js";
 import { defaultTranslator, translatorEngines } from "./workspace-data.js";
 
@@ -10,14 +13,6 @@ const translationErrors = new Set([
   "translatorUnavailable", "translatorPairUnavailable", "translatorDetectionUnavailable",
   "translatorNeedsDownload", ...onlineTranslationErrorCodes
 ]);
-
-function selectableLanguage(code) {
-  if (!code || languages.has(code)) return code;
-  const locale = new Intl.Locale(code).maximize();
-  const scripted = `${locale.language}-${locale.script}`;
-  if (languages.has(scripted)) return scripted;
-  return languages.has(locale.language) ? locale.language : undefined;
-}
 
 const enginePicker = `
   <fieldset class="translator-engines">
@@ -48,7 +43,7 @@ export function renderTranslator(container, {
   const languageOptions = translatorLanguages
     .map(code => [code, names.of(code)])
     .sort((a, b) => a[1].localeCompare(b[1], locale));
-  const preferences = { ...defaultTranslator, ...initialPreferences };
+  const preferences = { ...defaultTranslator, ...initialPreferences, ...translationLanguagePreferences(initialPreferences) };
   if (!translatorEngines.includes(preferences.engine)) preferences.engine = defaultTranslator.engine;
   let folders = initialFolders;
   let accountId = initialAccountId;
@@ -73,7 +68,9 @@ export function renderTranslator(container, {
         </label>
         <button type="button" class="icon-button translator-swap">${icon("swap")}</button>
         <label class="translator-field">
-          <span data-label="translatorTarget"></span>
+          <span class="translator-language-caption">
+            <span data-label="translatorTarget"></span><bdi class="translator-target-language" hidden></bdi>
+          </span>
           <select name="target" class="translator-select"></select>
         </label>
       </div>
@@ -82,7 +79,9 @@ export function renderTranslator(container, {
         <div id="translator-original" class="translator-original">
           <div class="translator-input-header">
             <label for="translator-text" data-label="translatorInput"></label>
-            <button type="submit" class="primary-button translator-submit">${icon("translate")}<span data-label="translatorRun"></span></button>
+            <button type="submit" class="primary-button translator-submit">
+              <span data-label="translatorRun"></span><kbd class="translator-submit-shortcut" dir="ltr" aria-hidden="true"></kbd>
+            </button>
           </div>
           <textarea id="translator-text" class="translator-textarea" dir="auto" rows="4"></textarea>
           <p class="translator-detected" hidden></p>
@@ -147,6 +146,7 @@ export function renderTranslator(container, {
   const settingsView = container.querySelector(".translator-settings-view");
   const sourceSelect = form.elements.namedItem("source");
   const targetSelect = form.elements.namedItem("target");
+  const automaticTargetLanguage = form.querySelector(".translator-target-language");
   const input = form.querySelector(".translator-textarea");
   const original = form.querySelector(".translator-original");
   const result = form.querySelector(".translator-result");
@@ -174,7 +174,10 @@ export function renderTranslator(container, {
   const cloudSignInButtons = Array.from(container.querySelectorAll(".translator-cloud-sign-in"));
 
   for (const label of container.querySelectorAll("[data-label]")) label.textContent = t(label.dataset.label);
-  sourceSelect.add(new Option(t("translatorAuto"), "auto"));
+  const autoSource = new Option(t("translatorAuto"), "auto");
+  const autoTarget = new Option(t("translatorAutoTarget"), "auto");
+  sourceSelect.add(autoSource);
+  targetSelect.add(autoTarget);
   for (const [code, name] of languageOptions) {
     sourceSelect.add(new Option(name, code));
     targetSelect.add(new Option(name, code));
@@ -182,6 +185,8 @@ export function renderTranslator(container, {
   input.placeholder = t("translatorInputPlaceholder");
   input.value = typeof draft.text === "string" ? draft.text : "";
   translateButton.setAttribute("aria-keyshortcuts", "Control+Enter Meta+Enter");
+  const platform = navigator.userAgentData?.platform || navigator.platform;
+  translateButton.querySelector("kbd").textContent = /^mac/i.test(platform) ? "⌘ + ↵" : "Ctrl + ↵";
   copyButton.title = t("translatorCopy");
   copyButton.setAttribute("aria-label", copyButton.title);
   swapButton.setAttribute("aria-label", t("translatorSwap"));
@@ -196,6 +201,10 @@ export function renderTranslator(container, {
 
   function sourceLanguage() {
     return preferences.source === "auto" ? draft.detectedSource : preferences.source;
+  }
+
+  function targetLanguage() {
+    return resolveTranslationTarget(preferences, locale);
   }
 
   function setFeedback(key, kind = "info", values = {}, element = feedback) {
@@ -236,7 +245,7 @@ export function renderTranslator(container, {
     if (clearDetection) draft.detectedSource = undefined;
     draft.engine = preferences.engine;
     draft.source = preferences.source;
-    draft.target = preferences.target;
+    draft.target = targetLanguage();
     setProgress(undefined);
     setFeedback(online() || nativeSupported() ? undefined : "translatorUnavailable");
   }
@@ -257,6 +266,11 @@ export function renderTranslator(container, {
     originalToggle.hidden = !resultOnly;
     originalToggle.textContent = t(showOriginal ? "translatorHideOriginal" : "translatorShowOriginal");
     originalToggle.setAttribute("aria-expanded", String(!original.hidden));
+    const target = targetLanguage();
+    autoSource.disabled = preferences.target === "auto";
+    autoTarget.disabled = preferences.source === "auto";
+    automaticTargetLanguage.hidden = preferences.target !== "auto";
+    if (!automaticTargetLanguage.hidden) automaticTargetLanguage.textContent = names.of(target);
     sourceSelect.value = preferences.source;
     targetSelect.value = preferences.target;
     layoutSelect.value = preferences.layout;
@@ -277,7 +291,7 @@ export function renderTranslator(container, {
       select.disabled = writingPreferences;
     }
     const source = sourceLanguage();
-    swapButton.disabled = writingPreferences || !languages.has(source) || source === preferences.target;
+    swapButton.disabled = writingPreferences || !languages.has(source) || source === target;
     translateButton.disabled = (online() ? showSignIn() : !nativeSupported()) || !input.value.trim() || !!request || writingPreferences;
     const canUseResult = Boolean(draft.result) && !actionInProgress && !request && !writingPreferences;
     resultActions.hidden = !draft.result;
@@ -289,13 +303,13 @@ export function renderTranslator(container, {
     loading.hidden = !request || !online();
     if (output.textContent !== (draft.result ?? "")) output.textContent = draft.result ?? "";
     output.tabIndex = draft.result ? 0 : -1;
-    output.lang = preferences.target;
+    output.lang = target;
     for (const row of learningRows) {
       const value = draft.learning?.[row.dataset.learning] ?? "";
       const definition = row.querySelector("dd");
       if (definition.textContent !== value) definition.textContent = value;
       row.hidden = !value;
-      definition.lang = row.dataset.learning === "example" ? draft.learning?.exampleLanguage ?? preferences.target : locale;
+      definition.lang = row.dataset.learning === "example" ? draft.learning?.exampleLanguage ?? target : locale;
     }
     learningDetails.hidden = !draft.result || learningRows.every((row) => row.hidden);
     input.lang = source ?? locale;
@@ -316,7 +330,7 @@ export function renderTranslator(container, {
       const priorSource = preferences.source;
       const priorTarget = preferences.target;
       const priorEngine = preferences.engine;
-      Object.assign(preferences, nextPreferences);
+      Object.assign(preferences, nextPreferences, translationLanguagePreferences(preferences, nextPreferences));
       if (!translatorEngines.includes(preferences.engine)) preferences.engine = defaultTranslator.engine;
       if (preferences.engine !== priorEngine || preferences.source !== priorSource || preferences.target !== priorTarget) {
         resetResult(preferences.engine !== priorEngine || preferences.source !== priorSource);
@@ -387,7 +401,8 @@ export function renderTranslator(container, {
     if (disposed || request || writingPreferences) return false;
     const text = input.value;
     if (!validText(text)) return false;
-    if (sourceLanguage() === preferences.target) {
+    const target = targetLanguage();
+    if (sourceLanguage() === target) {
       setFeedback("translatorSameLanguage");
       return false;
     }
@@ -411,7 +426,7 @@ export function renderTranslator(container, {
     try {
       const options = {
         source: preferences.source,
-        target: preferences.target,
+        target,
         engine: preferences.engine,
         notesLanguage: locale,
         signal: pending.signal,
@@ -429,7 +444,7 @@ export function renderTranslator(container, {
       };
       const translated = await (online() ? translateOnline(text, options) : chromeTranslate(text, options));
       if (!current()) return false;
-      if (translated.source === preferences.target) {
+      if (translated.source === target) {
         setFeedback("translatorSameLanguage");
         return false;
       }
@@ -473,7 +488,7 @@ export function renderTranslator(container, {
 
   function translationEntry(text = input.value) {
     return {
-      text, translation: draft.result, source: sourceLanguage(), target: preferences.target,
+      text, translation: draft.result, source: sourceLanguage(), target: targetLanguage(),
       engine: preferences.engine, learning: draft.learning, notesLanguage: locale
     };
   }
@@ -568,10 +583,11 @@ export function renderTranslator(container, {
   });
   swapButton.addEventListener("click", async () => {
     const target = sourceLanguage();
-    if (!languages.has(target) || target === preferences.target) return;
+    const source = targetLanguage();
+    if (!languages.has(target) || target === source) return;
     const originalText = input.value;
     const translatedText = draft.result;
-    if (await changePreferences({ source: preferences.target, target }) && translatedText && input.value === originalText) {
+    if (await changePreferences({ source, target }) && translatedText && input.value === originalText) {
       setText(translatedText);
     }
   });
@@ -582,7 +598,7 @@ export function renderTranslator(container, {
     onFlashcard?.(translationEntry());
   });
 
-  if (draft.engine !== preferences.engine || draft.source !== preferences.source || draft.target !== preferences.target) resetResult();
+  if (draft.engine !== preferences.engine || draft.source !== preferences.source || draft.target !== targetLanguage()) resetResult();
   else if (!online() && !nativeSupported()) setFeedback("translatorUnavailable");
   showOriginal ||= !draft.result;
   renderFolderOptions();
