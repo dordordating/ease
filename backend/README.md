@@ -29,7 +29,7 @@ Mail connects separately from the Ease account. The extension fetches inbox head
 3. For Outlook, register a Microsoft Entra application that supports work/school and personal Microsoft accounts. Add a **Web** redirect URI of `<MAIL_OAUTH_ORIGIN>/v1/mail/oauth/outlook/callback`. Grant delegated Microsoft Graph `Mail.Read`, `Mail.Send` and `User.Read` permissions. The OAuth flow requests `offline_access` to refresh the inbox after the browser restarts. Set `MAIL_MICROSOFT_CLIENT_ID` and `MAIL_MICROSOFT_CLIENT_SECRET` in Coolify, using the secret value.
 4. Redeploy and check `/v1/mail/config?extension=<extension-id>`. A configured provider returns `true` for an allowed extension ID. Verify consent and fetching in Chrome. OAuth callback queries contain short-lived authorization codes, so configure any upstream access logging to omit the query for both callback paths. Uvicorn omits these requests from its access log.
 
-Clients with unverified or restricted OAuth consent can be limited to approved test users. For Gmail testing, refresh-token expiration depends on the OAuth consent-screen publishing status.
+To enable marking messages as read, add Gmail’s `https://www.googleapis.com/auth/gmail.modify` or Microsoft Graph’s delegated `Mail.ReadWrite` permission. Ease requests it when the user opts in. Clients with unverified or restricted OAuth consent can be limited to approved test users. For Gmail testing, refresh-token expiration depends on the OAuth consent-screen publishing status.
 
 ### IMAP connections
 
@@ -37,7 +37,7 @@ The iCloud and Yahoo presets use their public IMAP hosts with provider-issued ap
 
 Allow outbound TCP 993 and 143 from the Ease API container. The API reads the inbox in read-only mode and returns recent From and Subject headers, timestamps, read status, and the unread total. It keeps request credentials and the snapshot in memory for the request, with no database storage. The extension stores IMAP credentials and snapshots on the device. Keep reverse-proxy request-body logging disabled for `/v1/mail/imap/sync`.
 
-The reader fetches IMAP message text on demand through `/v1/mail/imap/message`. Gmail and Outlook use their provider APIs directly for reading and sending. IMAP accounts can submit via `/v1/mail/smtp/send` with SMTP STARTTLS on 587 or implicit TLS on 465. Allow outbound TCP on the used SMTP port and keep request-body logging disabled on both routes. SMTP acceptance confirms submission to the provider. Sent-folder behavior is provider-specific.
+The reader fetches the preferred HTML or plain-text MIME part on demand through `/v1/mail/imap/message`. Inbox opens can set the IMAP `\\Seen` flag by UID. Sent discovery uses the IMAP `\\Sent` role and falls back to common mailbox names. IMAP accounts can submit via `/v1/mail/smtp/send` with SMTP STARTTLS on 587 or implicit TLS on 465. After SMTP accepts a message, Ease checks for a server-side copy by Message-ID before appending a copy to Sent. Allow outbound TCP on the used SMTP port and keep request-body logging disabled on both routes.
 
 ## Translation tiers and limits
 

@@ -53,6 +53,7 @@ class Start(MailRequest):
     challenge: str = Field(pattern=verifier_pattern)
     extension_id: str = Field(pattern=r"^[a-p]{32}$")
     send: bool = False
+    mark: bool = False
 
 
 class Exchange(MailRequest):
@@ -173,6 +174,9 @@ def mail_oauth_router(settings: Settings) -> APIRouter:
             "provider": provider, "challenge": payload.challenge, "iat": now, "exp": now + 600,
         }, key, algorithm="HS256")
         scopes = client.scopes
+        if payload.mark:
+            scopes = (scopes.replace("gmail.readonly", "gmail.modify") if provider == "gmail"
+                      else scopes.replace("/Mail.Read ", "/Mail.ReadWrite "))
         if payload.send:
             scopes += (" https://www.googleapis.com/auth/gmail.send" if provider == "gmail"
                        else " https://graph.microsoft.com/Mail.Send")

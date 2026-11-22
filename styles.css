@@ -5146,3 +5146,46 @@ button.mail-row-open:hover {
 .mail-smtp-fields > :not(summary) {
   margin-block-start: 5px;
 }
+
+.mail-folder-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  margin-block-end: 5px;
+  border-radius: 9px;
+  background: var(--subtle);
+}
+
+.mail-folder-tabs button {
+  justify-content: center;
+  min-block-size: 29px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.mail-folder-tabs button[aria-pressed="true"] {
+  border-color: var(--stroke-subtle);
+  background: var(--surface);
+  color: var(--accent);
+}
+
+.mail-folder-tabs svg {
+  width: 14px;
+  height: 14px;
+}
+
+.mail-toolbar[data-folder="sent"] {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.mail-html-frame {
+  display: block;
+  width: 100%;
+  height: clamp(215px, 46vh, 565px);
+  box-sizing: border-box;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: var(--radius);
+  background: #fff;
+}

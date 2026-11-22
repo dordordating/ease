@@ -1,8 +1,9 @@
 import { imapPresets, mailMessageLink, mailPermission, mailProviders } from "./mail-api.js";
+import { htmlMailFrame } from "./mail-html.js";
 
-export function inboxMessages(accounts) {
-  return accounts.flatMap(({ id, provider, email, messages }) => messages.map(message => ({
-    ...message, url: mailMessageLink(provider, message.url), accountId: id, provider, email
+export function inboxMessages(accounts, folder = "inbox") {
+  return accounts.flatMap(({ id, provider, email, messages, sentMessages }) => (folder === "sent" ? sentMessages ?? [] : messages).map(message => ({
+    ...message, url: mailMessageLink(provider, message.url), accountId: id, provider, email, folder
   }))).sort((left, right) => right.received - left.received);
 }
 
@@ -17,6 +18,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   const dates = new Intl.DateTimeFormat(dateLocale, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   const numbers = new Intl.NumberFormat(dateLocale);
   let accountId = "";
+  let folder = "inbox";
   let unreadOnly = false;
   let managing = false;
   let busy = false;
@@ -37,10 +39,16 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   const inbox = element("section", "mail-inbox");
   const settings = element("section", "mail-settings");
   const controls = element("div", "mail-toolbar");
+  const folderTabs = element("div", "mail-folder-tabs");
+  folderTabs.setAttribute("role", "group");
+  folderTabs.setAttribute("aria-label", t("mailFolders"));
+  const inboxTab = control("mailInbox", "mail", () => switchFolder("inbox"));
+  const sentTab = control("mailSentFolder", "send", () => switchFolder("sent"));
+  folderTabs.append(inboxTab, sentTab);
   const accountSelect = element("select", "translator-select mail-account-select");
   accountSelect.setAttribute("aria-label", t("mailAccounts"));
   const unread = control("mailUnread", null, () => { unreadOnly = !unreadOnly; renderInbox(); });
-  const reload = control("mailRefresh", "refresh", () => act("refresh", { force: true }), true);
+  const reload = control("mailRefresh", "refresh", () => refreshFolder(true), true);
   const accountSummary = element("p", "mail-summary");
   const list = element("ul", "mail-list");
   const reader = element("section", "mail-reader");
@@ -109,7 +117,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   imapActions.append(submit, cancel);
   imap.append(imapTitle, imapHint, emailField.label, hostField.label, transport, usernameField.label, passwordField.label, outgoing, imapActions);
   controls.append(accountSelect, unread, reload);
-  inbox.append(controls, accountSummary, list);
+  inbox.append(folderTabs, controls, accountSummary, list);
   settings.append(settingsTitle, settingsHint, connect, imap, alerts, linked);
   module.append(state, inbox, reader, compose, settings);
   container.append(module);
@@ -225,12 +233,13 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   }
 
   async function openMessage(message) {
+    folder = message.folder ?? "inbox";
     const choice = { message, loading: true };
     opened = choice;
     error = undefined;
     render();
     try {
-      const answer = await send("message", { id: message.accountId, data: message.id });
+      const answer = await send("message", { id: message.accountId, data: message.id, folder });
       if (answer?.ok) choice.result = answer.value;
       else choice.error = answer?.error ?? "mailReadFailed";
     } catch { choice.error = "mailReadFailed"; }
@@ -250,7 +259,8 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     actions.append(control("mailFollowUp", "calendar", () => followUp(message), true));
     const subject = element("h3", "", message.subject || t("mailNoSubject"));
     subject.dir = "auto";
-    const sender = element("p", "mail-hint", message.sender || t("mailUnknownSender"));
+    const sender = element("p", "mail-hint", message.folder === "sent"
+      ? t("mailSentRecipient", { recipient: message.sender || "—" }) : message.sender || t("mailUnknownSender"));
     sender.dir = "auto";
     const status = element("p", "mail-state", loading ? t("mailWorking") : readError ? t(readError) : "");
     status.setAttribute("role", "status");
@@ -259,16 +269,29 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     if (readError && account?.provider !== "imap" && account
       && (readError === "mailReadPermission" || readError === "mailReconnect")) {
       const upgrade = control("mailReadPermissionAction", null, async () => {
-        if (await act("upgrade", { id: account.id, provider: account.provider, send: account.capabilities.send })) openMessage(message);
+        if (await act("upgrade", { id: account.id, provider: account.provider, send: account.capabilities.send,
+          mark: account.capabilities.mark })) openMessage(message);
       });
       upgrade.disabled = busy;
       reader.append(upgrade);
     }
     if (result) {
-      const body = element("div", "mail-message-body", result.body || t("mailEmptyBody"));
-      body.dir = "auto";
+      const body = result.format === "html" && result.body ? htmlMailFrame(result.body, t("mailMessagePreview"))
+        : element("div", "mail-message-body", result.body || t("mailEmptyBody"));
+      if (body.tagName !== "IFRAME") body.dir = "auto";
       reader.append(body);
       if (result.partial) reader.append(element("p", "mail-hint", t("mailPartialBody")));
+      if (message.folder !== "sent" && message.unread && !result.marked) {
+        if (account && account.provider !== "imap" && !account.capabilities.mark) {
+          const upgrade = control("mailMarkPermission", null, async () => {
+            if (await act("upgrade", { id: account.id, provider: account.provider, send: account.capabilities.send, mark: true })) {
+              openMessage(message);
+            }
+          });
+          upgrade.disabled = busy;
+          reader.append(upgrade);
+        } else reader.append(element("p", "mail-hint", t("mailMarkFailed")));
+      }
     }
   }
 
@@ -325,7 +348,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
       outgoing.open = true;
       return;
     }
-    await act("upgrade", { id: account.id, provider: account.provider, send: true });
+    await act("upgrade", { id: account.id, provider: account.provider, send: true, mark: account.capabilities.mark });
   }
 
   composeAccount.addEventListener("change", renderComposer);
@@ -333,16 +356,25 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     event.preventDefault();
     if (busy || sendButton.disabled) return;
     const { id, ...data } = composeDraft();
+    let sentStatus;
     busy = true;
     error = undefined;
     render();
     try {
       const answer = await send("send", { id, data });
       if (disposed) return;
-      if (answer?.ok) { closeComposer(); error = "mailSent"; }
+      if (answer?.ok) {
+        closeComposer();
+        sentStatus = answer.value?.savedCopy === false ? "mailSentNoCopy" : "mailSent";
+        error = sentStatus;
+      }
       else error = answer?.error ?? "mailSendFailed";
     } catch { error = "mailSendUnknown"; }
     finally { busy = false; if (!disposed) render(); }
+    if (!disposed && sentStatus && folder === "sent") {
+      await refreshFolder();
+      if (!disposed) { error = sentStatus; render(); }
+    }
   });
 
   function openAlerts(account) {
@@ -443,12 +475,21 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     if (!accounts.some(account => account.id === accountId)) accountId = "";
     accountSelect.replaceChildren(new Option(t("mailAllAccounts"), ""), ...accounts.map(account => new Option(account.email, account.id)));
     accountSelect.value = accountId;
+    const sent = folder === "sent";
+    inboxTab.setAttribute("aria-pressed", String(!sent));
+    sentTab.setAttribute("aria-pressed", String(sent));
+    inboxTab.disabled = busy;
+    sentTab.disabled = busy;
+    accountSelect.disabled = busy;
+    unread.hidden = sent;
+    controls.dataset.folder = folder;
     unread.setAttribute("aria-pressed", String(unreadOnly));
     reload.disabled = busy;
     const selected = accounts.filter(account => !accountId || account.id === accountId);
     const unreadCount = selected.reduce((total, account) => total + account.unread, 0);
-    accountSummary.textContent = t("mailUnreadCount", { count: numbers.format(unreadCount) });
-    const rows = inboxMessages(selected).filter(row => !unreadOnly || row.unread);
+    accountSummary.hidden = sent && !selected.some(item => item.sentIssue);
+    accountSummary.textContent = sent ? t("mailSentUnavailable") : t("mailUnreadCount", { count: numbers.format(unreadCount) });
+    const rows = inboxMessages(selected, folder).filter(row => sent || !unreadOnly || row.unread);
     list.replaceChildren(...rows.map(message => {
       const row = element("li", "mail-row");
       row.dataset.unread = String(message.unread);
@@ -460,7 +501,8 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
       const subject = element("strong", "mail-subject", message.subject || t("mailNoSubject"));
       subject.dir = "auto";
       subject.title = subject.textContent;
-      const sender = element("span", "mail-sender", message.sender || t("mailUnknownSender"));
+      const sender = element("span", "mail-sender", sent ? t("mailSentRecipient", { recipient: message.sender || "—" })
+        : message.sender || t("mailUnknownSender"));
       sender.dir = "auto";
       sender.title = sender.textContent;
       const detail = element("span", "mail-details");
@@ -475,7 +517,17 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
       row.append(control("mailFollowUp", "calendar", () => followUp(message), true));
       return row;
     }));
-    if (!rows.length) list.append(element("li", "mail-empty", t(unreadOnly ? "mailNoUnread" : "mailEmpty")));
+    if (!rows.length) list.append(element("li", "mail-empty", t(sent ? "mailSentEmpty" : unreadOnly ? "mailNoUnread" : "mailEmpty")));
+  }
+
+  function refreshFolder(force = false) {
+    return folder === "sent" ? act("sent", { id: accountId, force }) : act("refresh", { force });
+  }
+
+  function switchFolder(destination) {
+    if (busy || folder === destination) return;
+    folder = destination;
+    refreshFolder();
   }
 
   function render() {
@@ -489,7 +541,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     settingsButton.setAttribute("aria-expanded", String(showSettings));
     const status = error ?? (busy ? "mailWorking"
       : showSettings && !imapPreset && configured && !Object.values(configured).some(Boolean) ? "mailNotConfigured"
-        : !showSettings && accounts.some(account => account.issue) ? "mailPartial" : undefined);
+        : !showSettings && folder === "inbox" && accounts.some(account => account.issue) ? "mailPartial" : undefined);
     state.hidden = !status;
     state.textContent = status ? t(status) : "";
     if (showSettings) {
@@ -516,7 +568,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     render();
   }
 
-  accountSelect.addEventListener("change", () => { accountId = accountSelect.value; renderInbox(); });
+  accountSelect.addEventListener("change", () => { accountId = accountSelect.value; if (folder === "sent") refreshFolder(); else renderInbox(); });
   settingsButton.addEventListener("click", toggleSettings);
   render();
   if (!accounts.length) verifyProviders(); else act("refresh");

@@ -1080,7 +1080,7 @@ const moduleSearchSources = {
   markets: marketSearchSource,
   mail: () => ({
     label: "mail",
-    entries: workspace.tabs.includes("mail") ? inboxMessages(mailAccounts).map(message => ({
+    entries: workspace.tabs.includes("mail") ? [...inboxMessages(mailAccounts), ...inboxMessages(mailAccounts, "sent")].map(message => ({
       title: message.subject || t("mailNoSubject"), detail: message.sender || message.email,
       keywords: [message.subject, message.sender, message.email],
       open() {

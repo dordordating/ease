@@ -10,7 +10,7 @@ from email.utils import formatdate, make_msgid
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import Field, field_validator
 
-from .mail_imap import AuthenticationFailed, ImapSync, PinnedMailIO, run_mail_io
+from .mail_imap import AuthenticationFailed, ImapSync, PinnedMailIO, append_sent, run_mail_io
 
 router = APIRouter(prefix="/v1/mail/smtp")
 address_pattern = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", re.ASCII)
@@ -27,6 +27,7 @@ class SubmitMessage(ImapSync):
     to: list[str] = Field(min_length=1, max_length=10)
     subject: str = Field(max_length=180)
     body: str = Field(min_length=1, max_length=5000)
+    copy_to: ImapSync | None = None
 
     @field_validator("sender")
     @classmethod
@@ -99,7 +100,7 @@ class PinnedSMTP(smtplib.SMTP):
                 return code, b"\n".join(responses)
 
 
-def submit(config: SubmitMessage, port: int, addresses: list[tuple]) -> None:
+def submit(config: SubmitMessage, port: int, addresses: list[tuple]) -> tuple[bytes, str]:
     client = PinnedSMTP(config, port, addresses)
     try:
         try:
@@ -112,13 +113,15 @@ def submit(config: SubmitMessage, port: int, addresses: list[tuple]) -> None:
         message.set_content(config.body, cte="base64")
         if client.mail(config.sender)[0] != 250 or any(client.rcpt(recipient)[0] not in (250, 251, 252) for recipient in config.to):
             raise HTTPException(422, "smtp_recipient_rejected")
+        raw = message.as_bytes()
         try:
-            if client.data(message.as_bytes())[0] != 250:
+            if client.data(raw)[0] != 250:
                 raise HTTPException(422, "smtp_message_rejected")
         except smtplib.SMTPDataError:
             raise HTTPException(422, "smtp_message_rejected") from None
         except (OSError, smtplib.SMTPException, imaplib.IMAP4.error):
             raise HTTPException(504, "smtp_delivery_unknown") from None
+        return raw, str(message["Message-ID"])
     finally:
         client.close()
 
@@ -127,11 +130,19 @@ def submit(config: SubmitMessage, port: int, addresses: list[tuple]) -> None:
 async def send(payload: SubmitMessage, request: Request):
     port = 465 if payload.security == "tls" else 587
 
-    def deliver(addresses: list[tuple]) -> dict:
+    def deliver(addresses: list[tuple]) -> tuple[bytes, str]:
         try:
-            submit(payload, port, addresses)
+            return submit(payload, port, addresses)
         except smtplib.SMTPException:
             raise HTTPException(502, "smtp_unavailable") from None
-        return {"sent": True}
-
-    return await run_mail_io(request, payload.host, port, deliver)
+    raw, message_id = await run_mail_io(request, payload.host, port, deliver)
+    saved = None
+    if payload.copy_to:
+        mailbox = payload.copy_to
+        imap_port = 993 if mailbox.security == "tls" else 143
+        try:
+            saved = await run_mail_io(request, mailbox.host, imap_port,
+                                     lambda addresses: append_sent(mailbox, raw, message_id, imap_port, addresses))
+        except HTTPException:
+            saved = False
+    return {"sent": True, "savedCopy": saved}
