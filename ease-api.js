@@ -19,10 +19,13 @@ const maxUsageLength = 360;
 const maxExampleLength = 280;
 const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu;
 const sessionFormat = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u;
+const sessionStorageKey = "easeApiSession";
 const maxResultLength = maxOnlineTranslationLength * 12;
 
 let cachedSession;
 let pendingSession;
+let pendingSessionStorage = Promise.resolve();
+let rejectedSessionToken;
 let accountVersion = 0;
 let watchingAccount = false;
 const activeRequests = new Map();
@@ -39,13 +42,21 @@ function safeErrorCode(error) {
   return errorCodes.has(error?.code) ? error.code : "translatorFailed";
 }
 
-function observeAccount() {
+function useSessionStorage(operation) {
+  // The API can still be used if storage fails. Serialize access so a stale
+  // response cannot erase a session that was just refreshed.
+  pendingSessionStorage = pendingSessionStorage.then(() => operation(chrome.storage.session)).catch(() => undefined);
+  return pendingSessionStorage;
+}
+
+export function registerEaseSessionHandlers() {
   if (watchingAccount) return;
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local" || !Object.hasOwn(changes, googleAccountStorageKey)) return;
     accountVersion++;
     cachedSession = undefined;
     pendingSession = undefined;
+    useSessionStorage((storage) => storage.remove(sessionStorageKey));
     for (const request of activeRequests.values()) {
       request.abort(new EaseTranslationError("translatorOnlineSignIn"));
     }
@@ -208,6 +219,16 @@ async function establishSession(account) {
   return { account, token: data.access_token, expiresAt };
 }
 
+async function restoreSession(account) {
+  const result = await useSessionStorage((storage) => storage.get(sessionStorageKey));
+  const saved = result?.[sessionStorageKey];
+  if (saved?.accountId !== account.id || saved.email !== account.email
+    || !Number.isSafeInteger(saved.expiresAt) || saved.expiresAt <= Date.now()
+    || typeof saved.token !== "string" || saved.token.length > 8192
+    || !sessionFormat.test(saved.token) || saved.token === rejectedSessionToken) return;
+  return { account, token: saved.token, expiresAt: saved.expiresAt };
+}
+
 function sessionFor(account) {
   if (matchesAccount(cachedSession?.account, account) && cachedSession.expiresAt > Date.now()) {
     return Promise.resolve(cachedSession);
@@ -215,11 +236,23 @@ function sessionFor(account) {
   if (matchesAccount(pendingSession?.account, account)) return pendingSession.promise;
 
   const pending = { account };
-  pending.promise = establishSession(account).then((session) => {
+  pending.promise = (async () => {
+    const restored = await restoreSession(account);
+    const session = restored ?? await establishSession(account);
+    await requireAccount(account);
+    if (!restored) {
+      await useSessionStorage((storage) => {
+        if (accountVersion === account.version) {
+          return storage.set({ [sessionStorageKey]: {
+            accountId: account.id, email: account.email, token: session.token, expiresAt: session.expiresAt
+          } });
+        }
+      });
+    }
     if (accountVersion !== account.version) throw new EaseTranslationError("translatorOnlineSignIn");
     cachedSession = session;
     return session;
-  }).finally(() => {
+  })().finally(() => {
     if (pendingSession === pending) pendingSession = undefined;
   });
   pendingSession = pending;
@@ -227,7 +260,14 @@ function sessionFor(account) {
 }
 
 function invalidateSession(session) {
-  if (cachedSession === session) cachedSession = undefined;
+  if (cachedSession === session) {
+    cachedSession = undefined;
+    rejectedSessionToken = session.token;
+  }
+  return useSessionStorage(async (storage) => {
+    const { [sessionStorageKey]: saved } = await storage.get(sessionStorageKey);
+    if (saved?.token === session.token) await storage.remove(sessionStorageKey);
+  });
 }
 
 async function requestTranslation(text, { source = "auto", target, engine, signal, notesLanguage }) {
@@ -247,7 +287,7 @@ async function requestTranslation(text, { source = "auto", target, engine, signa
     const body = learningLanguage ? { ...payload, notes_language: learningLanguage } : payload;
     response = await apiPost("/v1/translate", body, { token: session.token, signal, milliseconds: translationTimeout });
     if (response.status === 401) {
-      invalidateSession(session);
+      await invalidateSession(session);
       if (refreshedSession) throw new EaseTranslationError("translatorOnlineSignIn");
       signal.throwIfAborted();
       await requireAccount(account);
@@ -304,7 +344,7 @@ export function handleEaseTranslationMessage(message, sendResponse) {
     return false;
   }
 
-  observeAccount();
+  registerEaseSessionHandlers();
   const controller = new AbortController();
   activeRequests.set(requestId, controller);
   const { text, source, target, engine, notesLanguage } = message;
@@ -369,7 +409,7 @@ function verifySyncedWorkspace(result, request) {
 
 async function requestWorkspaceSync(accountId, method, body, signal) {
   signal?.throwIfAborted();
-  observeAccount();
+  registerEaseSessionHandlers();
   const controller = new AbortController();
   activeSyncRequests.add(controller);
   const requestSignal = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
@@ -383,7 +423,7 @@ async function requestWorkspaceSync(accountId, method, body, signal) {
     await requireAccount(account);
     let response = await apiRequest(url, { method, body, token: session.token, signal: requestSignal });
     if (response.status === 401) {
-      invalidateSession(session);
+      await invalidateSession(session);
       requestSignal.throwIfAborted();
       await requireAccount(account);
       session = await sessionFor(account);
@@ -391,7 +431,7 @@ async function requestWorkspaceSync(accountId, method, body, signal) {
       response = await apiRequest(url, { method, body, token: session.token, signal: requestSignal });
     }
     if (response.status === 401) {
-      invalidateSession(session);
+      await invalidateSession(session);
       throw new EaseTranslationError("syncSignInRequired");
     }
 

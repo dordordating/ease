@@ -13,7 +13,7 @@ import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
 import { deleteFolder, hasFolder, moveSnippet, pinFolder, reorderFolder, saveFolder } from "./clipboard-store.js";
 import { registerClipboardHistoryHandlers, suppressClipboardHistoryText } from "./clipboard-history-background.js";
 import { translatorLanguages } from "./translator-engine.js";
-import { easeTranslationMessage, handleEaseTranslationMessage } from "./ease-api.js";
+import { easeTranslationMessage, handleEaseTranslationMessage, registerEaseSessionHandlers } from "./ease-api.js";
 import { changeFlashcardPreferences, FlashcardError, removeFlashcard, reviewFlashcard, saveFlashcard } from "./flashcard-store.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
 import { registerTranslationHistoryHandlers } from "./translation-history-store.js";
@@ -32,6 +32,7 @@ import {
 } from "./vault-session.js";
 
 let pendingWrite = Promise.resolve();
+registerEaseSessionHandlers();
 registerGoogleProviderHandlers();
 registerTranslatorSelectionHandlers();
 registerTranslationHistoryHandlers();
