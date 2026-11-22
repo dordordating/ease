@@ -1,6 +1,6 @@
 import { marketInstrument } from "./markets-store.js";
 
-const marketsUrl = "https://ease-api.144.76.164.115.sslip.io/v1/markets/";
+const marketsUrl = "https://static.115.164.76.144.clients.your-server.de/v1/markets/";
 const maxResponseBytes = 64 * 1024;
 const maxQuotes = 64;
 const maxTrendPoints = 30;

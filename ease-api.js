@@ -9,7 +9,7 @@ export const onlineTranslationErrorCodes = Object.freeze([
   "translatorOnlineTimeout", "translatorTooLong", "translatorFailed"
 ]);
 
-const baseUrl = "https://ease-api.144.76.164.115.sslip.io";
+const baseUrl = "https://static.115.164.76.144.clients.your-server.de";
 const engines = new Set(["economy", "standard", "premium"]);
 const errorCodes = new Set(onlineTranslationErrorCodes);
 const translationTimeout = 50_000;
