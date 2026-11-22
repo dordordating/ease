@@ -232,7 +232,8 @@ function translateShortcut(command, tab) {
 }
 
 async function selectionRoute(sender, { tabId, windowId }) {
-  if (sender.id !== chrome.runtime.id || !sender.documentId || typeof sender.url !== "string") return null;
+  if (sender.id !== chrome.runtime.id || typeof sender.url !== "string"
+    || (sender.frameId !== undefined && sender.frameId !== 0)) return null;
   const page = new URL(sender.url);
   if (page.protocol !== "chrome-extension:" || page.hostname !== chrome.runtime.id
     || page.pathname !== "/workspace.html") return null;
@@ -240,9 +241,20 @@ async function selectionRoute(sender, { tabId, windowId }) {
   const token = page.searchParams.get("translation");
   if (token && (!panelSurface || !validTab(sender.tab))) return null;
   const route = token ? "tab" : panelSurface ? "panel" : "popup";
-  const contextType = contextByRoute[route];
-  const contexts = await chrome.runtime.getContexts({ contextTypes: [contextType], documentIds: [sender.documentId] });
-  const context = contexts.find(({ windowId }) => validId(windowId) || windowId === -1);
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: [contextByRoute[route]],
+    ...(sender.documentId ? { documentIds: [sender.documentId] } : { documentUrls: [sender.url] })
+  });
+  // Chrome can omit documentId from messages from a toolbar popup or side
+  // panel. In that case use the window reported by the workspace and verify
+  // its active tab before consuming any selection.
+  if (!sender.documentId && !token && !validId(windowId)) {
+    return contexts.length ? { route, token } : null;
+  }
+  const expectedWindow = token ? sender.tab.windowId : windowId;
+  const context = contexts.find((item) => validId(item.windowId)
+    && (expectedWindow === undefined || item.windowId === expectedWindow))
+    ?? contexts.find((item) => item.windowId === -1);
   if (!context) return null;
   const ownerWindow = token ? sender.tab.windowId : context.windowId;
   if (token && validId(context.windowId) && context.windowId !== ownerWindow) return null;

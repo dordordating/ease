@@ -17,12 +17,19 @@ function queue(operation) {
   return result;
 }
 
-function readerContexts(documentId) {
-  return chrome.runtime.getContexts({
-    contextTypes: ["OFFSCREEN_DOCUMENT"],
-    documentUrls: [chrome.runtime.getURL(readerPath)],
-    ...(documentId ? { documentIds: [documentId] } : {})
-  });
+function readerUrl() {
+  return chrome.runtime.getURL(readerPath);
+}
+
+function currentReaderUrl(url) {
+  const prefix = `${readerUrl()}?reader=`;
+  return typeof url === "string" && url.startsWith(prefix)
+    && /^[a-f0-9-]{36}$/u.test(url.slice(prefix.length));
+}
+
+async function readerContexts() {
+  const contexts = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
+  return contexts.filter(({ documentUrl }) => documentUrl === readerUrl() || currentReaderUrl(documentUrl));
 }
 
 async function closeReader() {
@@ -38,13 +45,14 @@ async function ensureReader() {
   if (!await chrome.alarms.get(recoveryAlarm)) {
     await chrome.alarms.create(recoveryAlarm, { periodInMinutes: 1 });
   }
-  if (!(await readerContexts()).length) {
-    await chrome.offscreen.createDocument({
-      url: readerPath,
-      reasons: ["CLIPBOARD"],
-      justification: "Keep a device-only history of copied text when the user chooses to record it."
-    });
-  }
+  const [reader] = await readerContexts();
+  if (reader && currentReaderUrl(reader.documentUrl)) return;
+  if (reader) await chrome.offscreen.closeDocument();
+  await chrome.offscreen.createDocument({
+    url: `${readerPath}?reader=${crypto.randomUUID()}`,
+    reasons: ["CLIPBOARD"],
+    justification: "Keep a device-only history of copied text when the user chooses to record it."
+  });
 }
 
 async function disableHistory() {
@@ -89,7 +97,7 @@ async function workspaceAction(message) {
     }
     case "clear":
       // Restart from the system clipboard's current value. Any messages from
-      // the old reader lose their document ID and cannot repopulate the list.
+      // the old reader come from a different URL and cannot repopulate the list.
       await closeReader();
       await clearClipboardHistory();
       return restoreHistory();
@@ -130,9 +138,9 @@ export function suppressClipboardHistoryText(text) {
   });
 }
 
-async function recordCapture(text, documentId) {
+async function recordCapture(text, sourceUrl) {
   if (typeof text !== "string" || text.length > maxClipboardHistoryTextLength || !text.trim()) return;
-  if (!(await readerContexts(documentId)).length) return;
+  if (!(await readerContexts()).some(({ documentUrl }) => documentUrl === sourceUrl)) return;
   const signatures = await readProtectedCopies();
   if (signatures.length && signatures.includes(await fingerprint(text))) return;
   if (await chrome.permissions.contains(permission)) await recordClipboardHistoryText(text);
@@ -149,8 +157,9 @@ function fromWorkspace(sender) {
 
 function handleMessage(message, sender, respond) {
   if (!trustedSender(sender)) return;
-  if (message?.type === captureMessage && sender.documentId && sender.url === chrome.runtime.getURL(readerPath)) {
-    queue(() => recordCapture(message.text, sender.documentId)).then(
+  // Chrome may omit documentId for extension documents with no browser tab.
+  if (message?.type === captureMessage && !sender.tab && currentReaderUrl(sender.url)) {
+    queue(() => recordCapture(message.text, sender.url)).then(
       () => respond({ ok: true }), () => respond({ ok: false })
     );
     return true;
