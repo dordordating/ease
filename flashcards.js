@@ -54,11 +54,11 @@ function matchingVoice(voices, language) {
 }
 
 export function renderFlashcards(container, {
-  locale, t, icon, state: initialState, settingsButton, addButton, onPreferences, onAdd, onEdit, onDelete, onReview
+  locale, dateLocale = locale, t, icon, state: initialState, settingsButton, addButton, onPreferences, onAdd, onEdit, onDelete, onReview
 }) {
   const names = new Intl.DisplayNames([locale], { type: "language" });
   const numbers = new Intl.NumberFormat(locale);
-  const dateFormat = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" });
+  const dateFormat = new Intl.DateTimeFormat(dateLocale, { dateStyle: "medium", timeStyle: "short" });
   const synthesis = globalThis.speechSynthesis;
   let state = initialState;
   let view = "study";

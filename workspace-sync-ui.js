@@ -5,7 +5,7 @@ function element(tag, className, text) {
   return node;
 }
 
-export function renderWorkspaceSync(parent, { locale, t, send }) {
+export function renderWorkspaceSync(parent, { locale, dateLocale = locale, t, send }) {
   const box = element("section", "account-card");
   const details = element("div", "account-details");
   const title = element("h3", "", t("syncTitle"));
@@ -40,7 +40,7 @@ export function renderWorkspaceSync(parent, { locale, t, send }) {
   details.append(element("p", "", t("syncDescription")), status, error, form, actions);
   box.append(title, details);
   parent.append(box);
-  const formatter = new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" });
+  const formatter = new Intl.DateTimeFormat(dateLocale, { dateStyle: "short", timeStyle: "short" });
   let current = { kind: "guest" };
   let busy = false;
   let version = 0;

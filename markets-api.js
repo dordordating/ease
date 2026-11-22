@@ -1,11 +1,9 @@
-import { marketInstruments } from "./markets-store.js";
+import { marketInstrument } from "./markets-store.js";
 
 const marketsUrl = "https://ease-api.144.76.164.115.sslip.io/v1/markets/";
 const maxResponseBytes = 64 * 1024;
 const maxQuotes = 64;
 const maxTrendPoints = 30;
-const maxHistoryPoints = { fx: 30, crypto: 180 };
-const instruments = new Map(marketInstruments.map((instrument) => [instrument.symbol, instrument]));
 const fxDate = /^\d{4}-\d{2}-\d{2}$/;
 const cryptoTime = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?Z$/;
 
@@ -72,15 +70,21 @@ async function request(url, signal) {
   }
 }
 
-export async function getMarketQuotes({ signal } = {}) {
-  const data = await request(new URL("quotes", marketsUrl), signal);
+export async function getMarketQuotes({ symbols, signal } = {}) {
+  const url = new URL("quotes", marketsUrl);
+  if (symbols) {
+    const keys = [...new Set(symbols)].filter(symbol => marketInstrument(symbol));
+    if (!keys.length) return { quotes: [] };
+    url.searchParams.set("symbols", keys.slice(0, 50).join(","));
+  }
+  const data = await request(url, signal);
   if (!isObject(data) || !Array.isArray(data.quotes) || data.quotes.length > maxQuotes) throw unavailable();
 
   const seen = new Set();
   const quotes = [];
   for (const quote of data.quotes) {
     if (!isObject(quote) || typeof quote.symbol !== "string") throw unavailable();
-    const instrument = instruments.get(quote.symbol);
+    const instrument = marketInstrument(quote.symbol);
     if (!instrument) continue;
     const { symbol, price, changePercent, asOf, stale, trend } = quote;
     if (seen.has(symbol)
@@ -97,14 +101,23 @@ export async function getMarketQuotes({ signal } = {}) {
   return { quotes };
 }
 
+export async function searchMarkets(query, kind, { signal } = {}) {
+  const url = new URL("catalogue", marketsUrl);
+  url.searchParams.set("q", query);
+  url.searchParams.set("kind", kind);
+  const data = await request(url, signal);
+  if (!isObject(data) || !Array.isArray(data.instruments) || data.instruments.length > 24) throw unavailable();
+  return data.instruments.map(item => marketInstrument(item?.symbol, item)).filter(Boolean);
+}
+
 export async function getMarketHistory(symbol, { signal } = {}) {
-  const instrument = instruments.get(symbol);
+  const instrument = marketInstrument(symbol);
   if (!instrument) throw unavailable();
   const url = new URL("history", marketsUrl);
   url.searchParams.set("symbol", symbol);
   const data = await request(url, signal);
   if (!isObject(data) || data.symbol !== symbol || typeof data.stale !== "boolean"
-    || !Array.isArray(data.points) || data.points.length > maxHistoryPoints[instrument.kind]) {
+    || !Array.isArray(data.points) || data.points.length > (instrument.kind === "fx" ? 30 : 180)) {
     throw unavailable();
   }
 

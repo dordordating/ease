@@ -13,9 +13,9 @@ function previewText(text) {
 }
 
 export function initClipboardHistoryView(container, {
-  locale, t, icon, state: initialState, onAllow, onStart, onCopy, onSave, onDelete
+  locale, dateLocale = locale, t, icon, state: initialState, onAllow, onStart, onCopy, onSave, onDelete
 }) {
-  const dates = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" });
+  const dates = new Intl.DateTimeFormat(dateLocale, { dateStyle: "medium", timeStyle: "short" });
   const panel = element("section", "clipboard-history");
   const controls = element("div", "clipboard-history-controls");
   const captureStatus = element("p", "clipboard-history-status");

@@ -19,7 +19,8 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .auth import GoogleAuthUnavailable, InvalidGoogleCredential, issue_session, validate_session, verify_google_access_token
 from .db import MAX_WORKSPACE_SYNC_REVISION, Database, QuotaExceeded, User
-from .markets import MARKET_SYMBOLS, MarketsService
+from .market_pairs import MARKET_SYMBOLS, parse_pair
+from .markets import MarketsService
 from .openrouter import OpenRouterRejected, OpenRouterUnavailable, translate_with_openrouter
 from .settings import Settings
 
@@ -221,12 +222,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/v1/markets/quotes")
-    async def market_quotes(request: Request):
-        return {"quotes": await request.app.state.markets.quotes()}
+    async def market_quotes(request: Request, symbols: str | None = None):
+        if symbols is None:
+            selection = MARKET_SYMBOLS
+        else:
+            if len(symbols) > 13_000:
+                raise HTTPException(422, "invalid_market_symbols")
+            selection = tuple(dict.fromkeys(symbols.split(",")))
+            if len(selection) > 50 or any(not parse_pair(symbol) for symbol in selection):
+                raise HTTPException(422, "invalid_market_symbols")
+        return {"quotes": await request.app.state.markets.quotes(selection)}
+
+    @app.get("/v1/markets/catalogue")
+    async def market_catalogue(request: Request, q: str = "", kind: Literal["all", "fx", "crypto", "wallex"] = "all"):
+        if len(q) > 100:
+            raise HTTPException(422, "invalid_market_query")
+        return {"instruments": await request.app.state.markets.catalogue(q, kind)}
 
     @app.get("/v1/markets/history")
     async def market_history(request: Request, symbol: str):
-        if symbol not in MARKET_SYMBOLS:
+        if len(symbol) > 245 or not parse_pair(symbol):
             raise HTTPException(422, "invalid_market_symbol")
         return await request.app.state.markets.history(symbol)
 

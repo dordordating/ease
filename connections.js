@@ -120,10 +120,10 @@ export async function loadConnectedEvents() {
   ));
 }
 
-export function renderCalendarConnections(parent, { locale, t, reportError, eventsChanged, inToolbarPopup = false }) {
+export function renderCalendarConnections(parent, { locale, dateLocale = locale, t, reportError, eventsChanged, inToolbarPopup = false }) {
   const heading = element("h3", "calendar-connection-heading", t("calendarConnections"));
   parent.append(heading);
-  const dateFormat = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" });
+  const dateFormat = new Intl.DateTimeFormat(dateLocale, { dateStyle: "medium", timeStyle: "short" });
   const google = {
     name: "googleCalendar",
     get: getGoogleCalendarState,

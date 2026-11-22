@@ -1,6 +1,6 @@
 import { translate } from "./locales.js";
 import { getMarketQuotes } from "./markets-api.js";
-import { validMarketAlert } from "./markets-store.js";
+import { marketInstrument, marketLabel, validMarketAlert } from "./markets-store.js";
 import { readWorkspace, storageKey } from "./workspace-data.js";
 
 export const marketAlertStateKey = "easeMarketAlertState";
@@ -86,7 +86,7 @@ async function reconcile(mode) {
 
   let quotes;
   try {
-    ({ quotes } = await getMarketQuotes());
+    ({ quotes } = await getMarketQuotes({ symbols: pending.map(alert => alert.symbol) }));
   } catch {
     return;
   }
@@ -134,7 +134,10 @@ async function reconcile(mode) {
         type: "basic",
         iconUrl: chrome.runtime.getURL("icons/128.png"),
         title: translate(latest.locale, "markets"),
-        message: translate(latest.locale, "marketsAlertNotification", { symbol: alert.symbol, price: number.format(price) })
+        message: translate(latest.locale, "marketsAlertNotification", {
+          symbol: marketLabel(marketInstrument(alert.symbol, latest.markets?.instruments?.[alert.symbol])),
+          price: number.format(price)
+        })
       }
     )));
 }

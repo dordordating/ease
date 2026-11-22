@@ -1,13 +1,14 @@
-import { marketInstruments, validMarketAlert } from "./markets-store.js";
-import { getMarketHistory, getMarketQuotes } from "./markets-api.js";
+import { marketInstrument, marketInstruments, marketLabel, validMarketAlert, workspaceMarketInstruments } from "./markets-store.js";
+import { getMarketHistory, getMarketQuotes, searchMarkets } from "./markets-api.js";
 
-const instruments = new Map(marketInstruments.map(instrument => [instrument.symbol, instrument]));
-const marketKinds = { all: "marketsAll", fx: "marketsFx", crypto: "marketsCrypto" };
-const cryptoNames = { BTC: "marketsBitcoin", ETH: "marketsEthereum", SOL: "marketsSolana", XRP: "marketsXrp" };
+const marketKinds = { all: "marketsAll", fx: "marketsFx", crypto: "marketsCrypto", wallex: "marketsWallex" };
+const cryptoNames = { BTC: "marketsBitcoin", ETH: "marketsEthereum", SOL: "marketsSolana", XRP: "marketsXrp", USDT: "marketsTether" };
 const providers = {
   fx: "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html",
-  crypto: "https://www.coingecko.com/en"
+  crypto: "https://www.coingecko.com/en",
+  wallex: "https://wallex.ir/markets"
 };
+const providerLabels = { fx: "marketsFxReference", crypto: "marketsCryptoCredit", wallex: "marketsWallex" };
 const quoteRefreshInterval = 10 * 60_000;
 
 function element(tag, className, text) {
@@ -83,15 +84,15 @@ function drawSeries(canvas, series, detailed) {
 }
 
 export function renderMarkets(container, {
-  locale, t, icon, state: initialState, alertState: initialAlertState,
+  locale, dateLocale = locale, t, icon, state: initialState, alertState: initialAlertState,
   onWatchlist, onAddAlert, onRemoveAlert
 }) {
   const currencyNames = new Intl.DisplayNames([locale], { type: "currency" });
   const percent = new Intl.NumberFormat(locale, { style: "percent", signDisplay: "exceptZero", maximumFractionDigits: 2 });
   const prices = new Intl.NumberFormat(locale, { maximumSignificantDigits: 8 });
   const decimal = prices.formatToParts(1.1).find(part => part.type === "decimal")?.value ?? ".";
-  const dateOnly = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" });
-  const dateTime = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" });
+  const dateOnly = new Intl.DateTimeFormat(dateLocale, { dateStyle: "medium", timeZone: "UTC" });
+  const dateTime = new Intl.DateTimeFormat(dateLocale, { dateStyle: "medium", timeStyle: "short" });
   const chartData = new WeakMap();
   let state = initialState;
   let alertState = initialAlertState;
@@ -100,6 +101,10 @@ export function renderMarkets(container, {
   let kind = "all";
   let quoteRequest;
   let quoteError = false;
+  let foundInstruments = [];
+  let catalogueRequest;
+  let catalogueTimer;
+  let catalogueStatus;
   let detail;
   let frame;
   let disposed = false;
@@ -146,14 +151,27 @@ export function renderMarkets(container, {
     screen = view;
     feedback();
     showList();
+    refreshQuotes(true);
   });
   const refresh = control(t("marketsRefresh"), "icon-button markets-refresh", () => refreshQuotes(), "refresh", true);
   toolbar.append(navigation.group, refresh);
   const filters = optionGroup("markets-filters", t("marketsBrowse"), marketKinds, (value) => {
     if (kind === value) return;
     kind = value;
-    showList();
+    updateCatalogue();
   });
+  const catalogue = element("div", "markets-catalogue");
+  const pairSearch = element("input", "markets-input markets-catalogue-search");
+  pairSearch.type = "search";
+  pairSearch.maxLength = 100;
+  pairSearch.dir = "auto";
+  pairSearch.placeholder = t("marketsPairSearch");
+  pairSearch.setAttribute("aria-label", pairSearch.placeholder);
+  const pairHint = element("p", "markets-catalogue-hint", t("marketsPairHint"));
+  pairHint.id = "markets-pair-hint";
+  pairSearch.setAttribute("aria-describedby", pairHint.id);
+  catalogue.append(pairSearch, pairHint);
+  pairSearch.addEventListener("input", updateCatalogue);
   const quoteStatus = element("p", "markets-status");
   quoteStatus.setAttribute("role", "status");
   const listPane = element("div", "markets-list-pane");
@@ -162,7 +180,7 @@ export function renderMarkets(container, {
   const actionStatus = element("p", "markets-status markets-action-status");
   actionStatus.setAttribute("role", "status");
   actionStatus.hidden = true;
-  module.append(toolbar, filters.group, quoteStatus, listPane, detailPane, actionStatus);
+  module.append(toolbar, filters.group, catalogue, quoteStatus, listPane, detailPane, actionStatus);
   container.append(module);
 
   function feedback(key) {
@@ -193,8 +211,55 @@ export function renderMarkets(container, {
 
   function instrumentName(instrument) {
     const base = instrument.kind === "fx" ? currencyNames.of(instrument.base)
-      : cryptoNames[instrument.base] ? t(cryptoNames[instrument.base]) : instrument.name;
-    return `${base} / ${currencyNames.of(instrument.quote)}`;
+      : !instrument.symbol.startsWith("cg:") && cryptoNames[instrument.base]
+        ? t(cryptoNames[instrument.base]) : instrument.name;
+    const quote = instrument.quoteName || (instrument.quote === "TMN" ? t("marketsToman")
+      : cryptoNames[instrument.quote] ? t(cryptoNames[instrument.quote])
+        : /^[A-Z]{3}$/u.test(instrument.quote) ? currencyNames.of(instrument.quote) : instrument.quote);
+    return `${base} / ${quote}`;
+  }
+
+  function availableInstruments() {
+    return new Map([...workspaceMarketInstruments(state), ...foundInstruments].map(item => [item.symbol, item]));
+  }
+
+  function listInstruments() {
+    if (screen === "watchlist") {
+      const items = availableInstruments();
+      return state.watchlist.map(symbol => items.get(symbol)).filter(Boolean);
+    }
+    const selected = pairSearch.value.trim() ? foundInstruments : marketInstruments;
+    return selected.filter(item => kind === "all" || item.kind === kind);
+  }
+
+  function updateCatalogue() {
+    catalogueRequest?.abort();
+    clearTimeout(catalogueTimer);
+    const query = pairSearch.value.trim();
+    foundInstruments = [];
+    catalogueStatus = query ? "marketsLoading" : undefined;
+    if (!detail) showList();
+    if (!query) {
+      refreshQuotes(true);
+      return;
+    }
+    catalogueTimer = setTimeout(async () => {
+      const request = new AbortController();
+      catalogueRequest = request;
+      try {
+        const results = await searchMarkets(query, kind, { signal: request.signal });
+        if (request.signal.aborted || disposed) return;
+        foundInstruments = results;
+        catalogueStatus = undefined;
+      } catch {
+        if (request.signal.aborted || disposed) return;
+        catalogueStatus = "marketsUnavailable";
+      }
+      if (!detail && screen === "browse") {
+        showList();
+        refreshQuotes(true);
+      }
+    }, 230);
   }
 
   function parseAmount(value) {
@@ -205,8 +270,7 @@ export function renderMarkets(container, {
 
   function quoteDescription(instrument, quote) {
     const info = element("div", "markets-quote-info");
-    const source = element("a", "markets-source", instrument.kind === "fx"
-      ? t("marketsFxReference") : t("marketsCryptoCredit"));
+    const source = element("a", "markets-source", t(providerLabels[instrument.kind]));
     source.href = providers[instrument.kind];
     source.target = "_blank";
     source.rel = "noopener noreferrer";
@@ -268,17 +332,19 @@ export function renderMarkets(container, {
   }
 
   function watchAction(instrument, action, label, symbol) {
-    const button = control(`${t(label)} ${instrument.symbol}`, "icon-button markets-row-action", () => {
-      save(button, () => onWatchlist({ symbol: instrument.symbol, action }));
+    const button = control(`${t(label)} ${marketLabel(instrument)}`, "icon-button markets-row-action", () => {
+      save(button, () => onWatchlist({ symbol: instrument.symbol, instrument, action }));
     }, symbol, true);
     button.dataset.marketAction = action;
     return button;
   }
 
   function watchToggle(instrument) {
-    return state.watchlist.includes(instrument.symbol)
-      ? watchAction(instrument, "remove", "marketsRemove", "close")
-      : watchAction(instrument, "add", "marketsAdd", "plus");
+    const watching = state.watchlist.includes(instrument.symbol);
+    const button = watchAction(instrument, watching ? "remove" : "add", watching ? "marketsRemove" : "marketsAdd", "star");
+    button.classList.add("markets-watch-star");
+    button.setAttribute("aria-pressed", String(watching));
+    return button;
   }
 
   function renderRow(instrument, index, count) {
@@ -291,7 +357,7 @@ export function renderMarkets(container, {
     target.dataset.marketAction = "open";
     target.addEventListener("click", () => openInstrument(instrument.symbol));
     const identity = element("span", "markets-identity");
-    const symbol = element("bdi", "markets-symbol", instrument.symbol);
+    const symbol = element("bdi", "markets-symbol", marketLabel(instrument));
     symbol.dir = "ltr";
     identity.append(symbol, element("span", "markets-name", instrumentName(instrument)));
     target.append(identity);
@@ -324,16 +390,18 @@ export function renderMarkets(container, {
     const previousAction = previous?.dataset.marketAction;
     toolbar.hidden = false;
     filters.group.hidden = screen !== "browse";
+    catalogue.hidden = screen !== "browse";
     navigation.select(screen);
     filters.select(kind);
     listPane.hidden = false;
     detailPane.hidden = true;
-    const items = screen === "watchlist" ? state.watchlist.map(symbol => instruments.get(symbol)).filter(Boolean)
-      : marketInstruments.filter(instrument => kind === "all" || instrument.kind === kind);
+    const items = listInstruments();
     if (!items.length) {
-      const title = element("h2", "", t("marketsEmptyWatchlist"));
+      const isSearch = screen === "browse";
+      const title = element("h2", "", t(isSearch ? catalogueStatus ?? "marketsNoPairs" : "marketsEmptyWatchlist"));
       const empty = element("div", "markets-empty");
-      empty.append(title, element("p", "", t("marketsEmptyWatchlistHint")));
+      empty.append(title);
+      if (!isSearch) empty.append(element("p", "", t("marketsEmptyWatchlistHint")));
       listPane.replaceChildren(empty);
       if (previousRow || focusSymbol) navigation.focus(screen);
       return;
@@ -348,7 +416,9 @@ export function renderMarkets(container, {
     listPane.replaceChildren(list);
     const row = rows.get(focusSymbol ?? previousRow?.dataset.symbol)
       ?? (previousIndex >= 0 ? list.children[Math.min(previousIndex, list.children.length - 1)] : null);
-    const control = previousAction && row?.querySelector(`[data-market-action="${previousAction}"]:not(:disabled)`);
+    const focusAction = previous?.classList.contains("markets-watch-star") ? ".markets-watch-star"
+      : previousAction ? `[data-market-action="${previousAction}"]:not(:disabled)` : null;
+    const control = focusAction && row?.querySelector(focusAction);
     (control || row?.querySelector(".markets-row-open"))?.focus({ preventScroll: true });
     if (focusSymbol && !row) navigation.focus(screen);
     queueCharts();
@@ -362,18 +432,31 @@ export function renderMarkets(container, {
     if (detail) detail.refresh.disabled = Boolean(quoteRequest || detail.historyRequest);
   }
 
-  async function refreshQuotes() {
-    if (disposed || quoteRequest) return;
+  async function refreshQuotes(restart = false) {
+    if (disposed || (quoteRequest && !restart)) return;
+    if (restart) quoteRequest?.abort();
+    const symbols = detail ? [detail.instrument.symbol] : listInstruments().map(item => item.symbol);
+    if (!symbols.length) {
+      quoteRequest = undefined;
+      quoteError = false;
+      updateQuoteStatus();
+      return;
+    }
     const request = new AbortController();
     quoteRequest = request;
     updateQuoteStatus();
     try {
-      const response = await getMarketQuotes({ signal: request.signal });
+      const response = await getMarketQuotes({ symbols, signal: request.signal });
       if (disposed || request.signal.aborted) return;
-      const next = new Map(Array.from(quotes, ([symbol, quote]) => [symbol, { ...quote, stale: true }]));
+      const next = new Map(quotes);
+      for (const symbol of symbols) if (next.has(symbol)) next.set(symbol, { ...next.get(symbol), stale: true });
       for (const quote of response.quotes) {
-        if (validPrice(quote.price) || !validPrice(next.get(quote.symbol)?.price)) next.set(quote.symbol, quote);
+        if (validPrice(quote.price) || !validPrice(next.get(quote.symbol)?.price)) {
+          next.delete(quote.symbol);
+          next.set(quote.symbol, quote);
+        }
       }
+      while (next.size > 150) next.delete(next.keys().next().value);
       quotes = next;
       quoteError = false;
     } catch {
@@ -429,7 +512,7 @@ export function renderMarkets(container, {
       const converted = validPrice(rate) && input >= 0 && Number.isFinite(input) ? (reversed ? input / rate : input * rate) : NaN;
       value.textContent = Number.isFinite(converted) ? prices.format(converted) : t("marketsNoQuote");
     }
-    const flip = control(`${t("marketsFlip")} ${instrument.symbol}`, "icon-button markets-flip", () => {
+    const flip = control(`${t("marketsFlip")} ${marketLabel(instrument)}`, "icon-button markets-flip", () => {
       reversed = !reversed;
       updateValue();
     }, "swap", true);
@@ -461,7 +544,7 @@ export function renderMarkets(container, {
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       const price = parseAmount(threshold.value);
-      const alert = { symbol: instrument.symbol, direction: direction.value, price };
+      const alert = { symbol: instrument.symbol, instrument, direction: direction.value, price };
       if (!validMarketAlert(alert)) {
         threshold.setCustomValidity(t("marketsInvalidPreference"));
         threshold.reportValidity();
@@ -567,10 +650,11 @@ export function renderMarkets(container, {
     detailPane.replaceChildren();
     feedback();
     showList(instrument.symbol);
+    refreshQuotes(true);
   }
 
   function openInstrument(symbol) {
-    const instrument = instruments.get(symbol);
+    const instrument = availableInstruments().get(symbol) ?? marketInstrument(symbol);
     if (!instrument || disposed) return false;
     if (detail?.instrument.symbol === symbol) {
       detail.heading.focus();
@@ -578,7 +662,7 @@ export function renderMarkets(container, {
     }
     detail?.historyRequest?.abort();
     const heading = element("h2", "markets-detail-symbol");
-    const pair = element("bdi", "", instrument.symbol);
+    const pair = element("bdi", "", marketLabel(instrument));
     pair.dir = "ltr";
     heading.append(pair);
     heading.tabIndex = -1;
@@ -602,6 +686,7 @@ export function renderMarkets(container, {
     detail = { instrument, quote, actions, history, converter, alerts, heading, refresh: refreshDetail };
     toolbar.hidden = true;
     filters.group.hidden = true;
+    catalogue.hidden = true;
     listPane.hidden = true;
     detailPane.hidden = false;
     detailPane.replaceChildren(head, quote, historyPanel, converter.panel, alerts.panel);
@@ -609,6 +694,7 @@ export function renderMarkets(container, {
     showDetailWatch(detail);
     showDetailQuote(detail);
     showAlerts(detail);
+    refreshQuotes(true);
     fetchHistory(detail);
     heading.focus({ preventScroll: true });
     head.scrollIntoView({ block: "nearest" });
@@ -630,6 +716,7 @@ export function renderMarkets(container, {
   return {
     update({ state: nextState, alertState: nextAlerts }) {
       if (disposed) return;
+      const previousList = state.watchlist.join(",");
       if (nextState) state = nextState;
       if (nextAlerts) alertState = nextAlerts;
       if (detail) {
@@ -638,6 +725,7 @@ export function renderMarkets(container, {
         queueCharts();
       } else {
         showList();
+        if (screen === "watchlist" && previousList !== state.watchlist.join(",")) refreshQuotes(true);
       }
     },
     openInstrument,
@@ -645,6 +733,8 @@ export function renderMarkets(container, {
       disposed = true;
       quoteRequest?.abort();
       detail?.historyRequest?.abort();
+      catalogueRequest?.abort();
+      clearTimeout(catalogueTimer);
       clearInterval(refreshTimer);
       cancelAnimationFrame(frame);
       resize.disconnect();

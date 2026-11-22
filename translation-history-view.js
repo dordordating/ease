@@ -12,9 +12,9 @@ function previewText(text) {
     ? text : `${lines.slice(0, 3).join("\n").trimEnd()}…`;
 }
 
-export function renderTranslationHistory(container, { locale, t, icon, state, onCopy, onDelete, onFlashcard }) {
+export function renderTranslationHistory(container, { locale, dateLocale = locale, t, icon, state, onCopy, onDelete, onFlashcard }) {
   const languageNames = new Intl.DisplayNames([locale], { type: "language" });
-  const dates = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" });
+  const dates = new Intl.DateTimeFormat(dateLocale, { dateStyle: "medium", timeStyle: "short" });
   const section = element("section", "translation-history");
   const list = element("ol", "translation-history-list");
   const empty = element("div", "translation-history-empty");

@@ -3,7 +3,7 @@ import { renderTranslator } from "./translator.js";
 import { renderFlashcards } from "./flashcards.js";
 import { renderMarkets } from "./markets.js";
 import { marketAlertStateKey, readMarketAlertState } from "./markets-alerts.js";
-import { marketInstruments } from "./markets-store.js";
+import { marketLabel, workspaceMarketInstruments } from "./markets-store.js";
 import { flashcardFieldLimits } from "./flashcard-store.js";
 import { translatorLanguages } from "./translator-engine.js";
 import { takeTranslatorSelection, translatorSelectionKey } from "./translator-selection.js";
@@ -41,6 +41,7 @@ const workspaceRoute = new URLSearchParams(location.search);
 const inPanel = workspaceRoute.get("surface") === "panel";
 
 const clipboard = modules[0];
+const lastWorkspaceTabKey = "easeLastWorkspaceTab";
 const clipboardHistoryFolder = Symbol("clipboard history");
 const clipboardReadPermission = { permissions: ["clipboardRead"] };
 const library = { id: "library", icon: "plus" };
@@ -48,6 +49,7 @@ const settings = { id: "settings", icon: "settings" };
 const destinations = [...modules, library, settings];
 let workspace = defaultWorkspace;
 let activePage = clipboard.id;
+let lastWorkspaceTab = clipboard.id;
 let activeFolder = "all";
 let clipboardHistory = { enabled: false, entries: [] };
 let clipboardHistoryAllowed = false;
@@ -190,8 +192,24 @@ async function mutate(action, data, onError = reportError) {
   return false;
 }
 
+function savedTabAvailable(page, state = workspace) {
+  return page === clipboard.id || (state.tabs.includes(page) && modules.some(module => module.released && module.id === page));
+}
+
+function rememberWorkspaceTab(page) {
+  if (page === lastWorkspaceTab || !savedTabAvailable(page)) return;
+  lastWorkspaceTab = page;
+  chrome.storage.local.set({ [lastWorkspaceTabKey]: page }).catch(() => {});
+}
+
+function workspaceDateLocale() {
+  const calendar = calendarSystemFor(workspace.locale, workspace.calendar?.system);
+  return new Intl.Locale(workspace.locale, { calendar }).toString();
+}
+
 function switchTo(page, focus = true, showHistory = false) {
   activePage = page;
+  rememberWorkspaceTab(page);
   translatorHistoryOpen = page === "translate" && showHistory;
   query = "";
   search.value = "";
@@ -398,7 +416,7 @@ function startVaultTimer() {
   }, expiration - now);
 }
 
-async function refreshWorkspace(raw) {
+async function refreshWorkspace(raw, initialTab) {
   const version = ++workspaceReadVersion;
   try {
     const snapshot = raw ?? await readWorkspace();
@@ -421,6 +439,7 @@ async function refreshWorkspace(raw) {
     }
     if (version !== workspaceReadVersion) return;
     workspace = next;
+    if (initialTab && savedTabAvailable(initialTab, next)) activePage = initialTab;
     clearExpiredDialog();
     render();
     startVaultTimer();
@@ -527,9 +546,9 @@ function renderClipboard() {
   view.append(layout);
   layout.querySelector(".folder-quick").scrollTop = folderRailScroll;
   if (showHistory) {
-    clipboardHistoryLocale = workspace.locale;
+    clipboardHistoryLocale = workspaceDateLocale();
     clipboardHistoryController = initClipboardHistoryView(content, {
-      locale: workspace.locale, t, icon, state: clipboardHistoryViewState(),
+      locale: workspace.locale, dateLocale: clipboardHistoryLocale, t, icon, state: clipboardHistoryViewState(),
       onAllow: () => changeClipboardHistory("allow"),
       onStart: () => changeClipboardHistory("set-enabled", { enabled: true }),
       onDelete: (id) => changeClipboardHistory("remove", { id }),
@@ -994,7 +1013,7 @@ function renderSettings() {
   list.append(storage);
   view.append(list);
   accountRefresh = renderAccount(list, t, reportError, { inToolbarPopup });
-  workspaceSyncRefresh = renderWorkspaceSync(list, { locale: workspace.locale, t, send: sendWorkspaceSync });
+  workspaceSyncRefresh = renderWorkspaceSync(list, { locale: workspace.locale, dateLocale: workspaceDateLocale(), t, send: sendWorkspaceSync });
   readWorkspaceShortcuts();
 }
 
@@ -1064,13 +1083,15 @@ function marketSearchSource() {
   const coinNames = { BTC: "marketsBitcoin", ETH: "marketsEthereum", SOL: "marketsSolana", XRP: "marketsXrp" };
   return {
     label: "markets",
-    entries: marketInstruments.map(({ symbol, name, kind, base, quote }) => {
-      const baseName = kind === "crypto" ? t(coinNames[base]) : names.of(base);
-      const quoteName = names.of(quote);
+    entries: workspaceMarketInstruments(workspace.markets).map(instrument => {
+      const { symbol, name, kind, base, quote } = instrument;
+      const baseName = kind === "fx" ? names.of(base) : coinNames[base] && !symbol.startsWith("cg:") ? t(coinNames[base]) : name;
+      const quoteName = instrument.quoteName || (quote === "TMN" ? t("marketsToman") : /^[A-Z]{3}$/u.test(quote) ? names.of(quote) : quote);
+      const label = marketLabel(instrument);
       const detail = `${baseName} · ${quoteName}`;
       return {
-        id: `market-result-${base}-${quote}`, title: symbol, detail,
-        keywords: [symbol, `${base}${quote}`, base, quote, name, baseName, quoteName, base === "XRP" ? "Ripple" : ""],
+        id: symbol === label ? `market-result-${base}-${quote}` : `market-result-${symbol.replaceAll("/", "--")}`, title: label, detail,
+        keywords: [label, `${base}${quote}`, base, quote, name, baseName, quoteName, base === "XRP" ? "Ripple" : ""],
         open() {
           switchTo("markets", false);
           marketsController?.openInstrument(symbol);
@@ -1147,6 +1168,7 @@ function render() {
   if (folderRail) folderRailScroll = folderRail.scrollTop;
   const focused = document.activeElement?.id;
   const root = document.documentElement;
+  const dateLocale = workspaceDateLocale();
   root.lang = workspace.locale;
   root.dir = isRtl(workspace.locale) ? "rtl" : "ltr";
   root.dataset.theme = workspace.theme;
@@ -1173,7 +1195,7 @@ function render() {
     calendarController.update({ preferences: workspace.calendar, events: calendarEvents(), holidays: workspace.holidays });
     return;
   }
-  if (!query && activePage === "translate" && translatorHistoryOpen && translatorHistoryController && translatorLocale === workspace.locale) {
+  if (!query && activePage === "translate" && translatorHistoryOpen && translatorHistoryController && translatorLocale === dateLocale) {
     translatorHistoryController.update(translationHistory);
     return;
   }
@@ -1182,16 +1204,16 @@ function render() {
     translatorSiteController?.update(inlineTranslatorEnabled());
     return;
   }
-  if (!query && activePage === "flashcards" && flashcardController && flashcardLocale === workspace.locale) {
+  if (!query && activePage === "flashcards" && flashcardController && flashcardLocale === dateLocale) {
     flashcardController.update({ state: workspace.flashcards });
     return;
   }
-  if (!query && activePage === "markets" && marketsController && marketsLocale === workspace.locale) {
+  if (!query && activePage === "markets" && marketsController && marketsLocale === dateLocale) {
     marketsController.update({ state: workspace.markets, alertState: marketAlertState });
     return;
   }
   if (!query && activePage === clipboard.id && activeFolder === clipboardHistoryFolder
-    && clipboardHistoryController && clipboardHistoryLocale === workspace.locale) {
+    && clipboardHistoryController && clipboardHistoryLocale === dateLocale) {
     view.querySelector(".folder-bar").replaceWith(renderFolderBar());
     view.querySelector(".folder-quick").scrollTop = folderRailScroll;
     if (focused === "clipboard-history-nav") document.getElementById(focused)?.focus({ preventScroll: true });
@@ -1246,7 +1268,7 @@ function render() {
       onDeleteEvent: (id) => mutate("delete-event", { id }),
       renderConnections: (container) => {
         calendarConnectionsRefresh = renderCalendarConnections(container, {
-          locale: workspace.locale, t, reportError, eventsChanged: refreshCalendarEvents, inToolbarPopup
+          locale: workspace.locale, dateLocale: workspaceDateLocale(), t, reportError, eventsChanged: refreshCalendarEvents, inToolbarPopup
         });
       }
     });
@@ -1257,9 +1279,9 @@ function render() {
     section(t("translationHistory"), undefined, close);
     const body = node("div");
     view.append(body);
-    translatorLocale = workspace.locale;
+    translatorLocale = dateLocale;
     translatorHistoryController = renderTranslationHistory(body, {
-      locale: workspace.locale, t, icon, state: translationHistory,
+      locale: workspace.locale, dateLocale, t, icon, state: translationHistory,
       onCopy: (entry) => copyWorkspaceText(entry.translation),
       onDelete: (entry) => updateTranslationHistory("remove", { id: entry.id }),
       onFlashcard: (entry) => editFlashcard(undefined, entry)
@@ -1308,9 +1330,9 @@ function render() {
     section(t("flashcards"), undefined, actions);
     const body = node("div");
     view.append(body);
-    flashcardLocale = workspace.locale;
+    flashcardLocale = dateLocale;
     flashcardController = renderFlashcards(body, {
-      locale: workspace.locale, t, icon, state: workspace.flashcards,
+      locale: workspace.locale, dateLocale, t, icon, state: workspace.flashcards,
       settingsButton: flashcardSettings, addButton: add,
       onPreferences: (patch) => mutate("flashcard-preferences", patch),
       onAdd: () => editFlashcard(),
@@ -1322,9 +1344,9 @@ function render() {
     section(t("markets"));
     const body = node("div");
     view.append(body);
-    marketsLocale = workspace.locale;
+    marketsLocale = dateLocale;
     marketsController = renderMarkets(body, {
-      locale: workspace.locale, t, icon, state: workspace.markets, alertState: marketAlertState,
+      locale: workspace.locale, dateLocale, t, icon, state: workspace.markets, alertState: marketAlertState,
       onWatchlist: (change) => mutate("markets-watchlist", change),
       onAddAlert: createMarketAlert,
       onRemoveAlert: (id) => mutate("markets-remove-alert", { id })
@@ -2137,7 +2159,10 @@ editor.addEventListener("close", () => {
   }
 });
 document.querySelector(".search-icon").innerHTML = icon("search");
-settingsButton.addEventListener("click", () => switchTo(activePage === "settings" && !query ? "clipboard" : "settings", false));
+settingsButton.addEventListener("click", () => {
+  const lastTab = savedTabAvailable(lastWorkspaceTab) ? lastWorkspaceTab : clipboard.id;
+  switchTo(activePage === "settings" && !query ? lastTab : "settings", false);
+});
 panelButton.addEventListener("click", async () => {
   if (currentWindowId === undefined) {
     showToast(t("panelFailed"), undefined, true);
@@ -2267,17 +2292,20 @@ chrome.permissions.onRemoved?.addListener(updateClipboardReadPermission);
 if (inPanel) chrome.tabs?.onActivated?.addListener(receiveTranslationSelection);
 const initialTranslationSelection = await takeTranslatorSelection();
 if (initialTranslationSelection !== null) activePage = "translate";
-const [initialAccount, initialHistory, initialMarketAlerts] = await Promise.all([
+const [initialAccount, initialHistory, initialMarketAlerts, rememberedTab] = await Promise.all([
   getGoogleAccount().catch(() => null), readTranslationHistory().catch(() => null), readMarketAlertState().catch(() => ({})),
+  chrome.storage.local.get(lastWorkspaceTabKey).then(saved => saved[lastWorkspaceTabKey]).catch(() => undefined),
   refreshClipboardHistory()
 ]);
 translatorAccountId = initialAccount?.id ?? null;
 if (initialHistory) translationHistory = initialHistory;
 marketAlertState = initialMarketAlerts;
-await refreshWorkspace();
+lastWorkspaceTab = rememberedTab ?? clipboard.id;
+await refreshWorkspace(undefined, initialTranslationSelection === null ? lastWorkspaceTab : undefined);
 workspaceInitialized = true;
 sendWorkspaceSync("wake").catch(() => {});
 if (initialTranslationSelection !== null) {
+  rememberWorkspaceTab("translate");
   showTranslationSelection(initialTranslationSelection);
 } else if (workspaceRoute.get("open") === "account") {
   switchTo("settings", false);

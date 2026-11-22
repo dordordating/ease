@@ -4704,3 +4704,26 @@ body[data-surface] .folder-context-menu[popover] {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+.markets-catalogue {
+  display: grid;
+  min-inline-size: 0;
+  gap: 4px;
+}
+
+.markets-catalogue-search {
+  inline-size: 100%;
+}
+
+.markets-catalogue-hint {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.markets-watch-star[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.markets-watch-star[aria-pressed="true"] svg {
+  fill: currentColor;
+}
