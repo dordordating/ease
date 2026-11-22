@@ -314,9 +314,8 @@ async function verifiedGoogleAccount(token) {
 export async function getSilentGoogleProfileToken(accountId) {
   const existing = await getGoogleAccount();
   if (!existing || existing.id !== accountId) throw new GoogleProviderError("googleChromeAccountRequired");
-  if (!googleConfigured() || !await chrome.permissions.contains(profileHosts)) {
-    throw new GoogleProviderError("googleOAuthUnavailable");
-  }
+  if (!googleConfigured()) throw new GoogleProviderError("accountSetup");
+  if (!await chrome.permissions.contains(profileHosts)) throw new GoogleProviderError("googleHostDenied");
   return authorized(profileScopes, false, async (token) => {
     const verified = await verifiedGoogleAccount(token);
     if (verified.id !== accountId || (await getGoogleAccount())?.id !== accountId) {

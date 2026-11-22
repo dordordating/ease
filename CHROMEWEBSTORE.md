@@ -22,9 +22,11 @@ Use the final release manifest as the source of truth when entering these answer
 | --- | --- |
 | `storage` | Saves the user’s snippets, shortcut choices, appearance and language settings, local events, flashcards and study progress, and optional account and calendar connection data in this browser profile. |
 | `sidePanel` | Opens the same workspace next to the current page when the user selects the side panel control. |
-| `clipboardWrite` | Copies saved snippets, completed template text, and translations when the user chooses to copy them. |
+| `clipboardWrite` | Copies saved snippets, completed template text, translations, and clipboard history entries when the user chooses to copy them. |
+| Optional `clipboardRead` | Requested when the user enables Clipboard history. Lets Ease read plain text and links from the current system clipboard while Chrome is running. |
+| `offscreen` | Reads the system clipboard for the optional Clipboard history feature while the Ease workspace is closed. |
 | `identity` | Uses Chrome’s identity API for optional Google sign-in and requests separate read-only consent for Google Calendar. |
-| `alarms` | Schedules connected calendar refresh, optional workspace sync, local event reminders, and periodic price alert checks while Chrome is running. |
+| `alarms` | Schedules connected calendar refresh, optional workspace sync, local event reminders, periodic price alert checks, and recovery of the optional clipboard history reader while Chrome is running. |
 | Optional `notifications` | Requested when the user sets a calendar reminder or price alert. Shows the event or the price that triggered a configured alert. |
 | `contextMenus` | Adds **Translate with Ease** to the context menu when the user selects text. |
 | `activeTab` | Temporarily allows the translation shortcut to access the active tab where the user invoked it. |
@@ -43,7 +45,8 @@ Use this inventory to match the final ZIP to the Dashboard’s data categories, 
 
 | Data | Storage and transmission |
 | --- | --- |
-| Snippets and template text entered by the user | Saved in `chrome.storage.local`. Filled-in template values are used to copy the output on the user’s request. Ease writes to the system clipboard and does not collect clipboard history. Snippets are not uploaded by Ease. |
+| Snippets and template text entered by the user | Saved in `chrome.storage.local`. Filled-in template values are used to copy the output on the user’s request. Saved snippets can be included in optional encrypted workspace sync. |
+| Clipboard history | Off by default and requires separate permission. When enabled, Ease checks the current system clipboard and keeps up to 100 recent plain text or link entries in this browser profile. The history stays on the device and is excluded from encrypted workspace sync. Users can pause recording or delete individual or all entries. |
 | Translation input and results | Chrome processes on-device translations locally. For an online tier, Ease sends the translation text, language pair, and learning-notes language to its API and OpenRouter. The Ease database stores usage counts. Selected text can be held briefly in `chrome.storage.session` to open the translator. Users can save translations to snippets, flashcards, or local translation history. |
 | Translation history | An optional Translator setting, off by default. When enabled, this browser profile stores up to 100 successful translations, which users can search, copy, or remove. |
 | Flashcards and study progress | Saved in this browser profile. A card can include a phrase, a translation, a usage note, and an example. Review ratings determine the next study time. Pronunciation uses an available on-device speech voice. |
@@ -64,7 +67,7 @@ Google identity can fall under personally identifiable information. OAuth tokens
 
 Ease is a Chrome workspace for reusable text, translation, and calendars. You can use the workspace without an account. Snippets, workspace settings, and local calendar events are stored in the browser profile on the device. The Ease service provides online translation for signed-in users.
 
-When you choose to copy a saved snippet, Ease writes the text to your system clipboard. Copying a template uses the temporary values you enter to fill its fields. The extension does not read clipboard history.
+When you choose to copy a saved snippet, Ease writes the text to your system clipboard. Copying a template uses the temporary values you enter to fill its fields. If you separately enable Clipboard history and grant Chrome permission, Ease checks the current system clipboard while Chrome is running. Ease keeps up to 100 recent text and link entries in this browser profile. This history stays on the device even when encrypted workspace sync is on. You can pause recording, remove a single entry, or clear the full history.
 
 Chrome processes on-device translations locally and may download language models. A text selection can be held briefly in browser session storage to open the workspace. With Ctrl-selection translation enabled for eligible HTTPS websites, Ease uses the selected engine when you hold Ctrl and select text. If you choose an online engine, the Ease service sends your translation text and language pair to OpenRouter for processing. For eligible words and phrases translated in the workspace, it also requests a learning note and example in the languages in use. Ease stores daily usage counts in its database. You can save a translation to your local snippets or flashcards. If you enable translation history, Ease keeps up to 100 successful translations in this browser. You can remove individual entries and pause recording in Translator settings.
 

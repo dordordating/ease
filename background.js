@@ -1,4 +1,7 @@
-import { defaultTranslator, densities, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes, translatorEngines } from "./workspace-data.js";
+import {
+  defaultTranslator, densities, modules, palettes, readWorkspace, reorderModule, shortcutSlots, sizes, storageKey,
+  themes, translatorEngines, workspaceZoomLevels
+} from "./workspace-data.js";
 import { localeNames } from "./locales.js";
 import { setToolbarBrand } from "./brand.js";
 import { changeCalendarPreferences, saveCalendarEvent, setCalendarHoliday } from "./calendar-store.js";
@@ -8,6 +11,7 @@ import { addMarketAlert, MarketPreferenceError, removeMarketAlert, updateMarketW
 import { refreshConnectedGoogleCalendar, registerGoogleProviderHandlers } from "./providers.js";
 import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
 import { deleteFolder, hasFolder, moveSnippet, pinFolder, reorderFolder, saveFolder } from "./clipboard-store.js";
+import { registerClipboardHistoryHandlers, suppressClipboardHistoryText } from "./clipboard-history-background.js";
 import { translatorLanguages } from "./translator-engine.js";
 import { easeTranslationMessage, handleEaseTranslationMessage } from "./ease-api.js";
 import { changeFlashcardPreferences, FlashcardError, removeFlashcard, reviewFlashcard, saveFlashcard } from "./flashcard-store.js";
@@ -31,6 +35,7 @@ let pendingWrite = Promise.resolve();
 registerGoogleProviderHandlers();
 registerTranslatorSelectionHandlers();
 registerTranslationHistoryHandlers();
+registerClipboardHistoryHandlers();
 registerTranslatorSiteHandlers();
 registerCalendarReminderHandlers();
 registerMarketAlertHandlers();
@@ -296,6 +301,7 @@ async function updateWorkspace(workspace, action, data, transaction) {
       if (Object.hasOwn(palettes, data.palette)) workspace.palette = data.palette;
       if (densities.includes(data.density)) workspace.density = data.density;
       if (sizes.includes(data.size)) workspace.size = data.size;
+      if (workspaceZoomLevels.includes(data.zoom)) workspace.zoom = data.zoom;
       if (["grid", "list"].includes(data.libraryLayout)) workspace.libraryLayout = data.libraryLayout;
       break;
     case "calendar-preferences":
@@ -364,6 +370,9 @@ async function updateWorkspace(workspace, action, data, transaction) {
       workspace.tabs = data.enabled ? [...tabs, module.id] : tabs;
       break;
     }
+    case "reorder-module":
+      transaction.writeWorkspace = reorderModule(workspace, data);
+      break;
     case "create-folder":
       return saveFolder(workspace, data, true);
     case "update-folder":
@@ -377,7 +386,8 @@ async function updateWorkspace(workspace, action, data, transaction) {
     case "authorize-vault-copy": {
       const snippet = workspace.snippets.find(({ id }) => id === data.id);
       if (!snippet) throw new Error("Snippet no longer exists");
-      snippetAccess(workspace, sessions, snippet);
+      const key = snippetAccess(workspace, sessions, snippet);
+      if (key && typeof data.text === "string") await suppressClipboardHistoryText(data.text);
       const folder = folderFor(workspace, snippet.folderId);
       if (folder?.vaultPolicy === "after-copy") await lockVaultSession(sessions, folder.id);
       transaction.writeWorkspace = false;

@@ -18,6 +18,8 @@ const paths = {
   list: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r=".6"/><circle cx="4.5" cy="12" r=".6"/><circle cx="4.5" cy="18" r=".6"/>',
   copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 4H6a2 2 0 0 0-2 2v11"/>',
   history: '<path d="M4 11a8.1 8.1 0 1 1 2 6.4M4 6v5h5m3-4v5l3 1.8"/>',
+  play: '<path d="M8 5v14l11-7Z"/>',
+  pause: '<path d="M9 5v14m6-14v14"/>',
   refresh: '<path d="M20 7v5h-5M4 17v-5h5M5.4 8.4A7.5 7.5 0 0 1 18 6.8L20 10M4 14l2 3.2a7.5 7.5 0 0 0 12.6-1.6"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',

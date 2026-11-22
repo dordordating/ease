@@ -5,7 +5,10 @@ import { vaultSessionStorageKey } from "./vault-session.js";
 import {
   createWorkspaceSyncSalt, decryptWorkspaceSnapshot, deriveWorkspaceSyncKey, encryptWorkspaceSnapshot
 } from "./workspace-sync-crypto.js";
-import { defaultWorkspace, densities, modules, palettes, readWorkspace, sizes, storageKey, themes } from "./workspace-data.js";
+import {
+  defaultModuleOrder, defaultWorkspace, densities, normalizeModuleOrder, normalizeWorkspaceZoom, palettes, readWorkspace,
+  sizes, storageKey, themes
+} from "./workspace-data.js";
 
 export const workspaceSyncMessage = "ease-workspace-sync";
 export const workspaceSyncStorageKey = "easeWorkspaceSync";
@@ -33,6 +36,11 @@ function portableVault(vault) {
 
 function portableWorkspace(workspace) {
   const snapshot = Object.fromEntries(Object.keys(defaultWorkspace).map((key) => [key, workspace[key] ?? defaultWorkspace[key]]));
+  // Keep the canonical snapshot stable for devices that have no custom rail order or zoom.
+  const moduleOrder = normalizeModuleOrder(workspace.moduleOrder);
+  if (moduleOrder.some((id, index) => id !== defaultModuleOrder[index])) snapshot.moduleOrder = moduleOrder;
+  snapshot.zoom = normalizeWorkspaceZoom(snapshot.zoom);
+  if (snapshot.zoom === defaultWorkspace.zoom) delete snapshot.zoom;
   const { inlineEnabled, inlineSites, ...translator } = { ...defaultWorkspace.translator, ...snapshot.translator };
   snapshot.translator = translator;
   snapshot.folders = snapshot.folders.map((folder) => folder.vault ? { ...folder, vault: portableVault(folder.vault) } : folder);
@@ -62,8 +70,7 @@ function readSnapshot(value) {
     || !Array.isArray(value.flashcards.cards) || !Object.hasOwn(localeNames, value.locale)
     || !themes.includes(value.theme) || !Object.hasOwn(palettes, value.palette)
     || !densities.includes(value.density) || !sizes.includes(value.size)) invalid();
-  const known = new Set(modules.filter(({ released }) => released).map(({ id }) => id));
-  if (!value.tabs.includes("clipboard") || value.tabs.some((tab) => !known.has(tab))) invalid();
+  if (!value.tabs.includes("clipboard") || value.tabs.some((tab) => !defaultModuleOrder.includes(tab))) invalid();
   const ids = new Set();
   const protectedFolders = new Set();
   for (const folder of value.folders) {

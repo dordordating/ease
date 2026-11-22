@@ -10,10 +10,13 @@ import { takeTranslatorSelection, translatorSelectionKey } from "./translator-se
 import { renderTranslatorSites } from "./translator-sites-ui.js";
 import { readTranslationHistory, translationHistoryKey, translationHistoryMessage } from "./translation-history-store.js";
 import { renderTranslationHistory } from "./translation-history-view.js";
+import { clipboardHistoryKey, clipboardHistoryMessage, loadClipboardHistory } from "./clipboard-history-store.js";
+import { initClipboardHistoryView } from "./clipboard-history-view.js";
 import { searchWorkspaceModules } from "./workspace-search.js";
 import { renderModuleLibrary } from "./module-library.js";
 import { workspaceSyncMessage, workspaceSyncStorageKey } from "./workspace-sync.js";
 import { renderWorkspaceSync } from "./workspace-sync-ui.js";
+import { initWorkspaceZoom, renderWorkspaceZoomControl } from "./workspace-zoom.js";
 import { paintBrand } from "./brand.js";
 import { accountStorageKey, calendarConnectionKeys, loadConnectedEvents, renderAccount, renderCalendarConnections } from "./connections.js";
 import { getGoogleAccount, signInGoogle } from "./providers.js";
@@ -21,11 +24,12 @@ import { icon } from "./icons.js";
 import { deviceUnlockAvailable, readDeviceUnlock, registerDeviceUnlock } from "./vault-device.js";
 import { vaultPinAttemptsStorageKey, vaultPolicyFor, vaultSessionStorageKey } from "./vault-session.js";
 import { isRtl, localeNames, translate } from "./locales.js";
-import { calendarSystemFor, defaultTranslator, defaultWorkspace, densities, folderIcons, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes } from "./workspace-data.js";
+import { calendarSystemFor, defaultTranslator, defaultWorkspace, densities, folderIcons, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes, visibleModules } from "./workspace-data.js";
 
 const view = document.querySelector("#workspace");
 const editor = document.querySelector("#editor");
 const tabBar = document.querySelector("#module-tabs");
+const app = document.querySelector(".app");
 const search = document.querySelector("#search");
 const logo = document.querySelector("#brand-logo");
 const toast = document.querySelector("#toast");
@@ -37,18 +41,27 @@ const workspaceRoute = new URLSearchParams(location.search);
 const inPanel = workspaceRoute.get("surface") === "panel";
 
 const clipboard = modules[0];
+const clipboardHistoryFolder = Symbol("clipboard history");
+const clipboardReadPermission = { permissions: ["clipboardRead"] };
 const library = { id: "library", icon: "plus" };
 const settings = { id: "settings", icon: "settings" };
 const destinations = [...modules, library, settings];
 let workspace = defaultWorkspace;
 let activePage = clipboard.id;
 let activeFolder = "all";
+let clipboardHistory = { enabled: false, entries: [] };
+let clipboardHistoryAllowed = false;
+let clipboardHistoryIssue;
+let clipboardHistoryReadVersion = 0;
+let clipboardHistoryController;
+let clipboardHistoryLocale;
 let query = "";
 let toastTimer;
 let copyTimer;
 let copiedId;
 let copyInProgress = false;
 let vaultCopyFeedback;
+let draggedModule;
 let currentWindowId;
 let inToolbarPopup = false;
 const calendarNavigation = {};
@@ -92,6 +105,8 @@ if (!inPanel) {
 
 const t = (key, values) => translate(workspace.locale, key, values);
 const reportError = (key) => showToast(t(key), undefined, true);
+const changeWorkspaceZoom = (zoom) => mutate("preferences", { zoom });
+const workspaceZoom = initWorkspaceZoom({ app, zoom: workspace.zoom, onZoom: changeWorkspaceZoom });
 
 function calendarEvents() {
   return [...workspace.events, ...providerEvents];
@@ -221,7 +236,7 @@ function updateCalendarTab(button, today = new Date()) {
   }
   button.replaceChildren(mark);
   button.setAttribute("aria-label", label.join(" · "));
-  button.title = label.join(" · ");
+  button.title = [label.join(" · "), button.draggable ? t("moduleOrderHint") : ""].filter(Boolean).join("\n");
 }
 
 function refreshCalendarDay() {
@@ -234,10 +249,13 @@ function refreshCalendarDay() {
 }
 
 function renderTabs() {
+  const focused = tabBar.contains(document.activeElement) ? document.activeElement.id : null;
+  clearModuleDrag();
   tabBar.setAttribute("aria-label", t("modulesLabel"));
   tabBar.setAttribute("role", "tablist");
   tabBar.setAttribute("aria-orientation", "vertical");
-  const tabs = [...modules.filter(({ id }) => workspace.tabs.includes(id)), library];
+  const displayed = visibleModules(workspace);
+  const tabs = [...displayed, library];
   tabBar.replaceChildren(...tabs.map((module) => {
     const isSelected = activePage === module.id && !query;
     const isLibrary = module === library;
@@ -252,9 +270,79 @@ function renderTabs() {
     item.setAttribute("aria-controls", "workspace");
     item.setAttribute("aria-selected", String(isSelected));
     item.tabIndex = isSelected || (!tabs.some(({ id }) => id === activePage && !query) && module === tabs[0]) ? 0 : -1;
+    if (!isLibrary && displayed.length > 1) bindModuleReorder(item, module.id);
     if (module.id === "calendar") updateCalendarTab(item);
     return item;
   }));
+  if (focused) document.getElementById(focused)?.focus({ preventScroll: true });
+}
+
+function clearModuleDrag() {
+  draggedModule = undefined;
+  for (const tab of tabBar.querySelectorAll("[data-module-dragging], [data-module-drop]")) {
+    delete tab.dataset.moduleDragging;
+    delete tab.dataset.moduleDrop;
+  }
+}
+
+function moveModule(id, targetId, position) {
+  return mutate("reorder-module", { id, targetId, position });
+}
+
+function moduleNeighbors(id) {
+  const visible = visibleModules(workspace);
+  const index = visible.findIndex((module) => module.id === id);
+  return index < 0 ? [] : [visible[index - 1], visible[index + 1]];
+}
+
+function bindModuleReorder(tab, id) {
+  tab.draggable = true;
+  tab.title += `\n${t("moduleOrderHint")}`;
+  tab.setAttribute("aria-description", t("moduleOrderHint"));
+  tab.setAttribute("aria-haspopup", "menu");
+  tab.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
+  tab.addEventListener("dragstart", (event) => {
+    if (!event.dataTransfer) return;
+    closeWorkspaceMenu();
+    draggedModule = id;
+    tab.dataset.moduleDragging = "";
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("application/x-ease-module", id);
+  });
+  tab.addEventListener("dragend", clearModuleDrag);
+  tab.addEventListener("dragover", (event) => {
+    if (!draggedModule || draggedModule === id) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    tab.dataset.moduleDrop = dropEdge(event);
+  });
+  tab.addEventListener("dragleave", (event) => {
+    if (!(event.relatedTarget instanceof Node) || !tab.contains(event.relatedTarget)) delete tab.dataset.moduleDrop;
+  });
+  tab.addEventListener("drop", (event) => {
+    if (!draggedModule || draggedModule === id) return;
+    event.preventDefault();
+    const source = draggedModule;
+    const position = dropEdge(event);
+    clearModuleDrag();
+    moveModule(source, id, position);
+  });
+  const openMenu = (point) => {
+    const [previous, next] = moduleNeighbors(id);
+    openWorkspaceMenu(tab, point, t(id), (action) => {
+      if (previous) action("moduleMoveUp", "chevron-up", () => moveModule(id, previous.id, "before"));
+      if (next) action("moduleMoveDown", "chevron-down", () => moveModule(id, next.id, "after"));
+    });
+  };
+  tab.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    openMenu(event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined);
+  });
+  tab.addEventListener("keydown", (event) => {
+    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+    event.preventDefault();
+    openMenu();
+  });
 }
 
 function section(title, description, action) {
@@ -430,8 +518,9 @@ function snippetList(title, snippets, showFolder = false, container = view) {
 }
 
 function renderClipboard() {
-  if (activeFolder !== "all" && !folderFor(activeFolder)) activeFolder = "all";
+  if (activeFolder !== "all" && activeFolder !== clipboardHistoryFolder && !folderFor(activeFolder)) activeFolder = "all";
   const folder = folderFor(activeFolder);
+  const showHistory = activeFolder === clipboardHistoryFolder;
   const add = (className) => {
     const action = button(t("newSnippet"), className, { symbol: "plus", onClick: () => editSnippet() });
     action.id = "new-snippet";
@@ -440,12 +529,30 @@ function renderClipboard() {
   const snippets = workspace.snippets.filter((snippet) => snippetReadable(snippet)
     && (activeFolder === "all" || snippet.folderId === activeFolder));
   const hasSnippets = snippets.length > 0;
-  section(t("clipboard"), undefined, hasSnippets ? add("primary-button") : undefined);
+  section(t(showHistory ? "clipboardHistory" : "clipboard"), undefined, !showHistory && hasSnippets ? add("primary-button") : undefined);
   const layout = node("div", "clipboard-layout");
   const content = node("div", "clipboard-content");
   layout.append(renderFolderBar(), content);
   view.append(layout);
   layout.querySelector(".folder-quick").scrollTop = folderRailScroll;
+  if (showHistory) {
+    clipboardHistoryLocale = workspace.locale;
+    clipboardHistoryController = initClipboardHistoryView(content, {
+      locale: workspace.locale, t, icon, state: clipboardHistoryViewState(),
+      onAllow: () => changeClipboardHistory("allow"),
+      onStart: () => changeClipboardHistory("set-enabled", { enabled: true }),
+      onPause: () => changeClipboardHistory("set-enabled", { enabled: false }),
+      onClear: () => changeClipboardHistory("clear"),
+      onDelete: (id) => changeClipboardHistory("remove", { id }),
+      onCopy: ({ text }) => copyWorkspaceText(text),
+      onSave: ({ text }) => {
+        if (editor.open) return false;
+        editSnippet(undefined, { draftText: text });
+        return true;
+      }
+    });
+    return;
+  }
   if (activeFolder !== "all") {
     const current = node("div", "folder-current");
     current.dataset.folderColor = folder?.color ?? "default";
@@ -479,6 +586,10 @@ function renderClipboard() {
 }
 
 function selectFolder(id) {
+  if (id === clipboardHistoryFolder) {
+    openClipboardHistory();
+    return;
+  }
   if (activeFolder !== id) inlinePinState = undefined;
   activeFolder = id;
   render();
@@ -487,9 +598,59 @@ function selectFolder(id) {
   (pin ?? document.getElementById(`folder-chip-${id}`))?.focus();
 }
 
+function clipboardHistoryViewState() {
+  return {
+    allowed: clipboardHistoryAllowed,
+    active: clipboardHistoryAllowed && clipboardHistory.enabled,
+    entries: clipboardHistory.entries,
+    issue: clipboardHistoryIssue
+  };
+}
+
+function updateClipboardHistoryView() {
+  if (query) render();
+  else clipboardHistoryController?.update(clipboardHistoryViewState());
+}
+
+async function refreshClipboardHistory() {
+  const version = ++clipboardHistoryReadVersion;
+  const [history, allowed] = await Promise.all([
+    loadClipboardHistory().catch(() => clipboardHistory),
+    chrome.permissions.contains(clipboardReadPermission).catch(() => false)
+  ]);
+  if (version !== clipboardHistoryReadVersion) return;
+  clipboardHistory = history;
+  clipboardHistoryAllowed = allowed;
+  updateClipboardHistoryView();
+}
+
+async function changeClipboardHistory(action, data) {
+  clipboardHistoryIssue = undefined;
+  try {
+    const response = await chrome.runtime.sendMessage({ type: clipboardHistoryMessage, action, ...data });
+    if (!response?.ok) clipboardHistoryIssue = response?.error === "clipboardHistoryPermission"
+      ? "clipboardHistoryPermissionDenied" : "clipboardHistoryFailed";
+    await refreshClipboardHistory();
+    return Boolean(response?.ok);
+  } catch {
+    clipboardHistoryIssue = "clipboardHistoryFailed";
+    updateClipboardHistoryView();
+    return false;
+  }
+}
+
+function openClipboardHistory(entryId) {
+  activeFolder = clipboardHistoryFolder;
+  inlinePinState = undefined;
+  switchTo(clipboard.id, false);
+  if (entryId) clipboardHistoryController?.focus(entryId);
+  else document.getElementById("clipboard-history-nav")?.focus();
+  changeClipboardHistory("read");
+}
+
 let folderRailScroll = 0;
 let clipboardDrag;
-let folderContext;
+let workspaceMenu;
 
 function clearClipboardDrag() {
   clipboardDrag = undefined;
@@ -512,12 +673,12 @@ function allowDrag(element, kind, id) {
   element.addEventListener("dragend", clearClipboardDrag);
 }
 
-function allowFolderDrop(chip, folder) {
-  function dropEdge(event) {
-    const rect = chip.getBoundingClientRect();
-    return event.clientY < rect.top + rect.height / 2 ? "before" : "after";
-  }
+function dropEdge(event) {
+  const rect = event.currentTarget.getBoundingClientRect();
+  return event.clientY < rect.top + rect.height / 2 ? "before" : "after";
+}
 
+function allowFolderDrop(chip, folder) {
   function acceptsDrag() {
     if (clipboardDrag?.kind === "folder") return clipboardDrag.id !== folder.id;
     if (clipboardDrag?.kind !== "snippet") return false;
@@ -552,25 +713,25 @@ function allowFolderDrop(chip, folder) {
   });
 }
 
-function closeFolderContext() {
-  if (!folderContext) return;
-  if (folderContext.matches(":popover-open")) folderContext.hidePopover();
-  folderContext.remove();
-  folderContext = undefined;
+function closeWorkspaceMenu() {
+  if (!workspaceMenu) return;
+  if (workspaceMenu.matches(":popover-open")) workspaceMenu.hidePopover();
+  workspaceMenu.remove();
+  workspaceMenu = undefined;
 }
 
-function openFolderContext(folder, anchor, point) {
-  closeFolderContext();
+function openWorkspaceMenu(anchor, point, label, populate) {
+  closeWorkspaceMenu();
   const menu = node("div", "folder-context-menu");
   menu.setAttribute("popover", "auto");
   menu.setAttribute("role", "menu");
-  menu.setAttribute("aria-label", t("folderContext"));
+  menu.setAttribute("aria-label", label);
   const group = node("div", "folder-menu-group");
   function action(key, symbol, run) {
     const item = button(t(key), "folder-menu-item", {
       symbol,
       onClick: () => {
-        closeFolderContext();
+        closeWorkspaceMenu();
         anchor.focus();
         run();
       }
@@ -580,37 +741,17 @@ function openFolderContext(folder, anchor, point) {
     group.append(item);
   }
 
-  const position = workspace.folders.findIndex(({ id }) => id === folder.id);
-  const before = workspace.folders[position - 1];
-  const after = workspace.folders[position + 1];
-  if (folderLocked(folder)) {
-    action("vaultUnlock", "unlock", () => editVaultCredential(folder));
-  } else {
-    action("editFolder", "edit", () => editFolder(folder));
-    if (folder.protected) {
-      action("vaultLock", "lock", () => changeVault("lock-folder", { id: folder.id }));
-      action("vaultPolicySettings", "settings", () => editVaultPolicy(folder));
-      action(folder.vaultMode === "pin" ? "vaultChangePin" : "vaultSetPin", "edit", () => editVaultCredential(folder, "change"));
-      if (folder.device) action("vaultDeviceRemove", "fingerprint", () => removeDeviceUnlock(folder));
-      else if (supportsDeviceUnlock) action("vaultDeviceEnable", "fingerprint", () => enableDeviceUnlock(folder));
-      action(folder.vaultMode === "pin" ? "vaultRemovePin" : "vaultRemove", "unlock", () => removeVaultPassword(folder));
-    } else {
-      action("vaultSetPin", "lock", () => editVaultCredential(folder, "setup"));
-    }
-    action("deleteFolder", "trash", () => deleteFolder(folder));
-  }
-  if (before) action("folderMoveUp", "chevron-up", () => mutate("reorder-folder", { id: folder.id, targetId: before.id, position: "before" }));
-  if (after) action("folderMoveDown", "chevron-down", () => mutate("reorder-folder", { id: folder.id, targetId: after.id, position: "after" }));
-
+  populate(action);
+  if (!group.childElementCount) return;
   menu.append(group);
   menu.addEventListener("toggle", (event) => {
-    if (event.newState === "closed" && folderContext === menu) closeFolderContext();
+    if (event.newState === "closed" && workspaceMenu === menu) closeWorkspaceMenu();
   });
   menu.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      closeFolderContext();
+      closeWorkspaceMenu();
       anchor.focus();
       return;
     }
@@ -626,16 +767,42 @@ function openFolderContext(folder, anchor, point) {
     event.preventDefault();
     options[next].focus();
   });
-  folderContext = menu;
+  workspaceMenu = menu;
   document.body.append(menu);
   menu.showPopover();
   const rect = anchor.getBoundingClientRect();
   const bounds = menu.getBoundingClientRect();
   const left = point?.x ?? rect.left;
   const top = point?.y ?? rect.top;
-  menu.style.left = `${Math.max(4, Math.min(left - bounds.width, innerWidth - bounds.width - 4))}px`;
-  menu.style.top = `${Math.max(4, Math.min(top, innerHeight - bounds.height - 4))}px`;
+  menu.style.setProperty("--folder-menu-left", `${Math.max(4, Math.min(left - bounds.width, innerWidth - bounds.width - 4))}px`);
+  menu.style.setProperty("--folder-menu-top", `${Math.max(4, Math.min(top, innerHeight - bounds.height - 4))}px`);
   group.firstElementChild.focus();
+}
+
+function openFolderContext(folder, anchor, point) {
+  const position = workspace.folders.findIndex(({ id }) => id === folder.id);
+  const before = workspace.folders[position - 1];
+  const after = workspace.folders[position + 1];
+  openWorkspaceMenu(anchor, point, t("folderContext"), (action) => {
+    if (folderLocked(folder)) {
+      action("vaultUnlock", "unlock", () => editVaultCredential(folder));
+    } else {
+      action("editFolder", "edit", () => editFolder(folder));
+      if (folder.protected) {
+        action("vaultLock", "lock", () => changeVault("lock-folder", { id: folder.id }));
+        action("vaultPolicySettings", "settings", () => editVaultPolicy(folder));
+        action(folder.vaultMode === "pin" ? "vaultChangePin" : "vaultSetPin", "edit", () => editVaultCredential(folder, "change"));
+        if (folder.device) action("vaultDeviceRemove", "fingerprint", () => removeDeviceUnlock(folder));
+        else if (supportsDeviceUnlock) action("vaultDeviceEnable", "fingerprint", () => enableDeviceUnlock(folder));
+        action(folder.vaultMode === "pin" ? "vaultRemovePin" : "vaultRemove", "unlock", () => removeVaultPassword(folder));
+      } else {
+        action("vaultSetPin", "lock", () => editVaultCredential(folder, "setup"));
+      }
+      action("deleteFolder", "trash", () => deleteFolder(folder));
+    }
+    if (before) action("folderMoveUp", "chevron-up", () => mutate("reorder-folder", { id: folder.id, targetId: before.id, position: "before" }));
+    if (after) action("folderMoveDown", "chevron-down", () => mutate("reorder-folder", { id: folder.id, targetId: after.id, position: "after" }));
+  });
 }
 
 function renderFolderBar() {
@@ -643,14 +810,19 @@ function renderFolderBar() {
   bar.setAttribute("aria-label", t("clipboardFolders"));
   const quick = node("div", "folder-quick");
   const all = { id: "all", name: t("allFolders"), icon: "clipboard" };
-  for (const folder of [all, ...workspace.folders]) {
+  const history = { id: clipboardHistoryFolder, name: t("clipboardHistory"), icon: "history" };
+  for (const folder of [all, history, ...workspace.folders]) {
     const chip = button(folder.name, "folder-chip", { symbol: folder.icon, onClick: () => selectFolder(folder.id) });
-    chip.id = `folder-chip-${folder.id}`;
+    chip.id = folder === history ? "clipboard-history-nav" : `folder-chip-${folder.id}`;
     chip.title = folder.name;
     chip.dataset.folderColor = folder.color ?? "default";
     chip.lastElementChild.className = "folder-label";
     chip.lastElementChild.dir = "auto";
     chip.setAttribute("aria-pressed", String(activeFolder === folder.id));
+    if (folder === history) {
+      quick.append(chip);
+      continue;
+    }
     if (folderLocked(folder)) {
       chip.classList.add("is-locked");
       chip.append(glyph("lock", "folder-lock-mark"));
@@ -757,6 +929,10 @@ function renderSettings() {
     displayPreference("size", "windowSize", sizes)
   );
   if (inPanel) list.append(node("p", "setting-hint", t("panelSizeHint")));
+  renderWorkspaceZoomControl(list, {
+    locale: workspace.locale, t, zoom: workspace.zoom,
+    onZoom: (zoom) => workspaceZoom.setZoom(zoom)
+  });
 
   const language = node("div", "setting-row language-row");
   const label = node("label", "", t("language"));
@@ -911,14 +1087,28 @@ function renderSearch() {
     .map(({ id, icon }) => ({ id, icon, ...moduleSearchSources[id]() }));
   const commands = destinations.filter((page) => page === library || page === settings || workspace.tabs.includes(page.id))
     .map((page) => ({ title: t(page.id), icon: page.icon, keywords: [t(page.id), translate("en", page.id)], open: () => switchTo(page.id) }));
-  commands.push({
-    title: t("newSnippet"), icon: "plus", keywords: [t("newSnippet"), translate("en", "newSnippet")],
-    open() {
-      switchTo("clipboard", false);
-      editSnippet();
+  commands.push(
+    {
+      title: t("newSnippet"), icon: "plus", keywords: [t("newSnippet"), translate("en", "newSnippet")],
+      open() {
+        switchTo("clipboard", false);
+        editSnippet();
+      }
+    },
+    {
+      title: t("clipboardHistory"), icon: "history",
+      keywords: [t("clipboardHistory"), translate("en", "clipboardHistory")],
+      open: () => openClipboardHistory()
     }
-  });
-  const results = searchWorkspaceModules(query, workspace.locale, [...sources, { id: "commands", label: "commands", entries: commands }]);
+  );
+  const history = {
+    id: "clipboard-history", label: "clipboardHistorySearch", icon: "history",
+    entries: clipboardHistory.entries.map(({ id, text }) => ({
+      id: `clipboard-history-result-${id}`, title: text, keywords: [text],
+      open: () => openClipboardHistory(id)
+    }))
+  };
+  const results = searchWorkspaceModules(query, workspace.locale, [...sources, history, { id: "commands", label: "commands", entries: commands }]);
   if (!results.length) {
     emptyState(t("emptySearch"), t("emptySearchHint"), "search");
     return;
@@ -928,7 +1118,7 @@ function renderSearch() {
 
 function render() {
   clearTimeout(inlinePinTimer);
-  closeFolderContext();
+  closeWorkspaceMenu();
   const folderRail = view.querySelector(".folder-quick");
   if (folderRail) folderRailScroll = folderRail.scrollTop;
   const focused = document.activeElement?.id;
@@ -939,6 +1129,7 @@ function render() {
   root.dataset.palette = workspace.palette;
   root.dataset.density = workspace.density;
   root.dataset.size = workspace.size;
+  workspaceZoom.update({ zoom: workspace.zoom });
   if (logo.dataset.palette !== workspace.palette) {
     const canvas = node("canvas");
     canvas.width = canvas.height = 96;
@@ -975,6 +1166,14 @@ function render() {
     marketsController.update({ state: workspace.markets, alertState: marketAlertState });
     return;
   }
+  if (!query && activePage === clipboard.id && activeFolder === clipboardHistoryFolder
+    && clipboardHistoryController && clipboardHistoryLocale === workspace.locale) {
+    view.querySelector(".folder-bar").replaceWith(renderFolderBar());
+    view.querySelector(".folder-quick").scrollTop = folderRailScroll;
+    if (focused === "clipboard-history-nav") document.getElementById(focused)?.focus({ preventScroll: true });
+    clipboardHistoryController.update(clipboardHistoryViewState());
+    return;
+  }
   translatorController?.dispose?.();
   translatorController = undefined;
   translatorSiteController = undefined;
@@ -984,6 +1183,7 @@ function render() {
   marketsController?.dispose();
   marketsController = undefined;
   calendarController = undefined;
+  clipboardHistoryController = undefined;
   calendarConnectionsRefresh = undefined;
   accountRefresh = undefined;
   workspaceSyncRefresh = undefined;
@@ -1036,7 +1236,7 @@ function render() {
     translatorLocale = workspace.locale;
     translatorHistoryController = renderTranslationHistory(body, {
       locale: workspace.locale, t, icon, state: translationHistory,
-      onCopy: (entry) => copyTranslation(entry.translation),
+      onCopy: (entry) => copyWorkspaceText(entry.translation),
       onDelete: (entry) => updateTranslationHistory("remove", { id: entry.id }),
       onFlashcard: (entry) => editFlashcard(undefined, entry)
     });
@@ -1057,7 +1257,7 @@ function render() {
       ...translatorOptions(),
       locale: workspace.locale, t, icon, settingsButton: translatorSettings, draft: translatorDraft,
       onPreferences: (patch) => mutate("translator-preferences", patch),
-      onCopy: copyTranslation,
+      onCopy: copyWorkspaceText,
       onSave: saveTranslation,
       onFlashcard: (translation) => editFlashcard(undefined, translation),
       onHistory: (entry) => updateTranslationHistory("record", entry),
@@ -1170,7 +1370,7 @@ function openChromeShortcuts() {
   chrome.tabs.create({ url: "chrome://extensions/shortcuts" }).catch(() => reportError("shortcutOpenFailed"));
 }
 
-async function copyTranslation(text) {
+async function copyWorkspaceText(text) {
   try {
     await navigator.clipboard.writeText(text);
     showToast(t("copied"));
@@ -1358,7 +1558,7 @@ function confirmFlashcardDeletion(card) {
   editor.showModal();
 }
 
-function editSnippet(snippet) {
+function editSnippet(snippet, { draftText } = {}) {
   const folder = folderFor(snippet ? snippet.folderId : activeFolder);
   if (folderLocked(folder)) {
     editVaultCredential(folder);
@@ -1377,7 +1577,7 @@ function editSnippet(snippet) {
     });
   }, folder?.id);
   protectedDialogSnippet = snippet?.id;
-  const text = field(fields, { label: t("snippetText"), value: snippet?.text, placeholder: t("snippetTextPlaceholder"), required: true, maxLength: 20000, multiline: true });
+  const text = field(fields, { label: t("snippetText"), value: snippet?.text ?? draftText, placeholder: t("snippetTextPlaceholder"), required: true, maxLength: 20000, multiline: true });
   const hint = node("p", "snippet-enter-hint", t("snippetEnterHint"));
   hint.id = "snippet-enter-hint";
   text.setAttribute("aria-describedby", hint.id);
@@ -1389,6 +1589,7 @@ function editSnippet(snippet) {
   });
   fields.append(hint);
   const advanced = node("details", "snippet-advanced");
+  advanced.open = draftText !== undefined;
   const advancedFields = node("div", "snippet-advanced-fields");
   advanced.append(node("summary", "", t("snippetAdvanced")), advancedFields);
   fields.append(advanced);
@@ -1409,7 +1610,7 @@ function editSnippet(snippet) {
   advancedFields.append(row);
   advancedFields.append(node("p", "field-hint", t("templateTip")));
   editor.showModal();
-  text.focus();
+  (draftText !== undefined && workspace.folders.length ? destination : text).focus();
 }
 
 function editFolder(folder) {
@@ -1853,7 +2054,7 @@ async function copySnippet(snippet, text) {
   vaultCopyFeedback = feedback;
   let copied = false;
   try {
-    if (folder?.protected && !await mutate("authorize-vault-copy", { id: current.id })) return false;
+    if (folder?.protected && !await mutate("authorize-vault-copy", { id: current.id, text })) return false;
     await navigator.clipboard.writeText(text);
     copied = true;
     if (feedback) feedback.copied = true;
@@ -1935,6 +2136,18 @@ tabBar.addEventListener("keydown", (event) => {
   if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
   const allTabs = [...tabBar.querySelectorAll("button")];
   const index = allTabs.indexOf(document.activeElement);
+  if (index < 0 || event.defaultPrevented) return;
+  if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    if (event.repeat) return;
+    const id = allTabs[index].dataset.module;
+    const [previous, next] = moduleNeighbors(id);
+    if (event.key === "ArrowUp" && previous) moveModule(id, previous.id, "before");
+    if (event.key === "ArrowDown" && next) moveModule(id, next.id, "after");
+    return;
+  }
+  if (event.altKey || event.ctrlKey || event.metaKey) return;
   const next = {
     ArrowUp: (index - 1 + allTabs.length) % allTabs.length,
     ArrowDown: (index + 1) % allTabs.length,
@@ -1953,7 +2166,7 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (editor.open || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.defaultPrevented) return;
+  if (editor.open || workspaceMenu || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.defaultPrevented) return;
   const openMenu = view.querySelector(openMenus);
   if (event.key === "Escape" && openMenu) {
     event.preventDefault();
@@ -1998,6 +2211,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "session" && changes[vaultSessionStorageKey]) refreshWorkspace();
   if (area === "session" && changes[translatorSelectionKey]?.newValue) receiveTranslationSelection();
   if (area !== "local") return;
+  if (changes[clipboardHistoryKey]) refreshClipboardHistory();
   if (changes[marketAlertStateKey]) {
     marketAlertState = changes[marketAlertStateKey].newValue ?? {};
     marketsController?.update({ state: workspace.markets, alertState: marketAlertState });
@@ -2020,11 +2234,17 @@ chrome.storage.onChanged.addListener((changes, area) => {
     workspaceSyncRefresh?.();
   }
 });
+function updateClipboardReadPermission(permissions) {
+  if (permissions.permissions?.includes("clipboardRead")) refreshClipboardHistory();
+}
+chrome.permissions.onAdded?.addListener(updateClipboardReadPermission);
+chrome.permissions.onRemoved?.addListener(updateClipboardReadPermission);
 if (inPanel) chrome.tabs?.onActivated?.addListener(receiveTranslationSelection);
 const initialTranslationSelection = await takeTranslatorSelection();
 if (initialTranslationSelection !== null) activePage = "translate";
 const [initialAccount, initialHistory, initialMarketAlerts] = await Promise.all([
-  getGoogleAccount().catch(() => null), readTranslationHistory().catch(() => null), readMarketAlertState().catch(() => ({}))
+  getGoogleAccount().catch(() => null), readTranslationHistory().catch(() => null), readMarketAlertState().catch(() => ({})),
+  refreshClipboardHistory()
 ]);
 translatorAccountId = initialAccount?.id ?? null;
 if (initialHistory) translationHistory = initialHistory;

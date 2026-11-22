@@ -1,4 +1,4 @@
-import { handleEaseTranslationMessage, maxOnlineTranslationLength } from "./ease-api.js";
+import { handleEaseTranslationMessage, maxOnlineTranslationLength, onlineTranslationErrorCodes } from "./ease-api.js";
 import { isRtl, translate } from "./locales.js";
 import { maxTranslationLength, translatorLanguages } from "./translator-engine.js";
 import { readTranslationHistory, recordTranslationHistory } from "./translation-history-store.js";
@@ -16,13 +16,9 @@ const requestIdPattern = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu;
 const inlineLabels = [
   "translatorRun", "translatorChrome", "translatorEconomy", "translatorStandard", "translatorPremium",
   "translatorOutput", "translatorUnavailable", "translatorPairUnavailable", "translatorDetectionUnavailable",
-  "translatorNeedsDownload", "translatorDownloading", "translatorWorking", "translatorFailed", "translatorTooLong",
-  "translatorOnlineSignIn", "translatorOnlineUnavailable", "translatorOnlineLimit", "translatorOnlineBusy", "close"
+  "translatorNeedsDownload", "translatorDownloading", "translatorWorking", ...onlineTranslationErrorCodes, "close"
 ];
-const onlineErrorKeys = new Set([
-  "translatorOnlineSignIn", "translatorOnlineUnavailable", "translatorOnlineLimit", "translatorOnlineBusy",
-  "translatorFailed", "translatorTooLong"
-]);
+const onlineErrorKeys = new Set(onlineTranslationErrorCodes);
 const activeOnlineRequests = new Map();
 
 function eligiblePage(value) {

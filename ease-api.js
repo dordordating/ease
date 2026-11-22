@@ -3,13 +3,16 @@ import { validateWorkspaceSyncEnvelope } from "./workspace-sync-crypto.js";
 
 export const easeTranslationMessage = "ease-translate-online";
 export const maxOnlineTranslationLength = 4_000;
+export const onlineTranslationErrorCodes = Object.freeze([
+  "translatorOnlineSignIn", "translatorOnlineUnavailable", "translatorOnlineLimit", "translatorOnlineBusy",
+  "translatorOnlineGoogleConnection", "translatorOnlineGoogleVerification", "translatorOnlineConnection", "translatorOnlineProvider",
+  "translatorOnlineTimeout", "translatorTooLong", "translatorFailed"
+]);
 
 const baseUrl = "https://ease-api.144.76.164.115.sslip.io";
 const engines = new Set(["economy", "standard", "premium"]);
-const errorCodes = new Set([
-  "translatorOnlineSignIn", "translatorOnlineUnavailable", "translatorOnlineLimit",
-  "translatorOnlineBusy", "translatorTooLong", "translatorFailed"
-]);
+const errorCodes = new Set(onlineTranslationErrorCodes);
+const translationTimeout = 50_000;
 const syncErrorCodes = new Set(["syncUnavailable", "syncSignInRequired", "syncConflict", "syncTooLarge", "syncInvalidData"]);
 const languageCode = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,3}$/u;
 const maxUsageLength = 360;
@@ -83,35 +86,46 @@ async function requireAccount(expected) {
 async function apiRequest(path, { method, body, token, signal, milliseconds = 27_000 }) {
   signal?.throwIfAborted();
   const timeout = AbortSignal.timeout(milliseconds);
+  const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
   const headers = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (token) headers.Authorization = `Bearer ${token}`;
+  // A long translation can outlast Chrome's worker idle timer. Limit activity to this request.
+  const keepAlive = milliseconds > 30_000
+    ? setInterval(() => chrome.runtime.getPlatformInfo().catch(() => {}), 25_000)
+    : undefined;
   try {
-    return await fetch(`${baseUrl}${path}`, {
+    const response = await fetch(`${baseUrl}${path}`, {
       method,
       credentials: "omit",
       redirect: "error",
       cache: "no-store",
       headers,
       body: JSON.stringify(body),
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout
+      signal: requestSignal
     });
+    requestSignal.throwIfAborted();
+    let data = null;
+    if (response.status === 401) {
+      response.body?.cancel().catch(() => {});
+    } else {
+      data = await response.json().catch((error) => {
+        if (error instanceof SyntaxError) return null;
+        throw error;
+      });
+      requestSignal.throwIfAborted();
+    }
+    return { ok: response.ok, status: response.status, data };
   } catch {
     signal?.throwIfAborted();
-    throw new EaseTranslationError("translatorOnlineUnavailable");
+    throw new EaseTranslationError(timeout.aborted ? "translatorOnlineTimeout" : "translatorOnlineConnection");
+  } finally {
+    if (keepAlive !== undefined) clearInterval(keepAlive);
   }
 }
 
 function apiPost(path, body, options) {
   return apiRequest(path, { ...options, method: "POST", body });
-}
-
-async function decodeResponse(response) {
-  try {
-    return await response.json();
-  } catch {
-    return null;
-  }
 }
 
 function supportedLanguage(value) {
@@ -177,15 +191,18 @@ async function establishSession(account) {
   try {
     google = await getSilentGoogleProfileToken(account.id);
   } catch (error) {
-    throw new EaseTranslationError(error?.code === "googleRequestFailed"
-      ? "translatorOnlineUnavailable" : "translatorOnlineSignIn");
+    const googleConnectionFailed = error?.code === "googleRequestFailed" || error?.code === "googleOAuthUnavailable";
+    throw new EaseTranslationError(googleConnectionFailed ? "translatorOnlineGoogleConnection" : "translatorOnlineSignIn");
   }
   await requireAccount(account);
 
   const response = await apiPost("/v1/auth/google", { access_token: google.token }, { milliseconds: 22_000 });
   if (response.status === 401) throw new EaseTranslationError("translatorOnlineSignIn");
+  if (response.status === 503 && response.data?.detail === "google_unavailable") {
+    throw new EaseTranslationError("translatorOnlineGoogleVerification");
+  }
   if (!response.ok) throw new EaseTranslationError("translatorOnlineUnavailable");
-  const data = await decodeResponse(response);
+  const { data } = response;
   const expiresAt = sessionExpiration(data, google.email);
   await requireAccount(account);
   return { account, token: data.access_token, expiresAt };
@@ -228,7 +245,7 @@ async function requestTranslation(text, { source = "auto", target, engine, signa
   while (true) {
     await requireAccount(account);
     const body = learningLanguage ? { ...payload, notes_language: learningLanguage } : payload;
-    response = await apiPost("/v1/translate", body, { token: session.token, signal });
+    response = await apiPost("/v1/translate", body, { token: session.token, signal, milliseconds: translationTimeout });
     if (response.status === 401) {
       invalidateSession(session);
       if (refreshedSession) throw new EaseTranslationError("translatorOnlineSignIn");
@@ -238,7 +255,7 @@ async function requestTranslation(text, { source = "auto", target, engine, signa
       refreshedSession = true;
       continue;
     }
-    data = await decodeResponse(response);
+    data = response.data;
     signal.throwIfAborted();
     await requireAccount(account);
     // Older servers reject unknown fields during input validation, before reserving quota.
@@ -254,9 +271,12 @@ async function requestTranslation(text, { source = "auto", target, engine, signa
   if (response.status === 413 || (response.status === 422 && data?.detail === "invalid_translation_text")) {
     throw new EaseTranslationError("translatorTooLong");
   }
-  if (response.status >= 500 && data?.detail !== "translation_invalid_response") {
-    throw new EaseTranslationError("translatorOnlineUnavailable");
+  if (response.status === 504) throw new EaseTranslationError("translatorOnlineTimeout");
+  if ((response.status === 503 && data?.detail === "translation_unavailable")
+    || (response.status === 502 && data?.detail === "translation_invalid_response")) {
+    throw new EaseTranslationError("translatorOnlineProvider");
   }
+  if (response.status >= 500) throw new EaseTranslationError("translatorOnlineUnavailable");
   if (!response.ok || typeof data?.text !== "string" || !data.text.trim()
     || data.text.length > maxResultLength || data.tier !== engine) {
     throw new EaseTranslationError("translatorFailed");
@@ -375,7 +395,7 @@ async function requestWorkspaceSync(accountId, method, body, signal) {
       throw new EaseTranslationError("syncSignInRequired");
     }
 
-    const result = response.ok ? await decodeResponse(response) : null;
+    const result = response.data;
     requestSignal.throwIfAborted();
     await requireAccount(account);
     if (response.status === 409 && method === "PUT") throw new EaseTranslationError("syncConflict");

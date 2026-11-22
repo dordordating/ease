@@ -1,5 +1,5 @@
 import { chromeTranslate, maxTranslationLength, translatorLanguages } from "./translator-engine.js";
-import { maxOnlineTranslationLength, translateOnline } from "./ease-api.js";
+import { maxOnlineTranslationLength, onlineTranslationErrorCodes, translateOnline } from "./ease-api.js";
 import { defaultTranslator, translatorEngines } from "./workspace-data.js";
 
 const languages = new Set(translatorLanguages);
@@ -8,8 +8,7 @@ const engineLabels = {
 };
 const translationErrors = new Set([
   "translatorUnavailable", "translatorPairUnavailable", "translatorDetectionUnavailable",
-  "translatorNeedsDownload", "translatorTooLong", "translatorFailed", "translatorOnlineSignIn",
-  "translatorOnlineUnavailable", "translatorOnlineLimit", "translatorOnlineBusy"
+  "translatorNeedsDownload", ...onlineTranslationErrorCodes
 ]);
 
 function selectableLanguage(code) {
