@@ -363,7 +363,7 @@ export function renderMarkets(container, {
         element("bdi", "markets-price-unit", quoteUnit(instrument)));
     } else {
       amount.dataset.missing = "true";
-      amount.textContent = t("marketsNoQuote");
+      amount.append(element("span", "markets-no-quote", t("marketsNoQuote")));
     }
     values.append(amount);
     if (price && Number.isFinite(quote.changePercent)) {
@@ -548,18 +548,25 @@ export function renderMarkets(container, {
     queueCharts();
   }
 
+  function displayedSymbols() {
+    return detail ? [detail.instrument.symbol] : listInstruments().map(item => item.symbol);
+  }
+
   function updateQuoteStatus() {
-    const message = quoteRequest && !quotes.size ? "marketsLoading" : quoteError ? "marketsUnavailable" : undefined;
+    const loading = Boolean(quoteRequest);
+    const waitingForPrices = loading && displayedSymbols().every(symbol => !validPrice(quotes.get(symbol)?.price));
+    const message = waitingForPrices ? "marketsLoading" : quoteError && !loading ? "marketsUnavailable" : undefined;
+    module.toggleAttribute("data-loading-quotes", loading);
     quoteStatus.hidden = !message;
     if (message) quoteStatus.textContent = t(message);
-    refresh.disabled = Boolean(quoteRequest);
+    refresh.disabled = loading;
     if (detail) detail.refresh.disabled = Boolean(quoteRequest || detail.historyRequest);
   }
 
   async function refreshQuotes(restart = false) {
     if (disposed || (quoteRequest && !restart)) return;
     if (restart) quoteRequest?.abort();
-    const symbols = detail ? [detail.instrument.symbol] : listInstruments().map(item => item.symbol);
+    const symbols = displayedSymbols();
     if (!symbols.length) {
       quoteRequest = undefined;
       quoteError = false;

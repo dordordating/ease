@@ -4273,6 +4273,9 @@ html[dir="rtl"] .translation-history-arrow svg {
   font-weight: 640;
 }
 
+.markets[data-loading-quotes] .markets-no-quote { display: none; }
+.markets[data-loading-quotes] .markets-price[data-missing]::after { content: "—" / ""; }
+
 .markets-change {
   display: inline-flex;
   align-items: center;
