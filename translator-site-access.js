@@ -1,6 +1,6 @@
 import { handleEaseTranslationMessage, maxOnlineTranslationLength, onlineTranslationErrorCodes } from "./ease-api.js";
 import { isRtl, translate } from "./locales.js";
-import { maxTranslationLength, resolveTranslationTarget, translationLanguagePreferences } from "./translator-engine.js";
+import { maxTranslationLength, translationLanguagePreferences } from "./translator-engine.js";
 import { readTranslationHistory, recordTranslationHistory } from "./translation-history-store.js";
 import { defaultTranslator, readWorkspace, translatorEngines } from "./workspace-data.js";
 
@@ -128,10 +128,8 @@ async function activeSitePreferences(sender, page) {
   const globallyEnabled = preferences.inlineEnabled === true;
   const legacyEnabled = Array.isArray(preferences.inlineSites) && preferences.inlineSites.includes(page.origin);
   if (!globallyEnabled && !legacyEnabled) return null;
-  const pair = translationLanguagePreferences(preferences);
   return {
-    source: pair.source,
-    target: resolveTranslationTarget(pair, workspace.locale),
+    ...translationLanguagePreferences(preferences),
     // Previously enabled sites were granted for on-device translation.
     engine: globallyEnabled && translatorEngines.includes(preferences.engine) ? preferences.engine : defaultTranslator.engine,
     locale: workspace.locale

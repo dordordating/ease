@@ -25,17 +25,14 @@ function languagePreference(value, fallback) {
 
 export function translationLanguagePreferences(preferences, patch = {}) {
   const source = languagePreference(patch.source, languagePreference(preferences?.source, "auto"));
-  const target = languagePreference(patch.target, languagePreference(preferences?.target, "en"));
+  const savedTarget = translatorLanguages.includes(preferences?.target) ? preferences.target : "en";
+  const changingTarget = translatorLanguages.includes(patch.target);
+  const target = changingTarget ? patch.target : savedTarget;
   if (source !== target) return { source, target };
-  if (source === "auto") return { source, target: "en" };
-  if (patch.source === source && patch.target !== target) return { source, target: "auto" };
+  if (source !== "en" && patch.source === source && !changingTarget) {
+    return { source, target: "en" };
+  }
   return { source: "auto", target };
-}
-
-export function resolveTranslationTarget({ source, target }, locale) {
-  if (target !== "auto") return target;
-  const preferred = [locale, ...(globalThis.navigator?.languages ?? []), "en", "es"];
-  return preferred.map(selectableLanguage).find(language => language && language !== source);
 }
 
 class TranslationError extends Error {

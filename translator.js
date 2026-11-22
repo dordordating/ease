@@ -1,5 +1,5 @@
 import {
-  chromeTranslate, maxTranslationLength, resolveTranslationTarget, selectableLanguage,
+  chromeTranslate, maxTranslationLength, selectableLanguage,
   translationLanguagePreferences, translatorLanguages
 } from "./translator-engine.js";
 import { maxOnlineTranslationLength, onlineTranslationErrorCodes, translateOnline } from "./ease-api.js";
@@ -68,9 +68,7 @@ export function renderTranslator(container, {
         </label>
         <button type="button" class="icon-button translator-swap">${icon("swap")}</button>
         <label class="translator-field">
-          <span class="translator-language-caption">
-            <span data-label="translatorTarget"></span><bdi class="translator-target-language" hidden></bdi>
-          </span>
+          <span data-label="translatorTarget"></span>
           <select name="target" class="translator-select"></select>
         </label>
       </div>
@@ -146,7 +144,6 @@ export function renderTranslator(container, {
   const settingsView = container.querySelector(".translator-settings-view");
   const sourceSelect = form.elements.namedItem("source");
   const targetSelect = form.elements.namedItem("target");
-  const automaticTargetLanguage = form.querySelector(".translator-target-language");
   const input = form.querySelector(".translator-textarea");
   const original = form.querySelector(".translator-original");
   const result = form.querySelector(".translator-result");
@@ -174,10 +171,7 @@ export function renderTranslator(container, {
   const cloudSignInButtons = Array.from(container.querySelectorAll(".translator-cloud-sign-in"));
 
   for (const label of container.querySelectorAll("[data-label]")) label.textContent = t(label.dataset.label);
-  const autoSource = new Option(t("translatorAuto"), "auto");
-  const autoTarget = new Option(t("translatorAutoTarget"), "auto");
-  sourceSelect.add(autoSource);
-  targetSelect.add(autoTarget);
+  sourceSelect.add(new Option(t("translatorAuto"), "auto"));
   for (const [code, name] of languageOptions) {
     sourceSelect.add(new Option(name, code));
     targetSelect.add(new Option(name, code));
@@ -201,10 +195,6 @@ export function renderTranslator(container, {
 
   function sourceLanguage() {
     return preferences.source === "auto" ? draft.detectedSource : preferences.source;
-  }
-
-  function targetLanguage() {
-    return resolveTranslationTarget(preferences, locale);
   }
 
   function setFeedback(key, kind = "info", values = {}, element = feedback) {
@@ -245,7 +235,7 @@ export function renderTranslator(container, {
     if (clearDetection) draft.detectedSource = undefined;
     draft.engine = preferences.engine;
     draft.source = preferences.source;
-    draft.target = targetLanguage();
+    draft.target = preferences.target;
     setProgress(undefined);
     setFeedback(online() || nativeSupported() ? undefined : "translatorUnavailable");
   }
@@ -266,11 +256,7 @@ export function renderTranslator(container, {
     originalToggle.hidden = !resultOnly;
     originalToggle.textContent = t(showOriginal ? "translatorHideOriginal" : "translatorShowOriginal");
     originalToggle.setAttribute("aria-expanded", String(!original.hidden));
-    const target = targetLanguage();
-    autoSource.disabled = preferences.target === "auto";
-    autoTarget.disabled = preferences.source === "auto";
-    automaticTargetLanguage.hidden = preferences.target !== "auto";
-    if (!automaticTargetLanguage.hidden) automaticTargetLanguage.textContent = names.of(target);
+    const target = preferences.target;
     sourceSelect.value = preferences.source;
     targetSelect.value = preferences.target;
     layoutSelect.value = preferences.layout;
@@ -401,7 +387,7 @@ export function renderTranslator(container, {
     if (disposed || request || writingPreferences) return false;
     const text = input.value;
     if (!validText(text)) return false;
-    const target = targetLanguage();
+    const target = preferences.target;
     if (sourceLanguage() === target) {
       setFeedback("translatorSameLanguage");
       return false;
@@ -488,7 +474,7 @@ export function renderTranslator(container, {
 
   function translationEntry(text = input.value) {
     return {
-      text, translation: draft.result, source: sourceLanguage(), target: targetLanguage(),
+      text, translation: draft.result, source: sourceLanguage(), target: preferences.target,
       engine: preferences.engine, learning: draft.learning, notesLanguage: locale
     };
   }
@@ -583,7 +569,7 @@ export function renderTranslator(container, {
   });
   swapButton.addEventListener("click", async () => {
     const target = sourceLanguage();
-    const source = targetLanguage();
+    const source = preferences.target;
     if (!languages.has(target) || target === source) return;
     const originalText = input.value;
     const translatedText = draft.result;
@@ -598,7 +584,7 @@ export function renderTranslator(container, {
     onFlashcard?.(translationEntry());
   });
 
-  if (draft.engine !== preferences.engine || draft.source !== preferences.source || draft.target !== targetLanguage()) resetResult();
+  if (draft.engine !== preferences.engine || draft.source !== preferences.source || draft.target !== preferences.target) resetResult();
   else if (!online() && !nativeSupported()) setFeedback("translatorUnavailable");
   showOriginal ||= !draft.result;
   renderFolderOptions();
