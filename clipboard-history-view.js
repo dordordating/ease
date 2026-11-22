@@ -13,22 +13,14 @@ function previewText(text) {
 }
 
 export function initClipboardHistoryView(container, {
-  locale, t, icon, state: initialState, onAllow, onStart, onPause, onClear, onCopy, onSave, onDelete
+  locale, t, icon, state: initialState, onAllow, onStart, onCopy, onSave, onDelete
 }) {
   const dates = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" });
   const panel = element("section", "clipboard-history");
   const controls = element("div", "clipboard-history-controls");
   const captureStatus = element("p", "clipboard-history-status");
   captureStatus.setAttribute("role", "status");
-  const toolbar = element("div", "clipboard-history-toolbar");
   const note = element("p", "clipboard-history-note", t("clipboardHistoryNote"));
-  const confirm = element("div", "clipboard-history-confirm");
-  const confirmTitle = element("h2", "", t("clipboardHistoryClearTitle"));
-  confirmTitle.id = "clipboard-history-clear-heading";
-  confirm.hidden = true;
-  confirm.setAttribute("role", "group");
-  confirm.setAttribute("aria-labelledby", confirmTitle.id);
-  const confirmActions = element("div", "clipboard-history-confirm-actions");
   const issue = element("p", "clipboard-history-issue");
   issue.setAttribute("role", "status");
   issue.hidden = true;
@@ -80,43 +72,14 @@ export function initClipboardHistoryView(container, {
     }
   }
 
-  const capture = button("", "primary-button clipboard-history-capture", () => {
-    const operation = !current.allowed ? onAllow : current.active ? onPause : onStart;
-    run(capture, operation);
+  const toggle = button("", "primary-button clipboard-history-toggle", () => {
+    run(toggle, current.allowed ? onStart : onAllow);
   });
-  const captureIcon = element("span", "clipboard-history-capture-icon");
-  const captureLabel = element("span");
-  capture.append(captureIcon, captureLabel);
-  const clear = button("clipboardHistoryClear", "secondary-button clipboard-history-clear", () => {
-    confirm.hidden = false;
-    clear.setAttribute("aria-expanded", "true");
-    cancel.focus({ preventScroll: true });
-  }, "trash");
-  confirm.id = "clipboard-history-clear-confirm";
-  clear.setAttribute("aria-controls", confirm.id);
-  clear.setAttribute("aria-expanded", "false");
-
-  function closeConfirm(restoreFocus = true) {
-    confirm.hidden = true;
-    clear.setAttribute("aria-expanded", "false");
-    if (restoreFocus) (clear.hidden ? capture : clear).focus({ preventScroll: true });
-  }
-
-  const cancel = button("cancel", "secondary-button", () => closeConfirm());
-  const accept = button("clipboardHistoryClear", "secondary-button clipboard-history-clear-accept", () => {
-    run(accept, onClear, () => closeConfirm(confirm.contains(document.activeElement)));
-  }, "trash");
-  confirm.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape") return;
-    event.stopPropagation();
-    event.preventDefault();
-    closeConfirm();
-  });
-  confirmActions.append(cancel, accept);
-  confirm.append(confirmTitle, element("p", "", t("clipboardHistoryClearConfirm")), confirmActions);
-  toolbar.append(capture, clear);
-  controls.append(captureStatus, toolbar, note);
-  panel.append(controls, confirm, issue, list, empty);
+  const toggleIcon = element("span", "clipboard-history-toggle-icon");
+  const toggleLabel = element("span");
+  toggle.append(toggleIcon, toggleLabel);
+  controls.append(captureStatus, toggle, note);
+  panel.append(controls, issue, list, empty);
   container.append(panel);
 
   function entryRow(entry) {
@@ -194,18 +157,17 @@ export function initClipboardHistoryView(container, {
   function update(next) {
     if (next === current) return;
     const active = document.activeElement;
-    const focusWithinConfirm = confirm.contains(active);
     const previousItem = list.contains(active) ? active.closest(".clipboard-history-entry") : null;
     const previousIndex = previousItem ? Array.from(list.children).indexOf(previousItem) : -1;
     current = next;
     const capturing = next.allowed && next.active;
     hasStarted ||= capturing || Boolean(next.entries.length);
-    const mode = !next.allowed ? "allow" : capturing ? "pause" : hasStarted ? "resume" : "start";
-    if (mode !== capture.dataset.mode) {
-      capture.dataset.mode = mode;
-      const labels = { allow: "clipboardHistoryAllow", pause: "clipboardHistoryPause", resume: "clipboardHistoryResume", start: "clipboardHistoryStart" };
-      captureLabel.textContent = t(labels[mode]);
-      captureIcon.innerHTML = icon(mode === "allow" ? "lock" : mode === "pause" ? "pause" : "play");
+    toggle.hidden = capturing;
+    if (!capturing) {
+      toggleLabel.textContent = t(!next.allowed ? "clipboardHistoryAllow" : hasStarted ? "clipboardHistoryResume" : "clipboardHistoryStart");
+      toggleIcon.innerHTML = icon(next.allowed ? "play" : "lock");
+    } else if (active === toggle) {
+      document.getElementById("clipboard-history-nav")?.focus({ preventScroll: true });
     }
     const status = t(capturing ? "clipboardHistoryActive" : "clipboardHistoryInactive");
     if (captureStatus.textContent !== status) captureStatus.textContent = status;
@@ -224,11 +186,8 @@ export function initClipboardHistoryView(container, {
       else list.insertBefore(item, cursor);
     }
     entries = nextEntries;
-    clear.hidden = !entries.size;
     list.hidden = !entries.size;
     empty.hidden = Boolean(entries.size);
-    if (!entries.size && !confirm.hidden) closeConfirm(focusWithinConfirm);
-    if (clear.hidden && active === clear) capture.focus({ preventScroll: true });
     if (previousItem && document.activeElement !== active) {
       const row = entries.get(previousItem.dataset.entryId);
       const fallback = list.children[Math.min(previousIndex, entries.size - 1)] ?? emptyHeading;

@@ -3283,8 +3283,14 @@ button.calendar-event-content:hover {
 
 .translator-shortcut-controls {
   display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
   justify-items: start;
   gap: 5px;
+}
+
+.translator-shortcut-controls p {
+  grid-column: 1 / -1;
 }
 
 .translator-inline-sites {
@@ -4412,7 +4418,6 @@ html[dir="rtl"] .translation-history-arrow svg {
 
 .clipboard-history-controls,
 .clipboard-history-entry,
-.clipboard-history-confirm,
 .clipboard-history-empty {
   display: grid;
   gap: 5px;
@@ -4428,22 +4433,14 @@ html[dir="rtl"] .translation-history-arrow svg {
   background: var(--subtle);
 }
 
-.clipboard-history-toolbar,
-.clipboard-history-confirm-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  min-inline-size: 0;
-}
-
-.clipboard-history-toolbar > button,
-.clipboard-history-confirm-actions > button {
+.clipboard-history-toggle {
+  justify-self: start;
   max-inline-size: 100%;
   min-inline-size: 0;
   overflow-wrap: anywhere;
 }
 
-.clipboard-history-capture-icon svg {
+.clipboard-history-toggle-icon svg {
   inline-size: 13px;
   block-size: 13px;
 }
@@ -4476,7 +4473,6 @@ html[dir="rtl"] .translation-history-arrow svg {
 
 .clipboard-history-note,
 .clipboard-history-empty p,
-.clipboard-history-confirm p,
 .clipboard-history-time {
   min-inline-size: 0;
   color: var(--muted);
@@ -4485,25 +4481,14 @@ html[dir="rtl"] .translation-history-arrow svg {
   overflow-wrap: anywhere;
 }
 
-.clipboard-history-confirm,
 .clipboard-history-issue {
   border-color: color-mix(in srgb, var(--danger) 25%, var(--stroke-subtle));
   background: color-mix(in srgb, var(--danger) 7%, var(--surface));
 }
 
-.clipboard-history-confirm h2,
 .clipboard-history-empty h2 {
   font-size: 12.5px;
   font-weight: 710;
-}
-
-.clipboard-history-clear-accept {
-  border-color: color-mix(in srgb, var(--danger) 35%, var(--stroke));
-  color: var(--danger);
-}
-
-.clipboard-history-clear-accept:hover {
-  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
 }
 
 .clipboard-history-issue {

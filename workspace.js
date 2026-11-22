@@ -299,7 +299,6 @@ function bindModuleReorder(tab, id) {
   tab.draggable = true;
   tab.title += `\n${t("moduleOrderHint")}`;
   tab.setAttribute("aria-description", t("moduleOrderHint"));
-  tab.setAttribute("aria-haspopup", "menu");
   tab.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
   tab.addEventListener("dragstart", (event) => {
     if (!event.dataTransfer) return;
@@ -334,15 +333,7 @@ function bindModuleReorder(tab, id) {
       if (next) action("moduleMoveDown", "chevron-down", () => moveModule(id, next.id, "after"));
     });
   };
-  tab.addEventListener("contextmenu", (event) => {
-    event.preventDefault();
-    openMenu(event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined);
-  });
-  tab.addEventListener("keydown", (event) => {
-    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
-    event.preventDefault();
-    openMenu();
-  });
+  bindWorkspaceMenu(tab, openMenu);
 }
 
 function section(title, description, action) {
@@ -541,8 +532,6 @@ function renderClipboard() {
       locale: workspace.locale, t, icon, state: clipboardHistoryViewState(),
       onAllow: () => changeClipboardHistory("allow"),
       onStart: () => changeClipboardHistory("set-enabled", { enabled: true }),
-      onPause: () => changeClipboardHistory("set-enabled", { enabled: false }),
-      onClear: () => changeClipboardHistory("clear"),
       onDelete: (id) => changeClipboardHistory("remove", { id }),
       onCopy: ({ text }) => copyWorkspaceText(text),
       onSave: ({ text }) => {
@@ -648,6 +637,18 @@ function openClipboardHistory(entryId) {
   changeClipboardHistory("read");
 }
 
+function confirmClipboardHistoryClear() {
+  if (editor.open) return;
+  const fields = openEditor(t("clipboardHistoryClearTitle"), t("clipboardHistoryClear"), async () => {
+    const cleared = await changeClipboardHistory("clear");
+    if (!cleared) reportError(clipboardHistoryIssue ?? "clipboardHistoryFailed");
+    return cleared;
+  });
+  fields.append(node("p", "", t("clipboardHistoryClearConfirm")));
+  editor.showModal();
+  editor.querySelector(".dialog-footer .secondary-button").focus();
+}
+
 let folderRailScroll = 0;
 let clipboardDrag;
 let workspaceMenu;
@@ -720,6 +721,19 @@ function closeWorkspaceMenu() {
   workspaceMenu = undefined;
 }
 
+function bindWorkspaceMenu(anchor, open) {
+  anchor.setAttribute("aria-haspopup", "menu");
+  anchor.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    open(event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined);
+  });
+  anchor.addEventListener("keydown", (event) => {
+    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+    event.preventDefault();
+    open();
+  });
+}
+
 function openWorkspaceMenu(anchor, point, label, populate) {
   closeWorkspaceMenu();
   const menu = node("div", "folder-context-menu");
@@ -737,7 +751,7 @@ function openWorkspaceMenu(anchor, point, label, populate) {
       }
     });
     item.setAttribute("role", "menuitem");
-    if (key === "deleteFolder") item.dataset.action = "delete";
+    if (key === "deleteFolder" || key === "clipboardHistoryClear") item.dataset.action = "delete";
     group.append(item);
   }
 
@@ -820,6 +834,19 @@ function renderFolderBar() {
     chip.lastElementChild.dir = "auto";
     chip.setAttribute("aria-pressed", String(activeFolder === folder.id));
     if (folder === history) {
+      chip.title = `${folder.name}\n${t("folderContextHint")}`;
+      bindWorkspaceMenu(chip, (point) => {
+        openWorkspaceMenu(chip, point, folder.name, (action) => {
+          if (clipboardHistory.enabled && clipboardHistoryAllowed) {
+            action("clipboardHistoryPause", "pause", async () => {
+              if (!await changeClipboardHistory("set-enabled", { enabled: false }) && !clipboardHistoryController) {
+                reportError(clipboardHistoryIssue ?? "clipboardHistoryFailed");
+              }
+            });
+          }
+          if (clipboardHistory.entries.length) action("clipboardHistoryClear", "trash", confirmClipboardHistoryClear);
+        });
+      });
       quick.append(chip);
       continue;
     }
@@ -832,17 +859,8 @@ function renderFolderBar() {
     if (folder.id !== "all") {
       chip.title = `${folder.name}
 ${t("folderContextHint")}`;
-      chip.setAttribute("aria-haspopup", "menu");
       allowDrag(chip, "folder", folder.id);
-      chip.addEventListener("contextmenu", (event) => {
-        event.preventDefault();
-        openFolderContext(folder, chip, event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined);
-      });
-      chip.addEventListener("keydown", (event) => {
-        if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
-        event.preventDefault();
-        openFolderContext(folder, chip);
-      });
+      bindWorkspaceMenu(chip, (point) => openFolderContext(folder, chip, point));
     }
     quick.append(chip);
   }
@@ -906,16 +924,22 @@ function displayPreference(key, label, values, symbols = {}) {
   return fieldset;
 }
 
-async function readActivationShortcut() {
-  const value = document.querySelector("#activation-shortcut");
-  if (!value || !chrome.commands) return;
+async function readWorkspaceShortcuts() {
+  const values = [
+    ["_execute_action", document.getElementById("activation-shortcut")],
+    ["translate-selection", document.getElementById("translation-shortcut")]
+  ].filter(([, element]) => element);
+  if (!values.length) return;
+  let commands = [];
   try {
-    const commands = await chrome.commands.getAll();
-    const activation = commands.find(({ name }) => name === "_execute_action");
-    value.textContent = activation?.shortcut || t("shortcutNotSet");
-    value.dir = activation?.shortcut ? "ltr" : "auto";
+    commands = await chrome.commands?.getAll?.() ?? [];
   } catch {
-    value.textContent = t("shortcutNotSet");
+    // Chrome may not expose commands in every extension surface.
+  }
+  for (const [command, element] of values) {
+    const shortcut = commands.find(({ name }) => name === command)?.shortcut;
+    element.textContent = shortcut || t("shortcutNotSet");
+    element.dir = shortcut ? "ltr" : "auto";
   }
 }
 
@@ -971,7 +995,7 @@ function renderSettings() {
   view.append(list);
   accountRefresh = renderAccount(list, t, reportError, { inToolbarPopup });
   workspaceSyncRefresh = renderWorkspaceSync(list, { locale: workspace.locale, t, send: sendWorkspaceSync });
-  readActivationShortcut();
+  readWorkspaceShortcuts();
 }
 
 function sendWorkspaceSync(action, passphrase) {
@@ -1271,6 +1295,7 @@ function render() {
       onUpdate: (enabled, onError, requestPermission) =>
         mutate("translator-inline-enabled", { enabled, requestPermission }, onError)
     });
+    readWorkspaceShortcuts();
   } else if (activePage === "flashcards") {
     const add = button(t("flashcardAdd"), "primary-button", { symbol: "plus", onClick: () => editFlashcard() });
     add.id = "new-flashcard";
@@ -2098,7 +2123,7 @@ async function removeSnippet(snippet) {
   }
 }
 
-window.addEventListener("focus", readActivationShortcut);
+window.addEventListener("focus", readWorkspaceShortcuts);
 window.addEventListener("focus", refreshCalendarDay);
 window.addEventListener("focus", () => {
   if (workspace.folders.some(({ protected: enabled }) => enabled)) refreshWorkspace();

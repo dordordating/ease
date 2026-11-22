@@ -52,23 +52,22 @@ export async function configureInlineTranslator(enabled) {
   const ids = registered.map(({ id }) => id);
   if (enabled) {
     if (!await chrome.permissions.contains(httpsPermission)) throw new Error("Inline permission is missing");
-    if (!ids.includes(scriptId)) {
-      await chrome.scripting.registerContentScripts([{
-        id: scriptId,
-        js: [scriptPath],
-        matches: [httpsPattern],
-        persistAcrossSessions: true,
-        runAt: "document_idle"
-      }]);
-    }
+    const definition = {
+      id: scriptId, js: [scriptPath], matches: [httpsPattern], persistAcrossSessions: true, runAt: "document_start"
+    };
+    const existing = registered.find(({ id }) => id === scriptId);
+    if (!existing) await chrome.scripting.registerContentScripts([definition]);
+    else if (existing.runAt !== definition.runAt) await chrome.scripting.updateContentScripts([definition]);
   }
   const stale = ids.filter((id) => id.startsWith(legacyScriptPrefix) || (!enabled && id === scriptId));
   if (stale.length) await chrome.scripting.unregisterContentScripts({ ids: stale });
 }
 
-export async function injectInlineTranslatorOnActiveTab() {
+export async function injectInlineTranslatorOnOpenTabs() {
   try {
-    const tabs = await chrome.tabs.query({ active: true });
+    // Registration prepares future navigations. Inject into existing pages
+    // too, including tabs that survived an extension update or browser restore.
+    const tabs = await chrome.tabs.query({ url: [httpsPattern], discarded: false });
     await Promise.allSettled(tabs.map(async ({ id, url }) => {
       const page = eligiblePage(url);
       if (Number.isInteger(id) && page && await chrome.permissions.contains(hostPermission(page))) {
@@ -98,7 +97,10 @@ async function restoreLegacySites(sites, registered) {
 async function restoreInlineRegistration() {
   const { translator } = await readWorkspace();
   if (translator?.inlineEnabled) {
-    if (await chrome.permissions.contains(httpsPermission)) await configureInlineTranslator(true);
+    if (await chrome.permissions.contains(httpsPermission)) {
+      await configureInlineTranslator(true);
+      await injectInlineTranslatorOnOpenTabs();
+    }
     return;
   }
   // Retain previously granted individual sites until the user changes the global setting.
@@ -118,13 +120,14 @@ function contentSenderPage(sender) {
 }
 
 async function activeSitePreferences(sender, page) {
-  const tab = await chrome.tabs.get(sender.tab.id);
-  if (!tab.active || eligiblePage(tab.url)?.origin !== page.origin) return null;
-  const workspace = await readWorkspace();
+  const [tab, workspace, permitted] = await Promise.all([
+    chrome.tabs.get(sender.tab.id), readWorkspace(), chrome.permissions.contains(hostPermission(page))
+  ]);
+  if (!tab.active || eligiblePage(tab.url)?.origin !== page.origin || !permitted) return null;
   const preferences = { ...defaultTranslator, ...workspace.translator };
   const globallyEnabled = preferences.inlineEnabled === true;
   const legacyEnabled = Array.isArray(preferences.inlineSites) && preferences.inlineSites.includes(page.origin);
-  if ((!globallyEnabled && !legacyEnabled) || !await chrome.permissions.contains(hostPermission(page))) return null;
+  if (!globallyEnabled && !legacyEnabled) return null;
   return {
     source: translatorLanguages.includes(preferences.source) ? preferences.source : defaultTranslator.source,
     target: translatorLanguages.includes(preferences.target) ? preferences.target : defaultTranslator.target,

@@ -8,6 +8,7 @@ The OpenID configuration advertises https://openidconnect.googleapis.com/v1/user
 https://accounts.google.com/.well-known/openid-configuration
 """
 
+import asyncio
 import re
 import time
 from collections.abc import Collection
@@ -140,9 +141,15 @@ async def verify_google_access_token(
     ):
         raise InvalidGoogleCredential()
 
-    info = await _google_json(http_client, "POST", _TOKEN_INFO_URL, token)
-    subject, expires_at = _verify_token_info(info, allowed_client_ids)
-    identity = await _google_json(http_client, "GET", _USER_INFO_URL, token)
+    profile = asyncio.create_task(_google_json(http_client, "GET", _USER_INFO_URL, token))
+    try:
+        info = await _google_json(http_client, "POST", _TOKEN_INFO_URL, token)
+        subject, expires_at = _verify_token_info(info, allowed_client_ids)
+        identity = await profile
+    finally:
+        if not profile.done():
+            profile.cancel()
+        await asyncio.gather(profile, return_exceptions=True)
     if expires_at <= time.time():
         raise InvalidGoogleCredential()
     return _verify_user_info(identity, subject)

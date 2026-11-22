@@ -1,7 +1,19 @@
 (() => {
   const installed = Symbol.for("ease.translator.inline.installed");
-  if (globalThis[installed] || !(document instanceof HTMLDocument)) return;
-  globalThis[installed] = true;
+  if (!(document instanceof HTMLDocument)) return;
+  const previous = globalThis[installed];
+  if (previous?.runtime === chrome.runtime) return;
+  previous?.dispose?.();
+  const listeners = new AbortController();
+  const options = { signal: listeners.signal };
+  const capture = { ...options, capture: true };
+  globalThis[installed] = {
+    runtime: chrome.runtime,
+    dispose() {
+      listeners.abort();
+      closePopover();
+    }
+  };
 
   const editableSelector = "input, textarea, select, [role='textbox'], [role='searchbox'], [contenteditable]:not([contenteditable='false' i])";
   const onlineMessage = "ease-translator-inline-online";
@@ -374,7 +386,7 @@
     }
   }
 
-  document.addEventListener("pointerdown", (event) => {
+  window.addEventListener("pointerdown", (event) => {
     if (!event.isTrusted) return;
     if (insidePopover(event)) {
       current.interacting = true;
@@ -382,15 +394,19 @@
     }
     closePopover();
     pointerStart = event.button === 0 ? {
-      x: event.clientX, y: event.clientY, editable: event.composedPath().some(isEditable)
+      x: event.clientX, y: event.clientY, ctrl: event.ctrlKey, editable: event.composedPath().some(isEditable)
     } : null;
-  }, true);
+  }, capture);
 
-  document.addEventListener("mouseup", async (event) => {
+  window.addEventListener("pointermove", (event) => {
+    if (pointerStart && event.isTrusted && event.ctrlKey && (event.buttons & 1)) pointerStart.ctrl = true;
+  }, { ...capture, passive: true });
+
+  window.addEventListener("mouseup", async (event) => {
     if (!event.isTrusted || insidePopover(event)) return;
     const start = pointerStart;
     pointerStart = null;
-    if (!start || start.editable || event.button !== 0 || !event.ctrlKey
+    if (!start || start.editable || event.button !== 0 || (!start.ctrl && !event.ctrlKey)
       || event.composedPath().some(isEditable)) return;
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) < 2 && event.detail < 2) return;
 
@@ -407,25 +423,25 @@
     job.settings = settings;
     createPopover(job);
     await translate(job);
-  }, true);
+  }, capture);
 
-  document.addEventListener("pointercancel", () => { pointerStart = null; }, true);
+  window.addEventListener("pointercancel", () => { pointerStart = null; }, capture);
   document.addEventListener("selectionchange", () => {
     if (current && !current.interacting && !sameSelection(current.sample)) closePopover();
-  });
+  }, options);
   document.addEventListener("focusin", (event) => {
     if (!current) return;
     current.interacting = insidePopover(event);
     if (!current.interacting && !sameSelection(current.sample)) closePopover();
-  }, true);
+  }, capture);
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || !current) return;
     event.preventDefault();
     closePopover();
-  }, true);
-  window.addEventListener("scroll", schedulePosition, { capture: true, passive: true });
-  window.addEventListener("pagehide", closePopover);
-  window.addEventListener("resize", schedulePosition, { passive: true });
-  window.visualViewport?.addEventListener("scroll", schedulePosition, { passive: true });
-  window.visualViewport?.addEventListener("resize", schedulePosition, { passive: true });
+  }, capture);
+  window.addEventListener("scroll", schedulePosition, { ...capture, passive: true });
+  window.addEventListener("pagehide", closePopover, options);
+  window.addEventListener("resize", schedulePosition, { ...options, passive: true });
+  window.visualViewport?.addEventListener("scroll", schedulePosition, { ...options, passive: true });
+  window.visualViewport?.addEventListener("resize", schedulePosition, { ...options, passive: true });
 })();

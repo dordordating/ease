@@ -136,6 +136,7 @@ export function renderTranslator(container, {
       </div>
       <div class="translator-shortcut-controls" hidden>
         <p data-label="translatorShortcutHint"></p>
+        <kbd class="keycap" id="translation-shortcut"></kbd>
         <button type="button" class="secondary-button translator-shortcut">${icon("keyboard")}<span data-label="manageActivationShortcut"></span></button>
       </div>
       <p class="translator-feedback" data-translator-settings-feedback role="status" hidden></p>

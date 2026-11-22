@@ -19,7 +19,7 @@ import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
 import { registerTranslationHistoryHandlers } from "./translation-history-store.js";
 import { registerWorkspaceSyncHandlers } from "./workspace-sync.js";
 import {
-  configureInlineTranslator, injectInlineTranslatorOnActiveTab, registerTranslatorSiteHandlers,
+  configureInlineTranslator, injectInlineTranslatorOnOpenTabs, registerTranslatorSiteHandlers,
   requestInlineTranslatorPermission
 } from "./translator-site-access.js";
 import {
@@ -327,7 +327,7 @@ async function updateWorkspace(workspace, action, data, transaction) {
         return "translatorInlineFailed";
       }
       workspace.translator = { ...settings, inlineEnabled: data.enabled, inlineSites: [] };
-      if (data.enabled) transaction.afterCommit = injectInlineTranslatorOnActiveTab;
+      if (data.enabled) transaction.afterCommit = () => { void injectInlineTranslatorOnOpenTabs(); };
       break;
     }
     case "flashcard-preferences":
