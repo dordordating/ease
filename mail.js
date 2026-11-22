@@ -13,7 +13,7 @@ function element(tag, className, text) {
   return item;
 }
 
-export function renderMail(container, { dateLocale, t, icon, settingsButton, accounts, send, followUp, requestInWorker }) {
+export function renderMail(container, { dateLocale, t, icon, settingsButton, composeButton, accounts, send, followUp, requestInWorker }) {
   const dates = new Intl.DateTimeFormat(dateLocale, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   const numbers = new Intl.NumberFormat(dateLocale);
   let accountId = "";
@@ -27,6 +27,11 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
   let imapPreset;
   let replacing;
   let security = "tls";
+  let smtpSecurity = "starttls";
+  let opened;
+  let composing = false;
+  let alertAccountId;
+  const draftKey = "easeMailComposeDraft";
 
   const module = element("section", "mail-module");
   const inbox = element("section", "mail-inbox");
@@ -38,6 +43,26 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
   const reload = control("mailRefresh", "refresh", () => act("refresh", { force: true }), true);
   const accountSummary = element("p", "mail-summary");
   const list = element("ul", "mail-list");
+  const reader = element("section", "mail-reader");
+  const compose = element("form", "mail-imap-form mail-compose");
+  const composeAccount = element("select", "translator-select");
+  composeAccount.setAttribute("aria-label", t("mailComposeFrom"));
+  const composeTo = field("mailComposeTo", { maxLength: 2600, required: true, inputMode: "email" });
+  const composeSubject = field("mailComposeSubject", { maxLength: 180, dir: "auto" });
+  const composeText = element("textarea", "translator-textarea");
+  composeText.maxLength = 5000;
+  composeText.required = true;
+  composeText.rows = 5;
+  composeText.dir = "auto";
+  const composeBody = element("label", "translator-field");
+  composeBody.append(element("span", "", t("mailComposeBody")), composeText);
+  const sendButton = element("button", "primary-button", t("mailSend"));
+  sendButton.type = "submit";
+  const composeActions = element("div", "mail-provider-buttons");
+  const enableSend = control("mailSendPermissionAction", null, upgradeSender);
+  const composeCancel = control("cancel", null, () => closeComposer());
+  composeActions.append(sendButton, enableSend, composeCancel);
+  compose.append(element("h3", "", t("mailCompose")), composeAccount, composeTo.label, composeSubject.label, composeBody, composeActions);
   const state = element("p", "mail-state");
   state.setAttribute("role", "status");
   const settingsTitle = element("h2", "", t("mailAccounts"));
@@ -51,6 +76,26 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
   const hostField = field("mailImapHost", { name: "host", maxLength: 253, placeholder: "imap.example.com" });
   const usernameField = field("mailImapUser", { name: "username", maxLength: 254 });
   const passwordField = field("mailImapPassword", { name: "password", type: "password", autocomplete: "new-password", maxLength: 1024, required: true });
+  const outgoing = element("details", "mail-smtp-fields");
+  const smtpHost = field("mailSmtpHost", { name: "smtpHost", maxLength: 253, placeholder: "smtp.example.com" });
+  const smtpUsername = field("mailImapUser", { name: "smtpUsername", maxLength: 254 });
+  const smtpPassword = field("mailSmtpPassword", { name: "smtpPassword", type: "password", autocomplete: "new-password", maxLength: 1024 });
+  const smtpTransport = element("div", "mail-imap-transport");
+  const smtpStarttls = smtpButton("starttls", "STARTTLS · 587");
+  const smtpTls = smtpButton("tls", "TLS · 465");
+  smtpTransport.append(smtpStarttls, smtpTls);
+  outgoing.append(element("summary", "", t("mailSmtpSettings")), smtpHost.label, smtpTransport, smtpUsername.label, smtpPassword.label);
+  const alerts = element("form", "mail-imap-form");
+  const alertAddress = element("bdi", "mail-hint");
+  const alertMode = element("select", "translator-select");
+  alertMode.setAttribute("aria-label", t("mailAlerts"));
+  alertMode.append(new Option(t("mailAlertOff"), "off"), new Option(t("mailAlertAll"), "all"), new Option(t("mailAlertDomains"), "domains"));
+  const alertDomains = field("mailAlertDomainList", { placeholder: "example.com, company.com", maxLength: 2048 });
+  const alertActions = element("div", "mail-provider-buttons");
+  const saveAlert = element("button", "primary-button", t("save"));
+  saveAlert.type = "submit";
+  alertActions.append(saveAlert, control("cancel", null, () => { alertAccountId = undefined; error = undefined; render(); }));
+  alerts.append(element("h3", "", t("mailAlerts")), alertAddress, alertMode, alertDomains.label, alertActions);
   const transport = element("div", "mail-imap-transport");
   transport.setAttribute("role", "group");
   transport.setAttribute("aria-label", t("mailImapSecurity"));
@@ -62,11 +107,11 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
   submit.type = "submit";
   const cancel = control("cancel", null, () => { closeImap(); render(); });
   imapActions.append(submit, cancel);
-  imap.append(imapTitle, imapHint, emailField.label, hostField.label, transport, usernameField.label, passwordField.label, imapActions);
+  imap.append(imapTitle, imapHint, emailField.label, hostField.label, transport, usernameField.label, passwordField.label, outgoing, imapActions);
   controls.append(accountSelect, unread, reload);
   inbox.append(controls, accountSummary, list);
-  settings.append(settingsTitle, settingsHint, connect, imap, linked);
-  module.append(state, inbox, settings);
+  settings.append(settingsTitle, settingsHint, connect, imap, alerts, linked);
+  module.append(state, inbox, reader, compose, settings);
   container.append(module);
 
   function field(key, properties) {
@@ -84,10 +129,19 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
     return button;
   }
 
+  function smtpButton(value, label) {
+    const button = element("button", "secondary-button", label);
+    button.type = "button";
+    button.dir = "ltr";
+    button.addEventListener("click", () => { smtpSecurity = value; renderImap(); });
+    return button;
+  }
+
   function closeImap() {
     imapPreset = undefined;
     replacing = undefined;
     imap.reset();
+    outgoing.open = false;
     error = undefined;
   }
 
@@ -100,6 +154,10 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
     usernameField.input.value = account?.imap.username ?? "";
     hostField.input.value = account?.imap.host ?? "";
     security = account?.imap.security ?? "tls";
+    smtpHost.input.value = account?.imap.smtp?.host ?? "";
+    smtpUsername.input.value = account?.imap.smtp?.username ?? "";
+    smtpSecurity = account?.imap.smtp?.security ?? "starttls";
+    outgoing.open = Boolean(smtpHost.input.value);
     render();
     (account ? passwordField.input : emailField.input).focus({ preventScroll: true });
     imap.scrollIntoView({ block: "nearest" });
@@ -111,8 +169,11 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
     hostField.label.hidden = !custom;
     hostField.input.required = custom;
     transport.hidden = !custom;
+    outgoing.hidden = !custom;
     tlsButton.setAttribute("aria-pressed", String(security === "tls"));
     starttlsButton.setAttribute("aria-pressed", String(security === "starttls"));
+    smtpTls.setAttribute("aria-pressed", String(smtpSecurity === "tls"));
+    smtpStarttls.setAttribute("aria-pressed", String(smtpSecurity === "starttls"));
     for (const item of imap.elements) item.disabled = busy;
   }
 
@@ -122,7 +183,8 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
     const email = emailField.input.value.trim();
     const username = usernameField.input.value.trim() || (imapPreset === "icloud" ? email.split("@")[0] : email);
     act("connect-imap", { replaceId: replacing, data: {
-      preset: imapPreset, email, username, password: passwordField.input.value, host: hostField.input.value, security
+      preset: imapPreset, email, username, password: passwordField.input.value, host: hostField.input.value, security,
+      smtpHost: smtpHost.input.value.trim(), smtpUsername: smtpUsername.input.value.trim(), smtpPassword: smtpPassword.input.value, smtpSecurity
     } });
   });
 
@@ -140,16 +202,18 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
   }
 
   async function act(action, data = {}) {
-    if (busy || disposed) return;
+    if (busy || disposed) return false;
     busy = true;
     error = undefined;
     render();
     try {
       const answer = await send(action, data);
-      if (disposed) return;
+      if (disposed) return false;
       if (answer?.ok) {
         accounts = answer.value;
         if (action === "connect-imap") closeImap();
+        if (action === "notifications") alertAccountId = undefined;
+        return true;
       } else error = answer?.error ?? "mailUnavailable";
     } catch {
       error = "mailUnavailable";
@@ -157,7 +221,150 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
       busy = false;
       if (!disposed) render();
     }
+    return false;
   }
+
+  async function openMessage(message) {
+    const choice = { message, loading: true };
+    opened = choice;
+    error = undefined;
+    render();
+    try {
+      const answer = await send("message", { id: message.accountId, data: message.id });
+      if (answer?.ok) choice.result = answer.value;
+      else choice.error = answer?.error ?? "mailReadFailed";
+    } catch { choice.error = "mailReadFailed"; }
+    choice.loading = false;
+    if (!disposed && opened === choice) renderReader();
+  }
+
+  function renderReader() {
+    if (!opened) return;
+    const { message, loading, result, error: readError } = opened;
+    const account = accounts.find(item => item.id === message.accountId);
+    const actions = element("div", "mail-provider-buttons");
+    actions.append(control("calendarBack", null, () => { opened = undefined; render(); }));
+    if (message.url) actions.append(control("mailOpenMessage", "link", () => {
+      chrome.tabs.create({ url: message.url }).catch(() => {});
+    }));
+    actions.append(control("mailFollowUp", "calendar", () => followUp(message), true));
+    const subject = element("h3", "", message.subject || t("mailNoSubject"));
+    subject.dir = "auto";
+    const sender = element("p", "mail-hint", message.sender || t("mailUnknownSender"));
+    sender.dir = "auto";
+    const status = element("p", "mail-state", loading ? t("mailWorking") : readError ? t(readError) : "");
+    status.setAttribute("role", "status");
+    status.hidden = !loading && !readError;
+    reader.replaceChildren(actions, subject, sender, status);
+    if (readError && account?.provider !== "imap" && account
+      && (readError === "mailReadPermission" || readError === "mailReconnect")) {
+      const upgrade = control("mailReadPermissionAction", null, async () => {
+        if (await act("upgrade", { id: account.id, provider: account.provider, send: account.capabilities.send })) openMessage(message);
+      });
+      upgrade.disabled = busy;
+      reader.append(upgrade);
+    }
+    if (result) {
+      const body = element("div", "mail-message-body", result.body || t("mailEmptyBody"));
+      body.dir = "auto";
+      reader.append(body);
+      if (result.partial) reader.append(element("p", "mail-hint", t("mailPartialBody")));
+    }
+  }
+
+  async function openComposer() {
+    if (!accounts.length || busy) return;
+    opened = undefined;
+    managing = false;
+    closeImap();
+    composing = true;
+    const draft = (await chrome.storage.session.get(draftKey).catch(() => ({})))[draftKey];
+    if (disposed || !composing) return;
+    render();
+    if (draft) {
+      if (accounts.some(account => account.id === draft.id)) composeAccount.value = draft.id;
+      composeTo.input.value = draft.to ?? "";
+      composeSubject.input.value = draft.subject ?? "";
+      composeText.value = draft.body ?? "";
+    }
+    renderComposer();
+    composeTo.input.focus();
+  }
+
+  function composeDraft() {
+    return { id: composeAccount.value, to: composeTo.input.value, subject: composeSubject.input.value, body: composeText.value };
+  }
+
+  function closeComposer() {
+    composing = false;
+    compose.reset();
+    chrome.storage.session.remove(draftKey).catch(() => {});
+    render();
+  }
+
+  function renderComposer() {
+    const chosen = composeAccount.value || accountId;
+    composeAccount.replaceChildren(...accounts.map(account => new Option(account.email, account.id)));
+    if (accounts.some(account => account.id === chosen)) composeAccount.value = chosen;
+    const current = accounts.find(account => account.id === composeAccount.value);
+    const canSend = current?.capabilities?.send;
+    enableSend.hidden = !current || canSend;
+    enableSend.lastElementChild.textContent = t(current?.provider === "imap" ? "mailSmtpSettings" : "mailSendPermissionAction");
+    for (const item of compose.elements) item.disabled = busy;
+    sendButton.disabled = busy || !canSend;
+  }
+
+  async function upgradeSender() {
+    const account = accounts.find(item => item.id === composeAccount.value);
+    if (!account || busy) return;
+    await chrome.storage.session.set({ [draftKey]: composeDraft() }).catch(() => {});
+    if (account.provider === "imap") {
+      composing = false;
+      managing = true;
+      openImap(account.imap.preset, account);
+      outgoing.open = true;
+      return;
+    }
+    await act("upgrade", { id: account.id, provider: account.provider, send: true });
+  }
+
+  composeAccount.addEventListener("change", renderComposer);
+  compose.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (busy || sendButton.disabled) return;
+    const { id, ...data } = composeDraft();
+    busy = true;
+    error = undefined;
+    render();
+    try {
+      const answer = await send("send", { id, data });
+      if (disposed) return;
+      if (answer?.ok) { closeComposer(); error = "mailSent"; }
+      else error = answer?.error ?? "mailSendFailed";
+    } catch { error = "mailSendUnknown"; }
+    finally { busy = false; if (!disposed) render(); }
+  });
+
+  function openAlerts(account) {
+    alertAccountId = account.id;
+    alertAddress.textContent = account.email;
+    alertMode.value = account.notifications?.mode ?? "off";
+    alertDomains.input.value = (account.notifications?.domains ?? []).join(", ");
+    error = undefined;
+    render();
+    alertMode.focus();
+  }
+
+  alertMode.addEventListener("change", render);
+  alerts.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const mode = alertMode.value;
+    if (mode !== "off" && !requestInWorker) {
+      const allowed = await chrome.permissions.request({ permissions: ["notifications"] }).catch(() => false);
+      if (!allowed) { error = "mailAlertPermission"; render(); return; }
+    }
+    act("notifications", { id: alertAccountId, mode, domains: alertDomains.input.value, requestPermission: requestInWorker });
+  });
 
   async function verifyProviders(force = false) {
     if ((configured && !force) || verifying) return;
@@ -186,11 +393,14 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
   }
 
   function renderSettings() {
-    const editingImap = Boolean(imapPreset);
-    settingsHint.hidden = editingImap;
-    connect.hidden = editingImap;
-    linked.hidden = editingImap;
-    if (editingImap) {
+    const editing = Boolean(imapPreset || alertAccountId);
+    settingsHint.hidden = editing;
+    connect.hidden = editing;
+    linked.hidden = editing;
+    alerts.hidden = !alertAccountId;
+    alertDomains.label.hidden = alertMode.value !== "domains";
+    for (const item of alerts.elements) item.disabled = busy;
+    if (editing) {
       renderImap();
       return;
     }
@@ -214,8 +424,11 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
       const label = account.imap ? imapPresets[account.imap.preset]?.label : mailProviders[account.provider]?.label;
       copy.append(address, element("small", "", t(account.issue ?? "mailConnected", { provider: label })));
       const disconnect = control("mailDisconnect", "close", () => act("disconnect", { id: account.id }), true);
+      const alert = control("mailAlerts", "bell", () => openAlerts(account), true);
+      alert.setAttribute("aria-pressed", String(account.notifications?.mode !== "off"));
+      alert.disabled = busy;
       disconnect.disabled = busy;
-      row.append(copy, disconnect);
+      row.append(copy, alert, disconnect);
       if (account.imap) {
         const edit = control("mailImapEdit", "edit", () => openImap(account.imap.preset, account), true);
         edit.disabled = busy;
@@ -241,12 +454,9 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
       row.dataset.unread = String(message.unread);
       row.dataset.messageId = message.id;
       row.dataset.accountId = message.accountId;
-      const open = element(message.url ? "a" : "div", "mail-row-open");
-      if (message.url) {
-        open.href = message.url;
-        open.target = "_blank";
-        open.rel = "noopener noreferrer";
-      } else open.tabIndex = -1;
+      const open = element("button", "mail-row-open");
+      open.type = "button";
+      open.addEventListener("click", () => openMessage(message));
       const subject = element("strong", "mail-subject", message.subject || t("mailNoSubject"));
       subject.dir = "auto";
       subject.title = subject.textContent;
@@ -269,9 +479,13 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
   }
 
   function render() {
-    const showSettings = managing || !accounts.length;
+    const showSettings = !opened && !composing && (managing || !accounts.length);
     settings.hidden = !showSettings;
-    inbox.hidden = showSettings;
+    inbox.hidden = showSettings || Boolean(opened) || composing;
+    reader.hidden = !opened;
+    compose.hidden = !composing;
+    composeButton.disabled = busy || !accounts.length;
+    composeButton.setAttribute("aria-pressed", String(composing));
     settingsButton.setAttribute("aria-expanded", String(showSettings));
     const status = error ?? (busy ? "mailWorking"
       : showSettings && !imapPreset && configured && !Object.values(configured).some(Boolean) ? "mailNotConfigured"
@@ -282,11 +496,16 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
       list.replaceChildren();
       accountSelect.replaceChildren();
       renderSettings();
-    } else renderInbox();
+    } else if (opened) renderReader();
+    else if (composing) renderComposer();
+    else renderInbox();
   }
 
   function toggleSettings() {
     if (busy) return;
+    if (opened) opened = undefined;
+    if (composing) closeComposer();
+    if (alertAccountId) { alertAccountId = undefined; error = undefined; render(); return; }
     if (imapPreset) { closeImap(); render(); return; }
     if (!accounts.length) {
       verifyProviders(true);
@@ -309,15 +528,8 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, acc
       if (loaded && !busy) act("refresh");
       else render();
     },
-    showMessage(message) {
-      accountId = message.accountId;
-      unreadOnly = false;
-      managing = false;
-      closeImap();
-      render();
-      const row = Array.from(list.children).find(item => item.dataset.accountId === message.accountId && item.dataset.messageId === message.id);
-      row?.querySelector(".mail-row-open")?.focus();
-    },
+    showMessage: openMessage,
+    openComposer,
     dispose() {
       disposed = true;
       settingsButton.removeEventListener("click", toggleSettings);

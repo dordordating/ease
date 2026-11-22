@@ -10,7 +10,8 @@ from collections import OrderedDict, deque
 from datetime import datetime
 from email import policy
 from email.errors import MessageError
-from email.parser import BytesHeaderParser
+from email.parser import BytesHeaderParser, BytesParser
+from html.parser import HTMLParser
 from time import monotonic
 from typing import Literal
 
@@ -26,6 +27,7 @@ internal_date = re.compile(rb'\bINTERNALDATE "([^"]+)"')
 uid_pattern = re.compile(rb"\bUID ([0-9]{1,10})\b")
 unseen_pattern = re.compile(rb"\bUNSEEN ([0-9]{1,10})\b")
 header_limit = 8192
+preview_limit = 96 * 1024
 line_limit = 16_384
 byte_limit = 256 * 1024
 snapshot_size = 12
@@ -74,6 +76,10 @@ class AuthenticationFailed(Exception):
     pass
 
 
+class ImapMessage(ImapSync):
+    uid: str = Field(pattern=r"^[1-9][0-9]{0,9}$")
+
+
 def public_address(value: str) -> bool:
     address = ipaddress.ip_address(value)
     return (
@@ -91,14 +97,13 @@ async def resolve_public(host: str, port: int) -> list[tuple]:
     return list(dict.fromkeys(addresses))[:4]
 
 
-class PinnedImap(imaplib.IMAP4):
-    def __init__(self, host: str, port: int, addresses: list[tuple], secure: bool) -> None:
+class PinnedMailIO:
+    def __init__(self, addresses: list[tuple], secure: bool) -> None:
         self.deadline = monotonic() + 11
         self.addresses = addresses
         self.buffer = bytearray()
         self.remaining = byte_limit
         self.secure = secure
-        super().__init__(host, port, timeout=3)
 
     def timeout(self, maximum: float = 4) -> float:
         left = self.deadline - monotonic()
@@ -120,18 +125,11 @@ class PinnedImap(imaplib.IMAP4):
                 sock.close()
         raise OSError("Could not reach IMAP server")
 
-    def upgrade(self) -> None:
-        if self.secure:
-            return
-        if "STARTTLS" not in self.capabilities or self._simple_command("STARTTLS")[0] != "OK":
-            raise imaplib.IMAP4.error("Server does not support STARTTLS")
+    def upgrade_tls(self) -> None:
         self.buffer.clear()
-        self.untagged_responses.clear()
         self.sock.settimeout(self.timeout())
         self.sock = tls.wrap_socket(self.sock, server_hostname=self.host)
         self.secure = True
-        self._tls_established = True
-        self._get_capabilities()
 
     def receive(self, size: int) -> None:
         self.sock.settimeout(self.timeout())
@@ -140,15 +138,6 @@ class PinnedImap(imaplib.IMAP4):
         if not received or self.remaining < 0:
             raise imaplib.IMAP4.abort("IMAP response exceeded its bounds or closed")
         self.buffer.extend(received)
-
-    def read(self, size: int) -> bytes:
-        if size > header_limit:
-            raise imaplib.IMAP4.abort("IMAP header exceeded its bounds")
-        while len(self.buffer) < size:
-            self.receive(size - len(self.buffer))
-        data = bytes(self.buffer[:size])
-        del self.buffer[:size]
-        return data
 
     def readline(self) -> bytes:
         while True:
@@ -167,6 +156,32 @@ class PinnedImap(imaplib.IMAP4):
 
     def shutdown(self) -> None:
         self.sock.close()
+
+
+class PinnedImap(PinnedMailIO, imaplib.IMAP4):
+    def __init__(self, host: str, port: int, addresses: list[tuple], secure: bool) -> None:
+        PinnedMailIO.__init__(self, addresses, secure)
+        self.literal_limit = header_limit
+        imaplib.IMAP4.__init__(self, host, port, timeout=3)
+
+    def upgrade(self) -> None:
+        if self.secure:
+            return
+        if "STARTTLS" not in self.capabilities or self._simple_command("STARTTLS")[0] != "OK":
+            raise imaplib.IMAP4.error("Server does not support STARTTLS")
+        self.untagged_responses.clear()
+        self.upgrade_tls()
+        self._tls_established = True
+        self._get_capabilities()
+
+    def read(self, size: int) -> bytes:
+        if size > self.literal_limit:
+            raise imaplib.IMAP4.abort("IMAP literal exceeded its bounds")
+        while len(self.buffer) < size:
+            self.receive(size - len(self.buffer))
+        data = bytes(self.buffer[:size])
+        del self.buffer[:size]
+        return data
 
 
 def authenticate(client: PinnedImap, username: str, password: str) -> None:
@@ -188,6 +203,55 @@ def authenticate(client: PinnedImap, username: str, password: str) -> None:
 
 def display_header(value: object, limit: int) -> str:
     return unsafe_control.sub(" ", str(value or "")).strip()[:limit]
+
+class PlainHTML(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.hidden = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("head", "script", "style", "template"):
+            self.hidden += 1
+        elif not self.hidden and tag in ("br", "p", "div", "li", "blockquote", "tr"):
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if self.hidden and tag in ("head", "script", "style", "template"):
+            self.hidden -= 1
+
+    def handle_data(self, data):
+        if not self.hidden:
+            self.parts.append(data)
+
+
+def read_message(config: ImapMessage, port: int, addresses: list[tuple]) -> dict:
+    client = PinnedImap(config.host, port, addresses, config.security == "tls")
+    try:
+        client.upgrade()
+        authenticate(client, config.username, config.password.get_secret_value())
+        if client.select("INBOX", readonly=True)[0] != "OK":
+            raise imaplib.IMAP4.error("INBOX unavailable")
+        client.literal_limit = preview_limit
+        kind, rows = client.uid("FETCH", config.uid, f"(UID BODY.PEEK[]<0.{preview_limit}>)")
+        for entry in rows if kind == "OK" and rows else ():
+            if not isinstance(entry, tuple):
+                continue
+            uid = uid_pattern.search(entry[0])
+            if not uid or uid[1].decode() != config.uid:
+                continue
+            message = BytesParser(policy=policy.default).parsebytes(entry[1])
+            part = message.get_body(preferencelist=("plain", "html"))
+            content = part.get_content(errors="replace") if part else ""
+            if part and part.get_content_type() == "text/html":
+                parser = PlainHTML()
+                parser.feed(content)
+                content = "".join(parser.parts)
+            return {"body": content[:48_000], "partial": len(entry[1]) >= preview_limit or len(content) > 48_000}
+        raise HTTPException(404, "imap_message_missing")
+    finally:
+        client.shutdown()
+
 
 
 def inbox_message(item: object) -> dict | None:
@@ -264,8 +328,7 @@ def allow_attempt(client: str) -> bool:
     return True
 
 
-@router.post("/sync")
-async def sync_imap(payload: ImapSync, request: Request):
+async def run_mail_io(request: Request, host: str, port: int, operation):
     if not allow_attempt(request.client.host if request.client else ""):
         raise HTTPException(429, "imap_busy", headers={"Retry-After": "60"})
     try:
@@ -273,12 +336,23 @@ async def sync_imap(payload: ImapSync, request: Request):
     except TimeoutError:
         raise HTTPException(429, "imap_busy", headers={"Retry-After": "5"}) from None
     try:
-        port = 993 if payload.security == "tls" else 143
-        addresses = await resolve_public(payload.host, port)
-        return await asyncio.to_thread(read_inbox, payload, port, addresses)
+        addresses = await resolve_public(host, port)
+        return await asyncio.to_thread(operation, addresses)
     except AuthenticationFailed:
         raise HTTPException(401, "imap_auth_failed") from None
-    except (imaplib.IMAP4.error, OSError, ValueError, TypeError):
+    except (imaplib.IMAP4.error, OSError, ValueError, TypeError, LookupError, MessageError, RecursionError):
         raise HTTPException(502, "imap_unavailable") from None
     finally:
         slots.release()
+
+
+@router.post("/sync")
+async def sync_imap(payload: ImapSync, request: Request):
+    port = 993 if payload.security == "tls" else 143
+    return await run_mail_io(request, payload.host, port, lambda addresses: read_inbox(payload, port, addresses))
+
+
+@router.post("/message")
+async def imap_message(payload: ImapMessage, request: Request):
+    port = 993 if payload.security == "tls" else 143
+    return await run_mail_io(request, payload.host, port, lambda addresses: read_message(payload, port, addresses))

@@ -52,6 +52,7 @@ class MailRequest(BaseModel):
 class Start(MailRequest):
     challenge: str = Field(pattern=verifier_pattern)
     extension_id: str = Field(pattern=r"^[a-p]{32}$")
+    send: bool = False
 
 
 class Exchange(MailRequest):
@@ -82,14 +83,14 @@ def mail_oauth_router(settings: Settings) -> APIRouter:
         providers["gmail"] = MailProvider(
             settings.mail_google_client_id, settings.mail_google_client_secret,
             "https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token",
-            "https://www.googleapis.com/auth/gmail.metadata",
-            {"access_type": "offline", "prompt": "consent select_account"},
+            "https://www.googleapis.com/auth/gmail.readonly",
+            {"access_type": "offline", "prompt": "consent select_account", "include_granted_scopes": "true"},
         )
     if origin and settings.mail_microsoft_client_id and settings.mail_microsoft_client_secret:
         providers["outlook"] = MailProvider(
             settings.mail_microsoft_client_id, settings.mail_microsoft_client_secret,
             microsoft + "authorize", microsoft + "token",
-            "offline_access https://graph.microsoft.com/Mail.ReadBasic https://graph.microsoft.com/User.Read",
+            "offline_access https://graph.microsoft.com/Mail.Read https://graph.microsoft.com/User.Read",
             {"prompt": "select_account"},
         )
     if providers:
@@ -151,7 +152,9 @@ def mail_oauth_router(settings: Settings) -> APIRouter:
                     or not isinstance(access, str) or not 1 <= len(access) <= 8192
                     or (refresh is not None and (not isinstance(refresh, str) or not 1 <= len(refresh) <= 8192))):
                 raise ValueError
-            return {"access_token": access, "refresh_token": refresh, "expires_in": expires}
+            scope = result.get("scope")
+            return {"access_token": access, "refresh_token": refresh, "expires_in": expires,
+                    **({"scope": scope} if isinstance(scope, str) and len(scope) <= 4096 else {})}
         except (ValueError, TypeError, KeyError, RecursionError):
             raise HTTPException(502, "mail_provider_unavailable") from None
 
@@ -169,9 +172,13 @@ def mail_oauth_router(settings: Settings) -> APIRouter:
             "iss": "ease-api", "aud": "ease-mail-oauth", "sub": payload.extension_id, "jti": secrets.token_urlsafe(24),
             "provider": provider, "challenge": payload.challenge, "iat": now, "exp": now + 600,
         }, key, algorithm="HS256")
+        scopes = client.scopes
+        if payload.send:
+            scopes += (" https://www.googleapis.com/auth/gmail.send" if provider == "gmail"
+                       else " https://graph.microsoft.com/Mail.Send")
         params = dict(
             client_id=client.client_id, redirect_uri=callback(provider), response_type="code",
-            scope=client.scopes, state=state, code_challenge=payload.challenge, code_challenge_method="S256",
+            scope=scopes, state=state, code_challenge=payload.challenge, code_challenge_method="S256",
             **client.extras,
         )
         return {"url": client.authorize + "?" + urlencode(params), "state": state}

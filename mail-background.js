@@ -1,8 +1,9 @@
 import {
-  authorizeMailbox, imapAccount, imapMessages, mailConfig, mailPermission, mailboxMessages, mailboxProfile,
-  mailProviders, MailError, refreshMailToken
+  authorizeMailbox, composeMail, deliverMail, imapAccount, imapMessages, mailCapabilities, mailConfig, mailDomains,
+  mailPermission, mailboxMessages, mailboxProfile, mailProviders, MailError, readMailMessage, refreshMailToken, senderDomain
 } from "./mail-api.js";
 import { readWorkspace } from "./workspace-data.js";
+import { translate } from "./locales.js";
 
 export const mailMessage = "ease-mail";
 export const mailUpdateKey = "easeMailUpdate";
@@ -10,10 +11,13 @@ const alarmName = "ease-mail-refresh";
 const store = "accounts";
 const maxAccounts = 6;
 const staleAfter = 5 * 60_000;
+const alertPrefix = "ease-mail-alert:";
+const notificationPermission = { permissions: ["notifications"] };
 let database;
 let pendingWrite = Promise.resolve();
 let refreshing;
 let connecting;
+let listeningForAlerts = false;
 
 function mailDatabase() {
   database ??= new Promise((resolve, reject) => {
@@ -42,6 +46,7 @@ async function access(mode, operation) {
 const accounts = () => access("readonly", target => target.getAll());
 const save = (account) => access("readwrite", target => target.put(account));
 const remove = (id) => access("readwrite", target => target.delete(id));
+const find = (id) => access("readonly", target => target.get(id));
 
 function queue(operation) {
   const applied = pendingWrite.then(operation);
@@ -56,11 +61,14 @@ function changed() {
 
 async function snapshot() {
   const saved = await accounts();
-  return saved.map(({ id, provider, email, preset, connection, messages = [], unread = 0, updatedAt = null, issue = null }) => {
-    const account = { id, provider, email, messages, unread, updatedAt, issue };
+  return saved.map(record => {
+    const { id, provider, email, preset, connection, smtp, messages = [], unread = 0, updatedAt = null, issue = null, notifications } = record;
+    const account = { id, provider, email, messages, unread, updatedAt, issue,
+      capabilities: mailCapabilities(record), notifications: { mode: notifications?.mode ?? "off", domains: notifications?.domains ?? [] } };
     if (provider === "imap") {
       const { host, security, username } = connection;
       account.imap = { preset, host, security, username };
+      if (smtp) account.imap.smtp = { host: smtp.host, security: smtp.security, username: smtp.username };
     }
     return account;
   });
@@ -76,6 +84,36 @@ async function renew(account) {
   const updated = { ...account, ...token };
   await save(updated); // Persist rotated refresh tokens before using the new access token.
   return updated;
+}
+
+function mailAlert(account, messages, now) {
+  const config = account.notifications;
+  if (!config || config.mode === "off") return { count: 0 };
+  const seen = new Set(config.seen);
+  const fresh = messages.filter(message => message.received >= config.since && message.received <= now + 60_000
+    && !seen.has(message.id) && message.unread);
+  const count = fresh.filter(message => config.mode === "all" || config.domains.includes(senderDomain(message))).length;
+  const next = { ...config, since: Math.max(config.since, now - 5 * 60_000),
+    seen: [...new Set([...messages.map(message => message.id), ...(config.seen ?? [])])].slice(0, 128) };
+  return { count, notifications: next };
+}
+
+async function notifyNewMail(count) {
+  if (!count || !chrome.notifications || !await chrome.permissions.contains(notificationPermission)) return;
+  registerAlertClicks();
+  const { locale } = await readWorkspace();
+  await chrome.notifications.create(alertPrefix + crypto.randomUUID(), {
+    type: "basic", iconUrl: chrome.runtime.getURL("icons/128.png"), title: translate(locale, "mail"),
+    message: translate(locale, "mailAlertNew", { count: new Intl.NumberFormat(locale).format(count) })
+  });
+}
+
+function registerAlertClicks() {
+  if (listeningForAlerts || !chrome.notifications?.onClicked) return;
+  listeningForAlerts = true;
+  chrome.notifications.onClicked.addListener(id => {
+    if (id.startsWith(alertPrefix)) chrome.tabs.create({ url: chrome.runtime.getURL("workspace.html?surface=panel&open=mail") }).catch(() => {});
+  });
 }
 
 async function refreshAccount(record) {
@@ -94,7 +132,10 @@ async function refreshAccount(record) {
         inbox = await mailboxMessages(account, account.accessToken);
       }
     }
-    await save({ ...account, ...inbox, issue: null, updatedAt: Date.now() });
+    const now = Date.now();
+    const { notifications, count } = mailAlert(account, inbox.messages, now);
+    await save({ ...account, ...inbox, ...(notifications ? { notifications } : {}), issue: null, updatedAt: now });
+    await notifyNewMail(count).catch(() => {});
   } catch (error) {
     const issue = ["mailPermission", "mailReconnect", "mailImapBusy", "mailImapUnavailable"].includes(error?.code)
       ? error.code : "mailUnavailable";
@@ -127,7 +168,12 @@ function saveLinked(account, replaceId) {
     if (!previous && !replacing && linked.length >= maxAccounts) throw new MailError("mailAccountLimit");
     await access("readwrite", (target) => {
       if (replacing && replacing.id !== account.id) target.delete(replacing.id);
-      return target.put({ ...previous, ...account, issue: null });
+      const notifications = previous?.notifications ?? replacing?.notifications;
+      const updated = { ...previous, ...account, issue: null };
+      if (notifications && account.provider === "imap") updated.notifications = {
+        ...notifications, since: Date.now(), seen: account.messages.map(message => message.id)
+      };
+      return target.put(updated);
     });
     await maintainAlarm();
     await changed();
@@ -136,6 +182,14 @@ function saveLinked(account, replaceId) {
 
 async function connectImap(data, replaceId) {
   const account = imapAccount(data);
+  if (replaceId && account.smtp && !data.smtpPassword) {
+    const previous = await find(replaceId);
+    const saved = previous?.smtp;
+    if (saved && saved.password !== previous.connection.password
+      && saved.host === account.smtp.host && saved.username === account.smtp.username) {
+      account.smtp.password = saved.password;
+    }
+  }
   const { host, username, security } = account.connection;
   const key = new TextEncoder().encode(JSON.stringify([host, username, security]));
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", key));
@@ -145,16 +199,49 @@ async function connectImap(data, replaceId) {
   return snapshot();
 }
 
-async function connect(provider, permission) {
+async function connect(provider, permission, expectedId, send = false) {
   if (!await permission) throw new MailError("mailPermission");
   if (!(await mailConfig())[provider]) throw new MailError("mailNotConfigured");
-  const credentials = await authorizeMailbox(provider);
+  const credentials = await authorizeMailbox(provider, send);
   const identity = await mailboxProfile(provider, credentials.accessToken);
   const id = provider + ":" + identity.externalId;
+  if (expectedId && id !== expectedId) throw new MailError("mailWrongAccount");
   await saveLinked({ id, provider, email: identity.email, ...credentials, updatedAt: null });
   // This check is queued after the previous batch if an inbox refresh was already running.
   if (refreshing) await refreshing.catch(() => {});
   return refreshInbox();
+}
+
+async function accountAction(id, action, data) {
+  const record = await find(id);
+  if (!record) throw new MailError("mailReconnect");
+  if (action === "send" && !mailCapabilities(record).send) {
+    throw new MailError(record.provider === "imap" ? "mailSmtpSetup" : "mailSendPermission");
+  }
+  if (action === "message" && !mailCapabilities(record).read) throw new MailError("mailReadPermission");
+  let account = record;
+  if (account.provider !== "imap") {
+    if (!await chrome.permissions.contains(mailPermission(account.provider))) throw new MailError("mailPermission");
+    if (account.expiresAt - Date.now() < 60_000) account = await renew(account);
+  }
+  if (action === "send") return deliverMail(account, composeMail(data), account.accessToken);
+  const message = account.messages?.find(item => item.id === data);
+  if (!message) throw new MailError("mailReadFailed");
+  return readMailMessage(account, message, account.accessToken);
+}
+
+async function updateNotifications(id, mode, domainText, allowed) {
+  if (!["off", "all", "domains"].includes(mode)) throw new MailError("mailUnavailable");
+  const domains = mode === "domains" ? mailDomains(domainText) : [];
+  if (mode !== "off" && !await allowed) throw new MailError("mailAlertPermission");
+  return queue(async () => {
+    const account = await find(id);
+    if (!account) throw new MailError("mailReconnect");
+    const notifications = { mode, domains, since: Date.now(), seen: (account.messages ?? []).map(message => message.id) };
+    await save({ ...account, notifications });
+    await changed();
+    return snapshot();
+  });
 }
 
 function fromWorkspace(sender) {
@@ -167,6 +254,7 @@ export function registerMailHandlers() {
   const initialize = () => maintainAlarm().catch(() => {});
   chrome.runtime.onInstalled?.addListener(initialize);
   chrome.runtime.onStartup?.addListener(initialize);
+  registerAlertClicks();
   chrome.alarms?.onAlarm?.addListener((alarm) => {
     if (alarm.name === alarmName) {
       readWorkspace().then(workspace => workspace.tabs.includes("mail") && refreshInbox()).catch(() => {});
@@ -178,7 +266,7 @@ export function registerMailHandlers() {
     if (message.action === "read") result = snapshot();
     else if (message.action === "config") result = mailConfig();
     else if (message.action === "refresh") result = refreshInbox(message.force === true);
-    else if (message.action === "connect" && Object.hasOwn(mailProviders, message.provider)) {
+    else if (["connect", "upgrade"].includes(message.action) && Object.hasOwn(mailProviders, message.provider)) {
       if (connecting) {
         respond({ ok: false, error: "mailConnecting" });
         return;
@@ -187,7 +275,9 @@ export function registerMailHandlers() {
       const permission = (message.requestPermission === true
         ? chrome.permissions.request(mailPermission(message.provider))
         : chrome.permissions.contains(mailPermission(message.provider))).catch(() => false);
-      connecting = connect(message.provider, permission).finally(() => { connecting = undefined; });
+      if (message.action === "upgrade" && typeof message.id !== "string") return;
+      connecting = connect(message.provider, permission, message.action === "upgrade" ? message.id : undefined,
+        message.action === "upgrade" && message.send === true).finally(() => { connecting = undefined; });
       result = connecting;
     } else if (message.action === "connect-imap") {
       if (connecting) {
@@ -196,6 +286,12 @@ export function registerMailHandlers() {
       }
       connecting = connectImap(message.data, message.replaceId).finally(() => { connecting = undefined; });
       result = connecting;
+    } else if (message.action === "notifications" && typeof message.id === "string") {
+      const allowed = message.mode === "off" || (message.requestPermission
+        ? chrome.permissions.request(notificationPermission) : chrome.permissions.contains(notificationPermission)).catch(() => false);
+      result = updateNotifications(message.id, message.mode, message.domains, allowed);
+    } else if (["message", "send"].includes(message.action) && typeof message.id === "string" && message.id.length <= 540) {
+      result = queue(() => accountAction(message.id, message.action, message.data));
     } else if (message.action === "disconnect" && typeof message.id === "string" && message.id.length <= 540) {
       result = queue(async () => {
         await remove(message.id);

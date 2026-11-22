@@ -1084,11 +1084,8 @@ const moduleSearchSources = {
       title: message.subject || t("mailNoSubject"), detail: message.sender || message.email,
       keywords: [message.subject, message.sender, message.email],
       open() {
-        if (message.url) chrome.tabs.create({ url: message.url }).catch(() => reportError("mailUnavailable"));
-        else {
-          switchTo("mail", false);
-          mailController?.showMessage(message);
-        }
+        switchTo("mail", false);
+        mailController?.showMessage(message);
       }
     })) : []
   }),
@@ -1396,10 +1393,16 @@ function render() {
   } else if (activePage === "mail") {
     const mailSettings = button(t("mailAccounts"), "icon-button", { symbol: "mail-settings", iconOnly: true });
     mailSettings.id = "mail-settings-button";
-    section(t("mail"), undefined, mailSettings);
+    const composeMail = button(t("mailCompose"), "icon-button", {
+      symbol: "plus", iconOnly: true, onClick: () => mailController?.openComposer()
+    });
+    composeMail.id = "mail-compose-button";
+    const actions = node("div", "module-title-actions");
+    actions.append(composeMail, mailSettings);
+    section(t("mail"), undefined, actions);
     mailLocale = dateLocale;
     mailController = renderMail(view, {
-      dateLocale, t, icon, settingsButton: mailSettings, accounts: mailAccounts, send: sendMail,
+      dateLocale, t, icon, settingsButton: mailSettings, composeButton: composeMail, accounts: mailAccounts, send: sendMail,
       followUp: followUpMail, requestInWorker: inToolbarPopup
     });
   } else if (activePage === "library") renderLibrary();
@@ -2389,6 +2392,8 @@ if (initialTranslationSelection !== null) {
   document.querySelector(".calendar-connections")?.scrollIntoView({ block: "start" });
 } else if (workspaceRoute.get("open") === "flashcards" && savedTabAvailable("flashcards")) {
   switchTo("flashcards", false);
+} else if (workspaceRoute.get("open") === "mail" && savedTabAvailable("mail")) {
+  switchTo("mail", false);
 }
 deviceUnlockAvailable().then((available) => {
   supportsDeviceUnlock = available;

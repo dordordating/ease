@@ -5104,3 +5104,45 @@ a.mail-row-open:hover {
   background: var(--accent-wash);
   color: var(--accent);
 }
+
+button.mail-row-open {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: start;
+  cursor: pointer;
+}
+
+button.mail-row-open:hover {
+  background: var(--hover);
+}
+
+.mail-reader {
+  display: grid;
+  gap: 8px;
+  min-inline-size: 0;
+}
+
+.mail-reader h3 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.mail-message-body {
+  padding: 9px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: var(--radius);
+  background: var(--surface);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.mail-smtp-fields {
+  min-inline-size: 0;
+  color: var(--muted);
+}
+
+.mail-smtp-fields > :not(summary) {
+  margin-block-start: 5px;
+}
