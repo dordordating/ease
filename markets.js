@@ -6,7 +6,7 @@ const cryptoNames = { BTC: "marketsBitcoin", ETH: "marketsEthereum", SOL: "marke
 const providers = {
   fx: "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html",
   crypto: "https://www.coingecko.com/en",
-  wallex: "https://wallex.ir/markets"
+  wallex: "https://wallex.ir/"
 };
 const providerLabels = { fx: "marketsFxReference", crypto: "marketsCryptoCredit", wallex: "marketsWallex" };
 const quoteRefreshInterval = 10 * 60_000;
