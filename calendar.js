@@ -1,5 +1,6 @@
 import { calendarReminderOffsets, calendarReminderSchedule } from './calendar-store.js';
 import { calendarSystemFor, defaultCalendar } from './workspace-data.js';
+import { mailMessageLink } from './mail-api.js';
 
 const dayLength = 86_400_000;
 
@@ -52,6 +53,7 @@ export function renderCalendar(container, {
   let activeDay = navigation.activeDay ?? selectedDay;
   let editorEvent;
   let editorDay;
+  let followUp;
   let detailEvent;
   let eventOrigin;
   let showingSettings = false;
@@ -167,6 +169,7 @@ export function renderCalendar(container, {
         <form class="calendar-event-form" hidden>
           <h5 class="calendar-form-title"></h5>
           <p class="calendar-form-date"></p>
+          <p class="calendar-form-date calendar-follow-up-hint" data-label="mailChooseDay" hidden></p>
           <label class="calendar-field">
             <span data-label="calendarEventTitle"></span>
             <input name="title" type="text" maxlength="160" dir="auto" required>
@@ -202,6 +205,7 @@ export function renderCalendar(container, {
             <span data-label="calendarNotes"></span>
             <textarea name="notes" rows="2" maxlength="2000" dir="auto"></textarea>
           </label>
+          <a class="calendar-mail-link" target="_blank" rel="noopener noreferrer" data-label="mailOpenMessage" hidden></a>
           <p class="calendar-form-status" role="status" hidden></p>
           <div class="calendar-form-actions">
             <button type="submit" class="primary-button" data-label="save"></button>
@@ -255,6 +259,9 @@ export function renderCalendar(container, {
   const agenda = container.querySelector('.calendar-events');
   const editor = container.querySelector('.calendar-event-form');
   const editorTitle = editor.elements.namedItem('title');
+  const editorDate = editor.querySelector('.calendar-form-date');
+  const editorMail = editor.querySelector('.calendar-mail-link');
+  const followUpHint = editor.querySelector('.calendar-follow-up-hint');
   const endFields = editor.querySelector('.calendar-end-fields');
   const endNextDayLabel = editor.querySelector('.calendar-end-next-day');
   const removeEnd = editor.querySelector('.calendar-remove-end');
@@ -567,6 +574,7 @@ export function renderCalendar(container, {
     element.dir = 'auto';
     element.textContent = text;
     parent.append(element);
+    return element;
   }
 
   function setStatus(element, message) {
@@ -660,6 +668,15 @@ export function renderCalendar(container, {
       if (!value) continue;
       appendText(detailFields, 'dt', '', t(key));
       appendText(detailFields, 'dd', '', value);
+    }
+    const mailUrl = mailMessageLink(null, detailEvent.mailUrl);
+    if (mailUrl) {
+      appendText(detailFields, 'dt', '', t('mail'));
+      const row = appendText(detailFields, 'dd', '', '');
+      const link = appendText(row, 'a', 'calendar-mail-link', t('mailOpenMessage'));
+      link.href = mailUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
     }
 
     detailActions.hidden = Boolean(detailEvent.readOnly) || confirmingDelete;
@@ -764,15 +781,21 @@ export function renderCalendar(container, {
     showTimingFields();
   }
 
-  function openEditor(event) {
+  function openEditor(event, seed) {
     if (!editor.hidden) return;
     editorEvent = event;
+    followUp = seed;
     editorDay = event ? Date.parse(event.date) / dayLength : selectedDay;
     editor.hidden = false;
     addButton.disabled = true;
     editor.querySelector('.calendar-form-title').textContent = t(event ? 'calendarEditEvent' : 'calendarAddEvent');
-    editor.querySelector('.calendar-form-date').textContent = formatDate.format(editorDay * dayLength);
-    editorTitle.value = event?.title ?? '';
+    editorDate.textContent = formatDate.format(editorDay * dayLength);
+    followUpHint.hidden = !followUp;
+    editorTitle.value = event?.title ?? (seed?.title ?? '').slice(0, 160);
+    const mailUrl = mailMessageLink(null, event?.mailUrl ?? seed?.mailUrl);
+    editorMail.hidden = !mailUrl;
+    if (mailUrl) editorMail.href = mailUrl;
+    else editorMail.removeAttribute('href');
     startField.value = event?.start ?? '';
     endField.value = event?.end ?? '';
     endNextDay.checked = event?.endNextDay === true;
@@ -794,6 +817,7 @@ export function renderCalendar(container, {
   function closeEditor() {
     editor.hidden = true;
     editorEvent = undefined;
+    followUp = undefined;
     addButton.disabled = false;
     if (detailEvent) {
       showDay(Date.parse(detailEvent.date) / dayLength, { select: true });
@@ -838,6 +862,7 @@ export function renderCalendar(container, {
       notes: editor.elements.namedItem('notes').value.trim(),
     };
     if (editorEvent) draft.id = editorEvent.id;
+    if (followUp) draft.mailUrl = followUp.mailUrl;
     setEditorBusy(true);
     const schedule = calendarReminderSchedule(draft);
     const permissionIssue = schedule?.reminderAt > Date.now() ? await requestReminderPermission() : undefined;
@@ -909,6 +934,11 @@ export function renderCalendar(container, {
       selectedDay = day;
       navigation.selectedDay = day;
       setStatus(holidayStatus);
+      if (followUp && !savingEvent) {
+        editorDay = day;
+        editorDate.textContent = formatDate.format(editorDay * dayLength);
+        showReminderStatus();
+      }
       updateAgenda();
     }
     updateGrid(focusDay);
@@ -1023,5 +1053,14 @@ export function renderCalendar(container, {
   setEvents(initialEvents);
   update();
   renderConnections?.(container.querySelector('.calendar-connections'));
-  return { update, openEvent };
+  return {
+    update, openEvent,
+    openFollowUp({ title, url }) {
+      const mailUrl = mailMessageLink(null, url);
+      if (!mailUrl || !editor.hidden) return;
+      showDay(localToday(), { select: true });
+      openEditor(undefined, { title, mailUrl });
+      editor.scrollIntoView({ block: 'nearest' });
+    }
+  };
 }

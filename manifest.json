@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ease",
-  "version": "0.4.18",
+  "version": "0.4.19",
   "description": "A fast, customizable workspace for everyday browser tasks.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -20,6 +20,7 @@
   "optional_host_permissions": [
     "https://openidconnect.googleapis.com/*",
     "https://www.googleapis.com/*",
+    "https://graph.microsoft.com/*",
     "https://*.icloud.com/*",
     "https://*/*"
   ],

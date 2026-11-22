@@ -2,6 +2,8 @@ import { renderCalendar } from "./calendar.js";
 import { renderTranslator } from "./translator.js";
 import { renderFlashcards } from "./flashcards.js";
 import { renderMarkets } from "./markets.js";
+import { inboxMessages, renderMail } from "./mail.js";
+import { mailMessage, mailUpdateKey } from "./mail-background.js";
 import { marketAlertStateKey, readMarketAlertState } from "./markets-alerts.js";
 import { marketLabel, workspaceMarketInstruments } from "./markets-store.js";
 import { flashcardFieldLimits } from "./flashcard-store.js";
@@ -81,6 +83,10 @@ let flashcardLocale;
 let marketsController;
 let marketsLocale;
 let marketAlertState = {};
+let mailAccounts = [];
+let mailController;
+let mailLocale;
+let mailReadVersion = 0;
 const translatorDraft = {};
 let translatorAccountId = null;
 let workspaceInitialized = false;
@@ -266,6 +272,20 @@ function refreshCalendarDay() {
   calendarDayTimer = setTimeout(refreshCalendarDay, nextDay.getTime() - now.getTime());
 }
 
+function updateMailBadge(tab) {
+  if (!tab) return;
+  const total = mailAccounts.reduce((sum, account) => sum + account.unread, 0);
+  tab.querySelector(".mail-badge")?.remove();
+  const numbers = new Intl.NumberFormat(workspace.locale, { useGrouping: false });
+  const label = total ? `${t("mail")} · ${t("mailUnreadCount", { count: numbers.format(total) })}` : t("mail");
+  tab.setAttribute("aria-label", label);
+  if (total) {
+    const badge = node("span", "mail-badge", total > 9 ? `+${numbers.format(9)}` : numbers.format(total));
+    badge.setAttribute("aria-hidden", "true");
+    tab.append(badge);
+  }
+}
+
 function renderTabs() {
   const focused = tabBar.contains(document.activeElement) ? document.activeElement.id : null;
   clearModuleDrag();
@@ -290,6 +310,7 @@ function renderTabs() {
     item.tabIndex = isSelected || (!tabs.some(({ id }) => id === activePage && !query) && module === tabs[0]) ? 0 : -1;
     if (!isLibrary && displayed.length > 1) bindModuleReorder(item, module.id);
     if (module.id === "calendar") updateCalendarTab(item);
+    if (module.id === "mail") updateMailBadge(item);
     return item;
   }));
   if (focused) document.getElementById(focused)?.focus({ preventScroll: true });
@@ -1057,6 +1078,14 @@ const moduleSearchSources = {
   }),
   calendar: calendarSearchSource,
   markets: marketSearchSource,
+  mail: () => ({
+    label: "mail",
+    entries: workspace.tabs.includes("mail") ? inboxMessages(mailAccounts).filter(message => message.url).map(message => ({
+      title: message.subject || t("mailNoSubject"), detail: message.sender || message.email,
+      keywords: [message.subject, message.sender, message.email],
+      open: () => chrome.tabs.create({ url: message.url }).catch(() => reportError("mailUnavailable"))
+    })) : []
+  }),
   translate: () => ({
     label: "translationHistory", icon: "history",
     entries: translationHistory.entries.map((entry) => ({
@@ -1212,6 +1241,10 @@ function render() {
     marketsController.update({ state: workspace.markets, alertState: marketAlertState });
     return;
   }
+  if (!query && activePage === "mail" && mailController && mailLocale === dateLocale) {
+    mailController.update(mailAccounts);
+    return;
+  }
   if (!query && activePage === clipboard.id && activeFolder === clipboardHistoryFolder
     && clipboardHistoryController && clipboardHistoryLocale === dateLocale) {
     view.querySelector(".folder-bar").replaceWith(renderFolderBar());
@@ -1228,6 +1261,8 @@ function render() {
   flashcardController = undefined;
   marketsController?.dispose();
   marketsController = undefined;
+  mailController?.dispose();
+  mailController = undefined;
   calendarController = undefined;
   clipboardHistoryController = undefined;
   calendarConnectionsRefresh = undefined;
@@ -1352,6 +1387,15 @@ function render() {
       onAddAlert: createMarketAlert,
       onRemoveAlert: (id) => mutate("markets-remove-alert", { id })
     });
+  } else if (activePage === "mail") {
+    const mailSettings = button(t("mailAccounts"), "icon-button", { symbol: "mail-settings", iconOnly: true });
+    mailSettings.id = "mail-settings-button";
+    section(t("mail"), undefined, mailSettings);
+    mailLocale = dateLocale;
+    mailController = renderMail(view, {
+      dateLocale, t, icon, settingsButton: mailSettings, accounts: mailAccounts, send: sendMail,
+      followUp: followUpMail, requestInWorker: inToolbarPopup
+    });
   } else if (activePage === "library") renderLibrary();
   else if (activePage === "settings") renderSettings();
 
@@ -1359,6 +1403,26 @@ function render() {
     const element = document.getElementById(focused);
     if (element !== document.activeElement) element?.focus({ preventScroll: true });
   }
+}
+
+function sendMail(action, data) {
+  return chrome.runtime.sendMessage({ type: mailMessage, action, ...data });
+}
+
+async function refreshMailSnapshot() {
+  const version = ++mailReadVersion;
+  const answer = await sendMail("read").catch(() => null);
+  if (version !== mailReadVersion || !answer?.ok) return;
+  mailAccounts = answer.value;
+  updateMailBadge(document.getElementById("tab-mail"));
+  if (query && workspace.tabs.includes("mail")) render();
+  else mailController?.update(mailAccounts);
+}
+
+async function followUpMail(message) {
+  if (!workspace.tabs.includes("calendar") && !await mutate("toggle-module", { id: "calendar", enabled: true })) return;
+  switchTo("calendar", false);
+  calendarController?.openFollowUp({ title: message.subject || t("mailNoSubject"), url: message.url });
 }
 
 async function createMarketAlert(data) {
@@ -2259,6 +2323,7 @@ document.addEventListener("keydown", (event) => {
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "session" && changes[mailUpdateKey]) refreshMailSnapshot();
   if (area === "session" && changes[vaultSessionStorageKey]) refreshWorkspace();
   if (area === "session" && changes[translatorSelectionKey]?.newValue) receiveTranslationSelection();
   if (area !== "local") return;
@@ -2304,6 +2369,7 @@ marketAlertState = initialMarketAlerts;
 lastWorkspaceTab = rememberedTab ?? clipboard.id;
 await refreshWorkspace(undefined, initialTranslationSelection === null ? lastWorkspaceTab : undefined);
 workspaceInitialized = true;
+refreshMailSnapshot();
 sendWorkspaceSync("wake").catch(() => {});
 if (initialTranslationSelection !== null) {
   rememberWorkspaceTab("translate");

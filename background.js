@@ -7,6 +7,7 @@ import { setToolbarBrand } from "./brand.js";
 import { changeCalendarPreferences, saveCalendarEvent, setCalendarHoliday } from "./calendar-store.js";
 import { registerCalendarReminderHandlers } from "./calendar-reminders.js";
 import { registerMarketAlertHandlers } from "./markets-alerts.js";
+import { registerMailHandlers } from "./mail-background.js";
 import { cacheMarketIcon, marketIconMessage } from "./markets-icons.js";
 import { addMarketAlert, MarketPreferenceError, removeMarketAlert, updateMarketWatchlist } from "./markets-store.js";
 import { refreshConnectedGoogleCalendar, registerGoogleProviderHandlers } from "./providers.js";
@@ -43,6 +44,7 @@ registerTranslatorSiteHandlers();
 registerCalendarReminderHandlers();
 registerFlashcardReminderHandlers();
 registerMarketAlertHandlers();
+registerMailHandlers();
 registerWorkspaceSyncHandlers(queueWorkspace);
 
 function queueWorkspace(operation) {

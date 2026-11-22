@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     openrouter_api_key: SecretStr = Field(min_length=1)
     coingecko_demo_api_key: SecretStr | None = None
     cors_origins: str = ""
+    mail_oauth_origin: str = ""
+    mail_extension_ids: str = ""
+    mail_google_client_id: str = ""
+    mail_google_client_secret: SecretStr | None = None
+    mail_microsoft_client_id: str = ""
+    mail_microsoft_client_secret: SecretStr | None = None
 
     openrouter_model_economy: str = "google/gemma-4-31b-it"
     openrouter_model_standard: str = "google/gemini-2.5-flash-lite"
@@ -57,6 +63,14 @@ class Settings(BaseSettings):
             elif parsed.scheme != "https":
                 raise ValueError("CORS origins must use HTTPS or chrome-extension")
         return ",".join(dict.fromkeys(origins))
+
+    @field_validator("mail_extension_ids")
+    @classmethod
+    def validate_mail_extension_ids(cls, value: str) -> str:
+        ids = [item.strip() for item in value.split(",") if item.strip()]
+        if any(not re.fullmatch(r"[a-p]{32}", item) for item in ids):
+            raise ValueError("MAIL_EXTENSION_IDS must list Chrome extension IDs")
+        return ",".join(dict.fromkeys(ids))
 
     @field_validator("openrouter_model_economy", "openrouter_model_standard", "openrouter_model_premium")
     @classmethod

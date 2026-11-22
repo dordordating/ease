@@ -20,6 +20,17 @@ Ease API uses FastAPI and PostgreSQL. It checks Google credentials, keeps one ac
 
 The initial limits are **0.5 vCPU and 512 MiB per container** for both the API and PostgreSQL. The API starts with one worker. The Docker Compose file sets the resource limits for the installation.
 
+## Configure email connections
+
+Mail connects separately from the Ease account. The extension fetches inbox headers directly from Google's Gmail API or Microsoft Graph. The broker handles OAuth code exchange and token renewal and does not store provider credentials or messages in PostgreSQL. Each provider is enabled independently when its credentials and the shared settings are supplied.
+
+1. Set `MAIL_OAUTH_ORIGIN` to your public HTTPS API origin without a trailing slash and `MAIL_EXTENSION_IDS` to the comma-separated extension IDs shown on `chrome://extensions`. For a production OAuth consent screen, use a domain you control.
+2. For Gmail, enable the Gmail API in Google Cloud. Create an OAuth client of type **Web application** and add `<MAIL_OAUTH_ORIGIN>/v1/mail/oauth/gmail/callback` as an authorized redirect URI. Configure the `https://www.googleapis.com/auth/gmail.metadata` scope and add test accounts if the consent screen is in testing. Set `MAIL_GOOGLE_CLIENT_ID` and `MAIL_GOOGLE_CLIENT_SECRET` in Coolify. The Chrome-extension OAuth client used for Ease login is separate.
+3. For Outlook, register a Microsoft Entra application that supports work/school and personal Microsoft accounts. Add a **Web** redirect URI of `<MAIL_OAUTH_ORIGIN>/v1/mail/oauth/outlook/callback`. Grant delegated Microsoft Graph `Mail.ReadBasic` and `User.Read` permissions. The OAuth flow requests `offline_access` to refresh the inbox after the browser restarts. Set `MAIL_MICROSOFT_CLIENT_ID` and `MAIL_MICROSOFT_CLIENT_SECRET` in Coolify, using the secret value.
+4. Redeploy and check `/v1/mail/config?extension=<extension-id>`. A configured provider returns `true` for an allowed extension ID. Verify consent and fetching in Chrome. OAuth callback queries contain short-lived authorization codes, so configure any upstream access logging to omit the query for both callback paths. Uvicorn omits these requests from its access log.
+
+Clients with unverified or restricted OAuth consent can be limited to approved test users. For Gmail testing, refresh-token expiration depends on the OAuth consent-screen publishing status.
+
 ## Translation tiers and limits
 
 | Tier | Default OpenRouter model | Override |

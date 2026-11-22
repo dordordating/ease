@@ -41,6 +41,7 @@ Open the new ZIP and copy the contents of its extension folder over the files in
 - Add **Markets** from **+**. Pin supported currency or crypto pairs, reorder the watchlist, and filter by market type. A pair opens its history, converter, and price alerts. Search by symbol or currency name to open a pair from anywhere in the workspace.
 - In **Markets → Browse**, search for a pair such as `CAD/CHF`, `ETH/ADA`, or `BTC/TMN`. The star adds or removes it from the watchlist. ECB currency crosses use daily reference rates, CoinGecko crypto crosses use comparable USD quotes, and Wallex shows listed trades including Toman pairs. `TMN` means Toman and `USDT` means Tether. Allow Chrome notifications and keep Chrome running to receive one-time price alerts from fresh samples.
 - Drag a market row to reorder it, or right-click it to move it up or down. Open a row to see the chart, source and exact timestamp. Available cryptocurrency icons are kept on this device and shared by pairs with the same base asset from the same provider.
+- Add **Email** from **+** and open **Email accounts** to connect up to six Gmail or Outlook accounts, including Google Workspace, Hotmail and Microsoft 365. Ease shows the latest 12 inbox messages per account. View all accounts together or select one, filter unread messages, and search loaded subjects and senders through workspace search. Select a message to open it in the provider or use **Follow up in Calendar** to prepare an event with its subject and link.
 - Ease reopens the last enabled module on this browser. Date and time displays use the calendar selected in Calendar settings and the device’s local time zone. Date-only market reference rates keep the provider’s publication date.
 - In **Translator settings**, enable **Ctrl + select** and grant Chrome access to eligible HTTPS websites once. Hold **Ctrl** while selecting text to translate it above the selection with the currently selected engine. The three AI engines use your Google-signed-in Ease session. You can also choose the source, target, result layout, and default clipboard folder in Translator.
 - Use **Settings → Language** to change the interface. English is the first-run default. Persian, Spanish, French, Brazilian Portuguese, Arabic, German, and Japanese are available. The Persian interface uses the bundled Vazir font.
@@ -79,6 +80,8 @@ Open **Settings → Encrypted sync** and set a passphrase to sync workspace pref
 
 Ease asks for access to Google's sites when you sign in or connect Google Calendar. Calendar authorization is separate from sign-in. See the [Chrome OAuth integration guide](https://developer.chrome.com/docs/extensions/how-to/integrate/oauth) for stable IDs and client setup.
 
-The module library marks Email and AI Assistant as coming soon.
+Email requires separate provider consent and optional API host permissions. The inbox and account credentials are stored on this device. An email follow-up you save is a regular Calendar event and can be included in encrypted workspace sync. See the [mail OAuth setup](backend/README.md#configure-email-connections) for the deployment configuration.
+
+The module library marks AI Assistant as coming soon.
 
 The bundled Vazir v30.1.0 font is distributed under the [SIL Open Font License](fonts/OFL.txt).

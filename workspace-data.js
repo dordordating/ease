@@ -7,7 +7,7 @@ export const modules = [
   { id: "clipboard", icon: "clipboard", color: "#ba9aff", released: true },
   { id: "calendar", icon: "calendar", color: "#83acf9", released: true },
   { id: "markets", icon: "chart", color: "#68dbc3", released: true },
-  { id: "mail", icon: "mail", color: "#ffae85" },
+  { id: "mail", icon: "mail", color: "#ffae85", released: true },
   { id: "translate", icon: "translate", color: "#69d5fa", released: true },
   { id: "flashcards", icon: "flashcards", color: "#82b9ac", released: true },
   { id: "assistant", icon: "sparkles", color: "#eca6e1" }

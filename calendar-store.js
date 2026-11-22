@@ -1,4 +1,5 @@
 import { defaultCalendar } from "./workspace-data.js";
+import { mailMessageLink } from "./mail-api.js";
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
 const timePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/u;
@@ -62,6 +63,7 @@ export function saveCalendarEvent(workspace, event) {
   }
   const reminderMinutes = Object.hasOwn(event, "reminderMinutes") ? event.reminderMinutes : existing?.reminderMinutes ?? null;
   if (reminderMinutes !== null && !calendarReminderOffsets.includes(reminderMinutes)) throw new Error("Invalid reminder offset");
+  const mailUrl = mailMessageLink(null, event.mailUrl ?? existing?.mailUrl);
   const stored = {
     id: event.id ?? crypto.randomUUID(),
     date: event.date,
@@ -71,7 +73,8 @@ export function saveCalendarEvent(workspace, event) {
     ...(nextDay ? { endNextDay: true } : {}),
     reminderMinutes: start ? reminderMinutes : null,
     location: clean(event.location, 240),
-    notes: clean(event.notes, 2000)
+    notes: clean(event.notes, 2000),
+    ...(mailUrl ? { mailUrl } : {})
   };
   if (existing) {
     workspace.events = workspace.events.map((item) => item.id === event.id ? stored : item);
