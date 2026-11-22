@@ -27,7 +27,7 @@ Use the final release manifest as the source of truth when entering these answer
 | `offscreen` | Reads the system clipboard for the optional Clipboard history feature while the Ease workspace is closed. |
 | `identity` | Uses Chrome’s identity API for optional Google sign-in and requests separate read-only consent for Google Calendar. |
 | `alarms` | Schedules connected calendar refresh, optional workspace sync, local event reminders, periodic price alert checks, and recovery of the optional clipboard history reader while Chrome is running. |
-| Optional `notifications` | Requested when the user sets a calendar reminder or price alert. Shows the event or the price that triggered a configured alert. |
+| Optional `notifications` | Requested when the user sets a calendar reminder, a price alert, or a flashcard reminder. Shows the event, the price that triggered an alert, or the number of flashcards ready to review. |
 | `contextMenus` | Adds **Translate with Ease** to the context menu when the user selects text. |
 | `activeTab` | Temporarily allows the translation shortcut to access the active tab where the user invoked it. |
 | `scripting` | Reads only the current text selection when the user invokes the translation shortcut. |

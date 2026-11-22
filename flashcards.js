@@ -1,4 +1,4 @@
-import { flashcardIntervalLimits, flashcardQueue, flashcardReviewIntervals } from "./flashcard-store.js";
+import { flashcardIntervalLimits, flashcardQueue, flashcardReminderPreferences, flashcardReviewIntervals } from "./flashcard-store.js";
 import { translatorLanguages } from "./translator-engine.js";
 
 const directionLabels = {
@@ -442,10 +442,41 @@ export function renderFlashcards(container, {
     const reviewIntervals = Object.fromEntries(Object.entries(intervalLabels).map(([rating, label]) => [
       rating, numberInput(intervalFields, label, savedIntervals[rating], 1, flashcardIntervalLimits[rating])
     ]));
+    const reminders = element("fieldset", "flashcards-intervals flashcards-reminder-settings");
+    const reminder = flashcardReminderPreferences(state);
+    let reminderEnabled = reminder.enabled;
+    const time = element("input", "flashcards-limit");
+    time.type = "time";
+    time.dir = "ltr";
+    time.value = reminder.time;
+    time.dataset.flashcardsWrite = "";
+    const timeField = field(t("flashcardsReminderTime"), time);
+    const reminderToggle = button(t("flashcardsReminderEnable"), "secondary-button translator-inline-switch", () => {
+      reminderEnabled = !reminderEnabled;
+      updateReminderFields();
+      feedback();
+    });
+    reminderToggle.setAttribute("role", "switch");
+    reminderToggle.dataset.flashcardsWrite = "";
+    const indicator = element("span", "translator-inline-switch-indicator");
+    indicator.setAttribute("aria-hidden", "true");
+    reminderToggle.append(indicator);
+    const hint = element("p", "flashcards-reminder-hint", t("flashcardsReminderHint"));
+    reminderToggle.setAttribute("aria-describedby", "flashcards-reminder-hint");
+    hint.id = "flashcards-reminder-hint";
+    reminders.append(element("legend", undefined, t("flashcardsReminders")), reminderToggle, timeField, hint);
+
+    function updateReminderFields() {
+      reminderToggle.setAttribute("aria-checked", String(reminderEnabled));
+      timeField.hidden = !reminderEnabled;
+      time.required = reminderEnabled;
+    }
+    updateReminderFields();
+
     const save = element("button", "primary-button", t("save"));
     save.type = "submit";
     save.dataset.flashcardsWrite = "";
-    form.append(field(t("flashcardsDirection"), direction), limits, intervals, save);
+    form.append(field(t("flashcardsDirection"), direction), limits, intervals, reminders, save);
     form.addEventListener("input", () => feedback());
     form.addEventListener("submit", event => {
       event.preventDefault();
@@ -455,10 +486,16 @@ export function renderFlashcards(container, {
         (values.hard > values.good ? reviewIntervals.good : reviewIntervals.easy).focus();
         return;
       }
-      savePreferences({
+      const patch = {
         direction: direction.value, newPerDay: newLimit.valueAsNumber, reviewsPerDay: reviewLimit.valueAsNumber,
         reviewIntervals: values
-      });
+      };
+      const savedReminder = flashcardReminderPreferences(state);
+      const reminderTime = time.value || savedReminder.time;
+      if (reminderEnabled || savedReminder.enabled || reminderTime !== savedReminder.time) {
+        patch.reviewReminder = { enabled: reminderEnabled, time: reminderTime };
+      }
+      savePreferences(patch);
     });
     settingsPane.append(form);
   }

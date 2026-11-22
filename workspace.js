@@ -2314,6 +2314,8 @@ if (initialTranslationSelection !== null) {
   switchTo("calendar", false);
   document.getElementById("calendar-settings-button")?.click();
   document.querySelector(".calendar-connections")?.scrollIntoView({ block: "start" });
+} else if (workspaceRoute.get("open") === "flashcards" && savedTabAvailable("flashcards")) {
+  switchTo("flashcards", false);
 }
 deviceUnlockAvailable().then((available) => {
   supportsDeviceUnlock = available;

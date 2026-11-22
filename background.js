@@ -15,6 +15,7 @@ import { registerClipboardHistoryHandlers, suppressClipboardHistoryText } from "
 import { translatorLanguages } from "./translator-engine.js";
 import { easeTranslationMessage, handleEaseTranslationMessage, registerEaseSessionHandlers } from "./ease-api.js";
 import { changeFlashcardPreferences, FlashcardError, removeFlashcard, reviewFlashcard, saveFlashcard } from "./flashcard-store.js";
+import { registerFlashcardReminderHandlers } from "./flashcard-reminders.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
 import { registerTranslationHistoryHandlers } from "./translation-history-store.js";
 import { registerWorkspaceSyncHandlers } from "./workspace-sync.js";
@@ -39,6 +40,7 @@ registerTranslationHistoryHandlers();
 registerClipboardHistoryHandlers();
 registerTranslatorSiteHandlers();
 registerCalendarReminderHandlers();
+registerFlashcardReminderHandlers();
 registerMarketAlertHandlers();
 registerWorkspaceSyncHandlers(queueWorkspace);
 
@@ -513,12 +515,15 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     && message.data?.enabled === true && message.data.requestPermission === true;
   const requestMarketNotifications = message.type === "ease-workspace-update" && message.action === "markets-add-alert"
     && message.data?.requestPermission === true;
+  const requestFlashcardNotifications = message.type === "ease-workspace-update" && message.action === "flashcard-preferences"
+    && message.data?.reviewReminder?.enabled === true;
   // Start permission UI on the first message hop so a toolbar popup can close without losing the action.
   let permission = null;
   if (requestInline) permission = requestInlineTranslatorPermission();
-  if (requestMarketNotifications) {
+  if (requestMarketNotifications || requestFlashcardNotifications) {
+    const denied = requestFlashcardNotifications ? "flashcardsReminderDenied" : "marketsNotificationDenied";
     permission = chrome.permissions.request({ permissions: ["notifications"] })
-      .then((granted) => granted ? null : "marketsNotificationDenied", () => "marketsNotificationDenied");
+      .then((granted) => granted ? null : denied, () => denied);
   }
   const result = queueWorkspace(async () => {
     const permissionError = await permission;

@@ -3708,6 +3708,20 @@ html[dir="rtl"] .translation-history-arrow svg {
   overflow-wrap: anywhere;
 }
 
+.flashcards-reminder-settings {
+  display: grid;
+  gap: 6px;
+}
+
+.flashcards-reminder-settings input[type="time"] {
+  inline-size: 100%;
+}
+
+.flashcards-reminder-hint {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .flashcards-stats {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   margin: 0;

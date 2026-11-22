@@ -7,7 +7,10 @@ const preferenceLimits = { newPerDay: 100, reviewsPerDay: 500 };
 const maximumCards = 1_000;
 const maximumInterval = 3_650;
 const activityDays = 90;
+const dayMilliseconds = 24 * 60 * 60_000;
 const defaultReviewIntervals = Object.freeze({ again: 10, hard: 1, good: 3, easy: 7 });
+const defaultReviewReminder = Object.freeze({ enabled: false, time: "19:00" });
+const reminderTime = /^(?:[01]\d|2[0-3]):[0-5]\d$/u;
 
 export const flashcardIntervalLimits = Object.freeze({ again: 1_440, hard: 365, good: 365, easy: 365 });
 
@@ -24,6 +27,12 @@ export const defaultFlashcards = Object.freeze({
   cards: Object.freeze([]),
   activity: Object.freeze({})
 });
+
+export function flashcardReminderPreferences(state) {
+  const saved = state?.reviewReminder;
+  if (typeof saved?.time !== "string" || !reminderTime.test(saved.time)) return defaultReviewReminder;
+  return { enabled: saved.enabled === true, time: saved.time };
+}
 
 export class FlashcardError extends Error {
   constructor(code) {
@@ -61,7 +70,7 @@ function activeDirections(direction) {
   return direction === "both" ? directions : [direction];
 }
 
-function dayKey(time) {
+export function flashcardLocalDay(time) {
   const date = new Date(time);
   const year = String(date.getFullYear()).padStart(4, "0");
   const month = String(date.getMonth() + 1).padStart(2, "0");
@@ -125,6 +134,12 @@ export function changeFlashcardPreferences(state, patch) {
     }
     if (!orderedIntervals(next.reviewIntervals)) throw new FlashcardError("flashcardsIntervalOrder");
   }
+  if (Object.hasOwn(patch, "reviewReminder")) {
+    const reminder = patch.reviewReminder;
+    if (typeof reminder?.enabled !== "boolean" || typeof reminder.time !== "string"
+      || !reminderTime.test(reminder.time)) throw invalid();
+    next.reviewReminder = { enabled: reminder.enabled, time: reminder.time };
+  }
   return next;
 }
 
@@ -180,7 +195,7 @@ function nextSchedule(previous, rating, now, minimums) {
     easy: Math.max(minimums.easy, Math.round(days * 3.5))
   };
   const intervalDays = Math.min(maximumInterval, intervals[rating]);
-  return { reviews, intervalDays, dueAt: startOfLocalDayAfter(now, intervalDays) };
+  return { reviews, intervalDays, dueAt: now + intervalDays * dayMilliseconds };
 }
 
 function validTime(now) {
@@ -199,7 +214,7 @@ export function reviewFlashcard(state, result, now = Date.now()) {
     throw new FlashcardError("flashcardReviewChanged");
   }
 
-  const day = dayKey(now);
+  const day = flashcardLocalDay(now);
   const counts = dayActivity(next, day);
   const previous = card.progress[direction];
   const introduced = counts.introduced + (previous ? 0 : 1);
@@ -220,7 +235,7 @@ export function reviewFlashcard(state, result, now = Date.now()) {
 export function flashcardQueue(state, now = Date.now()) {
   const current = stateWithDefaults(state);
   if (!validTime(now)) throw invalid();
-  const counts = dayActivity(current, dayKey(now));
+  const counts = dayActivity(current, flashcardLocalDay(now));
   const availableReviews = Math.max(0, current.reviewsPerDay - counts.reviewed);
   const availableNew = Math.max(0, current.newPerDay - counts.introduced);
   const tomorrow = startOfLocalDayAfter(now, 1);
