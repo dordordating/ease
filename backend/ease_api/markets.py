@@ -2,13 +2,14 @@
 
 import json
 import math
-from asyncio import Lock, gather, timeout
+from asyncio import Lock, Semaphore, gather, timeout
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from time import monotonic
+from urllib.parse import urlsplit
 from xml.etree import ElementTree
 
 import httpx
@@ -27,6 +28,8 @@ _CRYPTO_TTL = 10 * 60
 _RESPONSE_TIMEOUT = httpx.Timeout(6, connect=3)
 _TREND_POINTS = 30
 _CRYPTO_HISTORY_POINTS = 180
+_ICON_LIMIT = 64 * 1024
+_ICON_HOSTS = {"coin-images.coingecko.com", "assets.coingecko.com"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +48,17 @@ class _CryptoQuote:
 class _Unavailable(Exception):
     def __init__(self, delay: float = 0) -> None:
         self.delay = delay
+
+
+def _icon_mime(content: bytes) -> str | None:
+    if content.startswith(b"\x89PNG\r\n\x1a\n") and content[12:16] == b"IHDR" and len(content) >= 24:
+        if all(0 < int.from_bytes(content[offset:offset + 4], "big") <= 512 for offset in (16, 20)):
+            return "image/png"
+    if content.startswith(b"\xff\xd8\xff") and content.endswith(b"\xff\xd9"):
+        return "image/jpeg"
+    if content.startswith(b"RIFF") and content[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 class _Cache[T]:
@@ -236,6 +250,8 @@ class MarketsService:
         self._history: OrderedDict[Pair, _Cache[tuple[_Point, ...]]] = OrderedDict()
         self._prices: OrderedDict[tuple[str, str], tuple[_CryptoQuote | None, float, bool]] = OrderedDict()
         self._samples: OrderedDict[Pair, tuple[_Point, ...]] = OrderedDict()
+        self._icons: OrderedDict[tuple[str, str], _Cache[tuple[str, bytes]]] = OrderedDict()
+        self._icon_fetch = Semaphore(4)
         self._quote_fetch = Lock()
         self._crypto_fetch = Lock()
         self._crypto_retry_at = 0.0
@@ -259,6 +275,43 @@ class MarketsService:
 
     async def _load_fx(self) -> dict[date, dict[str, float]]:
         return _parse_fx(await self._download(_ECB_URL, limit=512 * 1024), datetime.now(UTC).date())
+
+    async def _load_icon(self, pair: Pair) -> tuple[str, bytes]:
+        try:
+            async with timeout(12), self._icon_fetch:
+                if pair.source == "wallex":
+                    url = f"https://api.wallex.ir/coins/{pair.base}.png"
+                else:
+                    details = await self._download(f"{_CRYPTO_API}/coins/{pair.base}", params=dict.fromkeys(
+                        ("localization", "tickers", "market_data", "community_data", "developer_data", "sparkline"), "false"
+                    ), headers=self._crypto_headers, limit=128 * 1024)
+                    url = json.loads(details)["image"]["small"]
+                    if not isinstance(url, str) or len(url) > 1024:
+                        raise _Unavailable()
+                    image = urlsplit(url)
+                    if (image.scheme != "https" or image.netloc not in _ICON_HOSTS
+                            or not image.path.startswith("/coins/images/")):
+                        raise _Unavailable()
+                body = await self._download(url, limit=_ICON_LIMIT)
+        except (TimeoutError, KeyError, TypeError, ValueError, RecursionError):
+            raise _Unavailable() from None
+        mime = _icon_mime(body)
+        if mime is None:
+            raise _Unavailable()
+        return mime, body
+
+    async def icon(self, pair: Pair) -> tuple[str, bytes] | None:
+        if pair.source not in ("crypto", "wallex"):
+            return None
+        key = (pair.source, pair.base)
+        if key not in self._icons:
+            self._icons[key] = _Cache(24 * 60 * 60, 5 * 60)
+        cache = self._icons[key]
+        self._icons.move_to_end(key)
+        if len(self._icons) > 128:
+            self._icons.popitem(last=False)
+        value, _ = await cache.read(lambda: self._load_icon(pair))
+        return value
 
     async def _crypto_data[T](self, path: str, params: dict[str, str], parse: Callable[[object, datetime], T]) -> T:
         try:

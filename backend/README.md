@@ -36,6 +36,8 @@ PostgreSQL stores the user's Google subject, email, display name, account timest
 
 `GET /v1/markets/catalogue?q=BTC%2FTMN` looks up pairs on demand. Use the returned market ID with `GET /v1/markets/quotes?symbols=...` or `GET /v1/markets/history?symbol=...`. Quote requests take up to 50 IDs, and omitting the filter returns the original starter set for earlier extensions. The endpoints are available to guests and share bounded caches.
 
+`GET /v1/markets/icon?symbol=wlx%3AGRAM%2FTMN` returns a small raster icon for supported assets, with a 64 KiB limit. Ease caches the result by provider and base asset on the server and in the browser.
+
 Ease derives FX crosses from daily EUR reference rates. CoinGecko quotes are batched and cached for ten minutes. Crypto-to-crypto crosses without a direct quote divide compatible USD prices. Wallex’s public market snapshot is cached for two minutes. Its timestamp records when Ease retrieved the snapshot, and history uses the venue’s hourly closing prices. If needed for testing, set a server-side `COINGECKO_DEMO_API_KEY`. Confirm the data display license for a public release. [ECB reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html) · [CoinGecko API terms](https://www.coingecko.com/en/api_terms) · [Wallex markets API](https://api.wallex.ir/v1/markets)
 
 ## API contract

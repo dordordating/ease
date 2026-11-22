@@ -7,6 +7,7 @@ import { setToolbarBrand } from "./brand.js";
 import { changeCalendarPreferences, saveCalendarEvent, setCalendarHoliday } from "./calendar-store.js";
 import { registerCalendarReminderHandlers } from "./calendar-reminders.js";
 import { registerMarketAlertHandlers } from "./markets-alerts.js";
+import { cacheMarketIcon, marketIconMessage } from "./markets-icons.js";
 import { addMarketAlert, MarketPreferenceError, removeMarketAlert, updateMarketWatchlist } from "./markets-store.js";
 import { refreshConnectedGoogleCalendar, registerGoogleProviderHandlers } from "./providers.js";
 import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
@@ -353,6 +354,7 @@ async function updateWorkspace(workspace, action, data, transaction) {
       break;
     case "markets-watchlist":
       workspace.markets = updateMarketWatchlist(workspace.markets, data);
+      if (data.action === "add") transaction.afterCommit = () => { void cacheMarketIcon(data.symbol).catch(() => {}); };
       break;
     case "markets-add-alert":
       if (!await chrome.permissions.contains({ permissions: ["notifications"] })) return "marketsNotificationDenied";
@@ -508,6 +510,10 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.type === easeTranslationMessage) {
     if (fromWorkspace) return handleEaseTranslationMessage(message, respond);
     return;
+  }
+  if (message?.type === marketIconMessage && fromWorkspace) {
+    cacheMarketIcon(message.symbol).then(cached => respond({ cached }), () => respond({ cached: false }));
+    return true;
   }
   if (!fromWorkspace || !["ease-workspace-read", "ease-workspace-update"].includes(message?.type)) return;
 

@@ -1,5 +1,6 @@
 import { marketInstrument, marketInstruments, marketLabel, validMarketAlert, workspaceMarketInstruments } from "./markets-store.js";
 import { getMarketHistory, getMarketQuotes, searchMarkets } from "./markets-api.js";
+import { marketIconKey, marketIconMessage, readCachedMarketIcon } from "./markets-icons.js";
 
 const marketKinds = { all: "marketsAll", fx: "marketsFx", crypto: "marketsCrypto", wallex: "marketsWallex" };
 const cryptoNames = { BTC: "marketsBitcoin", ETH: "marketsEthereum", SOL: "marketsSolana", XRP: "marketsXrp", USDT: "marketsTether" };
@@ -85,15 +86,20 @@ function drawSeries(canvas, series, detailed) {
 
 export function renderMarkets(container, {
   locale, dateLocale = locale, t, icon, state: initialState, alertState: initialAlertState,
-  onWatchlist, onAddAlert, onRemoveAlert
+  onWatchlist, onWatchlistMenu, onAddAlert, onRemoveAlert
 }) {
   const currencyNames = new Intl.DisplayNames([locale], { type: "currency" });
   const percent = new Intl.NumberFormat(locale, { style: "percent", signDisplay: "exceptZero", maximumFractionDigits: 2 });
   const prices = new Intl.NumberFormat(locale, { maximumSignificantDigits: 8 });
+  const tomans = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 });
+  const smallPrices = new Intl.NumberFormat(locale, { notation: "scientific", maximumSignificantDigits: 4 });
   const decimal = prices.formatToParts(1.1).find(part => part.type === "decimal")?.value ?? ".";
   const dateOnly = new Intl.DateTimeFormat(dateLocale, { dateStyle: "medium", timeZone: "UTC" });
   const dateTime = new Intl.DateTimeFormat(dateLocale, { dateStyle: "medium", timeStyle: "short" });
   const chartData = new WeakMap();
+  const iconUrls = new Map();
+  const iconLoads = new Map();
+  const unavailableIcons = new Set();
   let state = initialState;
   let alertState = initialAlertState;
   let quotes = new Map();
@@ -107,6 +113,7 @@ export function renderMarkets(container, {
   let catalogueStatus;
   let detail;
   let frame;
+  let dragging;
   let disposed = false;
 
   function control(label, className, handler, symbol, iconOnly = false) {
@@ -219,6 +226,60 @@ export function renderMarkets(container, {
     return `${base} / ${quote}`;
   }
 
+  function quoteUnit(instrument) {
+    if (instrument.quote === "TMN") return t("marketsToman");
+    if (instrument.quote === "USDT") return t("marketsTether");
+    return instrument.quote;
+  }
+
+  function priceLabel(instrument, price) {
+    if (instrument.quote === "TMN" && price >= 1) return tomans.format(price);
+    return (price < 0.0000001 ? smallPrices : prices).format(price);
+  }
+
+  function iconUrl(instrument, key, download) {
+    if (iconUrls.has(key)) return Promise.resolve(iconUrls.get(key));
+    if (unavailableIcons.has(key)) return Promise.resolve(null);
+    const requestKey = `${key}:${download}`;
+    if (iconLoads.has(requestKey)) return iconLoads.get(requestKey);
+    const request = (async () => {
+      let blob = await readCachedMarketIcon(key);
+      if (!blob && download && !disposed) {
+        try {
+          const answer = await chrome.runtime.sendMessage({ type: marketIconMessage, symbol: instrument.symbol });
+          if (answer?.cached) blob = await readCachedMarketIcon(key);
+        } catch {}
+      }
+      if (disposed) return null;
+      if (blob && !iconUrls.has(key)) iconUrls.set(key, URL.createObjectURL(blob));
+      if (!blob && download && !iconUrls.has(key)) unavailableIcons.add(key);
+      return iconUrls.get(key) ?? null;
+    })().finally(() => iconLoads.delete(requestKey));
+    iconLoads.set(requestKey, request);
+    return request;
+  }
+
+  function assetBadge(instrument, download) {
+    const badge = element("span", "markets-asset");
+    badge.setAttribute("aria-hidden", "true");
+    badge.dir = "ltr";
+    const fallback = element("span", "markets-asset-code", [...instrument.base].slice(0, 3).join(""));
+    badge.append(fallback);
+    const key = marketIconKey(instrument.symbol);
+    if (key) void iconUrl(instrument, key, download).then(url => {
+      if (!url || disposed || !badge.isConnected) return;
+      const image = element("img", "markets-asset-image");
+      image.alt = "";
+      image.decoding = "async";
+      image.draggable = false;
+      image.addEventListener("load", () => { fallback.hidden = true; }, { once: true });
+      image.addEventListener("error", () => { image.remove(); }, { once: true });
+      badge.append(image);
+      image.src = url;
+    }).catch(() => {});
+    return badge;
+  }
+
   function availableInstruments() {
     return new Map([...workspaceMarketInstruments(state), ...foundInstruments].map(item => [item.symbol, item]));
   }
@@ -296,17 +357,29 @@ export function renderMarkets(container, {
   function quoteValue(instrument, quote) {
     const values = element("span", "markets-values");
     const price = validPrice(quote?.price);
-    const amount = element("strong", "markets-price", price ? prices.format(quote.price) : t("marketsNoQuote"));
-    amount.dir = "auto";
-    if (!price) amount.dataset.missing = "true";
+    const amount = element("strong", "markets-price");
+    if (price) {
+      amount.append(element("bdi", "", priceLabel(instrument, quote.price)), " ",
+        element("bdi", "markets-price-unit", quoteUnit(instrument)));
+    } else {
+      amount.dataset.missing = "true";
+      amount.textContent = t("marketsNoQuote");
+    }
     values.append(amount);
     if (price && Number.isFinite(quote.changePercent)) {
-      const change = element("span", "markets-change", percent.format(quote.changePercent / 100));
+      const change = element("span", "markets-change");
+      const direction = changeDirection(quote.changePercent);
+      const formatted = percent.format(quote.changePercent / 100);
+      if (direction !== "flat") {
+        const arrow = element("span", "", direction === "up" ? "↑" : "↓");
+        arrow.setAttribute("aria-hidden", "true");
+        change.append(arrow);
+      }
+      change.append(element("bdi", "", formatted));
       change.title = t(instrument.kind === "fx" ? "marketsFxChange" : "marketsCryptoChange");
       change.setAttribute("role", "img");
-      change.setAttribute("aria-label", `${change.title} ${change.textContent}`);
-      change.dataset.direction = changeDirection(quote.changePercent);
-      change.dir = "auto";
+      change.setAttribute("aria-label", `${change.title} ${formatted}`);
+      change.dataset.direction = direction;
       values.append(change);
     }
     return values;
@@ -347,6 +420,59 @@ export function renderMarkets(container, {
     return button;
   }
 
+  function bindReorder(row, target, instrument, index, count) {
+    if (screen !== "watchlist" || count < 2) return;
+    const move = (action) => save(target, () => onWatchlist({ symbol: instrument.symbol, action }));
+    onWatchlistMenu?.(target, marketLabel(instrument), (action) => {
+      if (index > 0) action("marketsMoveUp", "chevron-up", () => move("up"));
+      if (index < count - 1) action("marketsMoveDown", "chevron-down", () => move("down"));
+    });
+    target.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
+    target.addEventListener("keydown", (event) => {
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+      event.preventDefault();
+      if (event.repeat) return;
+      if (event.key === "ArrowUp" && index > 0) move("up");
+      if (event.key === "ArrowDown" && index < count - 1) move("down");
+    });
+    target.draggable = true;
+    target.addEventListener("dragstart", (event) => {
+      if (!event.dataTransfer) return;
+      dragging = instrument.symbol;
+      row.dataset.dragging = "true";
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("application/x-ease-market", dragging);
+    });
+    function clearDrop() {
+      dragging = undefined;
+      for (const item of listPane.querySelectorAll("[data-dragging], [data-market-drop]")) {
+        delete item.dataset.dragging;
+        delete item.dataset.marketDrop;
+      }
+    }
+    target.addEventListener("dragend", clearDrop);
+    function dropPosition(event) {
+      const boundary = row.getBoundingClientRect();
+      return event.clientY < boundary.top + boundary.height / 2 ? "before" : "after";
+    }
+    row.addEventListener("dragover", (event) => {
+      if (!dragging || dragging === instrument.symbol) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      row.dataset.marketDrop = dropPosition(event);
+    });
+    row.addEventListener("dragleave", (event) => {
+      if (!(event.relatedTarget instanceof Node) || !row.contains(event.relatedTarget)) delete row.dataset.marketDrop;
+    });
+    row.addEventListener("drop", (event) => {
+      if (!dragging || dragging === instrument.symbol) return;
+      event.preventDefault();
+      const symbol = dragging;
+      clearDrop();
+      save(target, () => onWatchlist({ symbol, action: "move", targetSymbol: instrument.symbol, position: dropPosition(event) }));
+    });
+  }
+
   function renderRow(instrument, index, count) {
     const quote = quotes.get(instrument.symbol);
     const row = element("li", "markets-row");
@@ -359,8 +485,16 @@ export function renderMarkets(container, {
     const identity = element("span", "markets-identity");
     const symbol = element("bdi", "markets-symbol", marketLabel(instrument));
     symbol.dir = "ltr";
-    identity.append(symbol, element("span", "markets-name", instrumentName(instrument)));
-    target.append(identity);
+    const subtitle = element("span", "markets-row-subtitle");
+    subtitle.append(symbol);
+    if ((quoteError || quote?.stale) && validPrice(quote?.price)) {
+      subtitle.append(element("span", "markets-stale", t("marketsStale")));
+    }
+    const name = element("span", "markets-name", instrumentName(instrument));
+    name.dir = "auto";
+    name.title = name.textContent;
+    identity.append(name, subtitle);
+    target.append(assetBadge(instrument, state.watchlist.includes(instrument.symbol)), identity);
     const trend = quote?.trend?.filter(validPrice) ?? [];
     if (trend.length > 1) {
       target.dataset.trend = "true";
@@ -368,18 +502,8 @@ export function renderMarkets(container, {
         changeDirection(trend.at(-1) - trend[0])));
     }
     target.append(quoteValue(instrument, quote));
-    const footer = element("div", "markets-row-footer");
-    const actions = element("div", "markets-row-actions");
-    if (screen === "watchlist") {
-      const up = watchAction(instrument, "up", "marketsMoveUp", "chevron-up");
-      const down = watchAction(instrument, "down", "marketsMoveDown", "chevron-down");
-      up.disabled = index === 0;
-      down.disabled = index === count - 1;
-      actions.append(up, down);
-    }
-    actions.append(watchToggle(instrument));
-    footer.append(quoteDescription(instrument, quote), actions);
-    row.append(target, footer);
+    bindReorder(row, target, instrument, index, count);
+    row.append(watchToggle(instrument), target);
     return row;
   }
 
@@ -676,7 +800,7 @@ export function renderMarkets(container, {
       fetchHistory(detail);
     }, "refresh", true);
     const head = element("div", "markets-detail-header");
-    head.append(back, identity, actions);
+    head.append(back, assetBadge(instrument, true), identity, actions);
     const quote = element("div", "markets-detail-quote");
     const historyPanel = section("marketsPriceHistory", "markets-history");
     const history = element("div", "markets-history-inner");
@@ -733,6 +857,7 @@ export function renderMarkets(container, {
       disposed = true;
       quoteRequest?.abort();
       detail?.historyRequest?.abort();
+      for (const url of iconUrls.values()) URL.revokeObjectURL(url);
       catalogueRequest?.abort();
       clearTimeout(catalogueTimer);
       clearInterval(refreshTimer);

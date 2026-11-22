@@ -1348,6 +1348,7 @@ function render() {
     marketsController = renderMarkets(body, {
       locale: workspace.locale, dateLocale, t, icon, state: workspace.markets, alertState: marketAlertState,
       onWatchlist: (change) => mutate("markets-watchlist", change),
+      onWatchlistMenu: (anchor, label, populate) => bindWorkspaceMenu(anchor, (point) => openWorkspaceMenu(anchor, point, label, populate)),
       onAddAlert: createMarketAlert,
       onRemoveAlert: (id) => mutate("markets-remove-alert", { id })
     });

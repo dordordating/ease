@@ -102,10 +102,19 @@ function withInstrument(state, symbol, saved) {
   return state;
 }
 
-export function updateMarketWatchlist(state, { symbol, action, instrument } = {}) {
-  if (!marketInstrument(symbol) || !["add", "remove", "up", "down"].includes(action)) throw invalid();
+export function updateMarketWatchlist(state, { symbol, action, instrument, targetSymbol, position } = {}) {
+  if (!marketInstrument(symbol) || !["add", "remove", "up", "down", "move"].includes(action)) throw invalid();
   const next = marketState(state);
   const index = next.watchlist.indexOf(symbol);
+  if (action === "move") {
+    if (index < 0 || !next.watchlist.includes(targetSymbol) || !["before", "after"].includes(position)) throw invalid();
+    if (symbol !== targetSymbol) {
+      next.watchlist.splice(index, 1);
+      const target = next.watchlist.indexOf(targetSymbol) + Number(position === "after");
+      next.watchlist.splice(target, 0, symbol);
+    }
+    return next;
+  }
   if (action === "add") {
     if (index < 0) {
       if (next.watchlist.length >= maxWatchlist) throw invalid();

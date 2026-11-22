@@ -11,7 +11,7 @@ import jwt
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from starlette.requests import ClientDisconnect
@@ -244,6 +244,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if len(symbol) > 245 or not parse_pair(symbol):
             raise HTTPException(422, "invalid_market_symbol")
         return await request.app.state.markets.history(symbol)
+
+    @app.get("/v1/markets/icon")
+    async def market_icon(request: Request, symbol: str):
+        if len(symbol) > 245 or (pair := parse_pair(symbol)) is None:
+            raise HTTPException(422, "invalid_market_symbol")
+        icon = await request.app.state.markets.icon(pair)
+        if icon is None:
+            raise HTTPException(404, "market_icon_unavailable")
+        mime, body = icon
+        return Response(body, media_type=mime, headers={"X-Content-Type-Options": "nosniff"})
 
     @app.post("/v1/auth/google")
     async def google_login(payload: GoogleLogin, request: Request):
