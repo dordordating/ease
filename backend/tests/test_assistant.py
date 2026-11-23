@@ -99,6 +99,9 @@ class AssistantFallbackTest(IsolatedAsyncioTestCase):
         self.assertEqual(self.models(), [PRIMARY])
         self.assertEqual(events[0], {"type": "delta", "text": "Primary draft"})
         self.assertEqual(events[-1]["actions"][0]["date"], "2026-11-24")
+        self.assertEqual(events[-1]["execution"], {
+            "guide": {"id": "ease-assistant", "version": 3}, "model": PRIMARY, "fallback": False,
+        })
 
     async def test_provider_error_tries_fallback_with_the_same_payload_and_privacy(self):
         async with self.client(httpx.Response(429), answer("Fallback draft")) as client:
@@ -107,6 +110,11 @@ class AssistantFallbackTest(IsolatedAsyncioTestCase):
         self.assertEqual(events[0], {"type": "delta", "text": "Fallback draft"})
         self.assertEqual(events[-1]["type"], "done")
         self.assertEqual(self.requests[0]["messages"], self.requests[1]["messages"])
+        self.assertEqual(events[-1]["execution"]["model"], FALLBACK)
+        self.assertTrue(events[-1]["execution"]["fallback"])
+        guidance = self.requests[0]["messages"][0]["content"]
+        self.assertIn("Lightly match the user's formality", guidance)
+        self.assertIn("Do not mirror profanity, personal insults, slurs, threats, or graphic violence", guidance)
         for request in self.requests:
             self.assertEqual(request["provider"], {"data_collection": "deny", "zdr": True})
 

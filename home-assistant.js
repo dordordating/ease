@@ -1,4 +1,6 @@
 import { assistantPort } from "./ease-api.js";
+import { streamAnswerText } from "./assistant-answer-stream.js";
+import { beginAssistantHistory, finishAssistantHistory, readAssistantHistory, watchAssistantHistory } from "./assistant-history-store.js";
 import { assistantExamples } from "./home-locales.js";
 import { assistantLimits } from "./home-store.js";
 import { calendarReminderLabel } from "./calendar-timing.js";
@@ -107,10 +109,11 @@ export function renderHomeAssistant({
   let signingIn = false;
   let active;
   let readingPage = false;
-  let turnNumber = 0;
   let sourceNumber = 0;
   let sources = [];
   let turns = [];
+  let recent;
+  let recentRevision = 0;
   let modules = [];
   let languages = {};
   let assistantStatus;
@@ -136,7 +139,7 @@ export function renderHomeAssistant({
   }
 
   function canAnimate() {
-    return visible && !turns.length && !input.value.trim() && !exampleArea.matches(":hover, :focus-within")
+    return visible && !active && !input.value && !exampleArea.matches(":hover, :focus-within")
       && !document.hidden;
   }
 
@@ -166,14 +169,13 @@ export function renderHomeAssistant({
     send.setAttribute("aria-label", t(key));
     send.disabled = !active && (!input.value.trim() || signingIn);
     send.dataset.running = String(Boolean(active));
-    reset.hidden = !turns.length && !sources.length && !input.value;
+    reset.hidden = !recent && !sources.length && !input.value;
     signIn.hidden = Boolean(account) && assistantStatus !== "assistantSignIn";
     signIn.disabled = signingIn;
     status.textContent = assistantStatus ? t(assistantStatus) : "";
     status.hidden = !assistantStatus;
     status.dataset.issue = String(Boolean(assistantStatus && assistantStatus !== "assistantWorking"));
     access.hidden = status.hidden && signIn.hidden;
-    exampleArea.hidden = Boolean(turns.length);
   }
 
   function remainingSources() {
@@ -330,7 +332,7 @@ export function renderHomeAssistant({
     target.hidden = !content.length;
   }
 
-  function makeTurn(turn) {
+  function makeTurn(turn, archived = false) {
     const card = node("article", "assistant-turn");
     const user = node("p", "assistant-user", turn.prompt);
     user.dir = "auto";
@@ -341,6 +343,7 @@ export function renderHomeAssistant({
     header.append(glyph("sparkles", "assistant-answer-icon"), node("h3", "", "Ease"), copy);
     const text = node("div", "assistant-answer-text");
     text.dir = "auto";
+    const writer = streamAnswerText(text, locale, reducedMotion);
     const working = node("div", "assistant-shimmer");
     working.setAttribute("aria-hidden", "true");
     for (let line = 0; line < 3; line += 1) working.append(node("span"));
@@ -348,10 +351,10 @@ export function renderHomeAssistant({
     feedback.hidden = true;
     const notice = node("p");
     notice.setAttribute("role", "status");
-    const retry = button(t("assistantRetry"), "secondary-button", { symbol: "refresh", onClick: () => {
+    const retry = button(t(archived ? "assistantHistoryReuse" : "assistantRetry"), "secondary-button", { symbol: "refresh", onClick: () => {
       if (active) return;
       const sameSources = sources.length === turn.sources.length && sources.every((source, index) => source.id === turn.sources[index].id);
-      const retryNow = sameSources && !input.value.trim();
+      const retryNow = !archived && sameSources && !input.value.trim();
       input.value = turn.prompt;
       sources = [...turn.sources];
       renderSources();
@@ -363,21 +366,41 @@ export function renderHomeAssistant({
     result.hidden = true;
     answer.append(header, text, working, feedback, result);
     card.append(user, answer);
-    transcript.prepend(card);
+    transcript.replaceChildren(card);
     return {
-      card,
       delta(value) {
         working.hidden = true;
-        text.textContent = value;
+        writer.write(value);
       },
       finish(error) {
-        working.hidden = true;
-        copy.hidden = !turn.answer.trim();
-        feedback.hidden = !error;
-        notice.textContent = error ? t(error) : "";
-        renderResult(turn, result);
+        writer.finish(() => {
+          working.hidden = true;
+          copy.hidden = !turn.answer.trim();
+          feedback.hidden = !error;
+          notice.textContent = error ? t(error) : "";
+          renderResult(turn, result);
+        }, archived || Boolean(error));
       }
     };
+  }
+
+  async function restoreRecent() {
+    const revision = ++recentRevision;
+    const id = account;
+    if (!id) return;
+    try {
+      const { enabled, entries: [entry] } = await readAssistantHistory(id, 1, { latest: true });
+      if (revision !== recentRevision || id !== account || recent || !enabled || !entry) return;
+      recent = { ...entry, sources: [] };
+      const layer = makeTurn(recent, true);
+      if (entry.answer) layer.delta(entry.answer);
+      layer.finish(entry.status === "stopped" ? "assistantStopped"
+        : entry.status === "failed" ? entry.error ?? "assistantHistoryFailedRequest"
+          : entry.status === "submitted" ? "assistantHistoryNoAnswer" : undefined);
+      reflect();
+    } catch {
+      // A history read issue remains visible in the history pane when opened.
+    }
   }
 
   function sendPayload(turn, port) {
@@ -403,18 +426,20 @@ export function renderHomeAssistant({
       return;
     }
 
-    const turn = { id: ++turnNumber, prompt, answer: "", sources: [...sources], saved: new Set() };
+    const turn = { id: crypto.randomUUID(), createdAt: Date.now(), prompt, answer: "", sources: [...sources], saved: new Set() };
+    const owner = account;
+    const started = performance.now();
+    const history = beginAssistantHistory(owner, { ...turn, locale, example: catalog.find(entry => entry.prompt === prompt) })
+      .catch(() => { if (owner === account) reportError("assistantHistoryFailed"); return false; });
+    recent = turn;
     turns.push(turn);
     const layer = makeTurn(turn);
-    if (turns.length > maxTurns) {
-      turns.shift();
-      transcript.lastElementChild.remove();
-    }
+    if (turns.length > maxTurns) turns.shift();
     const operation = { finish };
     active = operation;
     input.value = "";
     assistantStatus = "assistantWorking";
-    clearTimeout(exampleTimer);
+    displayExample(exampleIndex);
     attach.open = false;
     reflect();
 
@@ -425,7 +450,7 @@ export function renderHomeAssistant({
         if (active !== operation) return;
         if (packet.type === "delta" && typeof packet.text === "string") {
           turn.answer += packet.text;
-          layer.delta(turn.answer);
+          layer.delta(packet.text);
         } else if (packet.type === "done") {
           const references = Array.isArray(packet.citations) ? packet.citations : [];
           turn.citations = turn.sources.filter(source => references.includes(source.id));
@@ -433,6 +458,7 @@ export function renderHomeAssistant({
             && Object.hasOwn(actionInfo, action.kind) && (action.kind !== "reply"
               || turn.sources.some(source => source.id === action.source && source.kind === "mail")));
           turn.complete = true;
+          turn.execution = packet.execution;
           finish();
         } else if (packet.type === "error") finish(errors.has(packet.code) ? packet.code : "assistantUnavailable");
       });
@@ -451,12 +477,21 @@ export function renderHomeAssistant({
       port?.disconnect();
       assistantStatus = error === "assistantSignIn" ? error : undefined;
       layer.finish(error);
+      const duration = performance.now() - started;
+      history.then(written => {
+        if (written) return finishAssistantHistory(owner, turn.id, {
+          answer: turn.answer, actions: turn.actions, execution: turn.execution, error, duration,
+        });
+      }).catch(() => { if (owner === account) reportError("assistantHistoryFailed"); });
+      displayExample(exampleIndex + 1);
       reflect();
     }
   }
 
   function clearConversation(focus = true) {
     active?.finish("assistantStopped");
+    recentRevision += 1;
+    recent = undefined;
     turns = [];
     sources = [];
     input.value = "";
@@ -482,7 +517,7 @@ export function renderHomeAssistant({
   }
 
   input.addEventListener("input", () => {
-    if (!turns.length) displayExample(exampleIndex);
+    displayExample(exampleIndex);
     reflect();
   });
   input.addEventListener("keydown", event => {
@@ -515,10 +550,28 @@ export function renderHomeAssistant({
     }
   });
   renderSources();
+  const unsubscribeHistory = watchAssistantHistory(event => {
+    if (event?.accountId !== account || !["remove", "clear"].includes(event.change)) return;
+    recentRevision += 1;
+    const matches = turn => event.change === "clear" || turn.id === event.id;
+    turns = turns.filter(turn => !matches(turn));
+    if (recent && matches(recent)) {
+      active?.finish("assistantStopped");
+      recent = undefined;
+      transcript.replaceChildren();
+      reflect();
+    }
+  });
 
   return {
     root,
     focus: () => input.focus(),
+    reuse(prompt) {
+      input.value = prompt;
+      sources = [];
+      renderSources();
+      input.focus();
+    },
     addSource: source => addSources([source]),
     updateModules(next) {
       if (next.join() === modules.join()) return;
@@ -527,8 +580,11 @@ export function renderHomeAssistant({
     },
     updateLanguages(next) { languages = next; },
     updateAccount(next) {
-      if (account && account !== next) clearConversation(false);
-      account = next;
+      if (account !== next) {
+        if (account) clearConversation(false);
+        account = next;
+        if (account) restoreRecent();
+      }
       if (account && assistantStatus === "assistantSignIn") assistantStatus = undefined;
       reflect();
     },
@@ -549,6 +605,7 @@ export function renderHomeAssistant({
       reducedMotion.removeEventListener("change", refreshMotion);
     },
     dispose() {
+      unsubscribeHistory();
       this.hide();
       clearConversation(false);
     }

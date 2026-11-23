@@ -872,3 +872,146 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
   inline-size: 14px;
   block-size: 14px;
 }
+
+.home-history-button[aria-expanded="true"] {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.assistant-history {
+  display: grid;
+  gap: 8px;
+  min-inline-size: 0;
+}
+
+.assistant-history-settings, .assistant-history-toolbar, .assistant-history-footer,
+.assistant-history-pages, .assistant-history-feedback {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-inline-size: 0;
+}
+
+.assistant-history-settings, .assistant-history-detail-prompt, .assistant-history-detail-answer {
+  padding: 7px 9px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 9px;
+}
+
+.assistant-history-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.assistant-history-local, .assistant-history-meta, .assistant-history-pages > span {
+  color: var(--quiet);
+  font-size: 10.5px;
+}
+
+.assistant-history-list {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.assistant-history-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 6px;
+  inline-size: 100%;
+  min-inline-size: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 8px;
+  background: var(--surface);
+  text-align: start;
+}
+
+.assistant-history-row:hover {
+  border-color: var(--stroke);
+  background: var(--subtle);
+}
+
+.assistant-history-prompt {
+  grid-column: 1;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-history-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 7px;
+  min-inline-size: 0;
+}
+
+.assistant-history-row-arrow {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  color: var(--quiet);
+}
+
+.assistant-history-row-arrow svg,
+.assistant-history-toolbar svg,
+.assistant-history-pages svg {
+  inline-size: 13px;
+  block-size: 13px;
+}
+
+.assistant-history-state {
+  color: var(--accent);
+}
+
+.assistant-history-empty {
+  padding: 8px 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.assistant-history-pages, .assistant-history-toolbar {
+  justify-content: space-between;
+}
+
+.assistant-history-footer {
+  flex-wrap: wrap;
+}
+
+.assistant-history-pages .secondary-button,
+.assistant-history-toolbar .secondary-button,
+.assistant-history-footer .secondary-button {
+  min-block-size: 26px;
+  padding: 2px 6px;
+  font-size: 10.5px;
+}
+
+.assistant-history-detail-prompt {
+  background: var(--subtle);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.assistant-history-feedback {
+  gap: 1px;
+  margin-inline-start: auto;
+}
+
+.assistant-history-delete:hover {
+  color: var(--danger);
+}
+
+:dir(rtl) :is(.home-history-button[aria-expanded="true"], .assistant-history-row-arrow,
+  .assistant-history-toolbar .secondary-button, .assistant-history-pages) svg {
+  transform: scaleX(-1);
+}

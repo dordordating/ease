@@ -1,4 +1,5 @@
 import { renderHomeAssistant } from "./home-assistant.js";
+import { renderAssistantHistory } from "./assistant-history.js";
 import { normalizeHome } from "./home-store.js";
 import { flashcardQueue } from "./flashcard-store.js";
 import { localTaskDay, taskTimestamp, taskToday } from "./todo-store.js";
@@ -25,9 +26,24 @@ export function renderHome(options) {
   const layout = button(t("homeLayout"), "icon-button home-layout-button", { symbol: "sliders", iconOnly: true, onClick: toggleSettings });
   layout.id = "home-layout-button";
   layout.setAttribute("aria-controls", "home-settings");
-  header.append(heading, layout);
+  const historyButton = button(t("assistantHistory"), "icon-button home-history-button", {
+    symbol: "history", iconOnly: true, onClick: () => setMode(mode === "history" ? "dashboard" : "history")
+  });
+  historyButton.id = "home-history-button";
+  historyButton.setAttribute("aria-controls", "assistant-history");
+  historyButton.setAttribute("aria-expanded", "false");
+  const headerActions = node("div", "module-title-actions");
+  headerActions.append(historyButton, layout);
+  header.append(heading, headerActions);
   const dashboard = node("div", "home-dashboard");
   const assistant = renderHomeAssistant(options);
+  const history = renderAssistantHistory({
+    ...options,
+    onReuse(prompt) {
+      setMode("dashboard");
+      assistant.reuse(prompt);
+    }
+  });
   const grid = node("div", "home-widgets");
   dashboard.append(assistant.root, grid);
   const settings = node("section", "home-settings");
@@ -61,7 +77,8 @@ export function renderHome(options) {
   settings.append(launch, widgetTitle, roster, saving);
   settings.hidden = true;
   layout.setAttribute("aria-expanded", "false");
-  root.append(header, dashboard, settings);
+  history.root.hidden = true;
+  root.append(header, dashboard, settings, history.root);
 
   const fullDate = new Intl.DateTimeFormat(dateLocale, { weekday: "long", month: "long", day: "numeric" });
   const clock = new Intl.DateTimeFormat(dateLocale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
@@ -73,17 +90,31 @@ export function renderHome(options) {
   let changing = false;
   let dragged;
   let visible = false;
+  let mode = "dashboard";
   let reviewTimer;
 
   function toggleSettings() {
-    settings.hidden = !settings.hidden;
-    layout.setAttribute("aria-expanded", String(!settings.hidden));
-    dashboard.hidden = !settings.hidden;
-    if (settings.hidden) assistant.show();
-    else {
-      assistant.hide();
-      if (prefs) renderSettings();
-    }
+    setMode(mode === "settings" ? "dashboard" : "settings");
+  }
+
+  function setMode(next, id) {
+    mode = next;
+    const openingHistory = mode === "history";
+    title.textContent = t(openingHistory ? "assistantHistory" : "home");
+    date.hidden = openingHistory;
+    settings.hidden = mode !== "settings";
+    dashboard.hidden = mode !== "dashboard";
+    layout.setAttribute("aria-expanded", String(mode === "settings"));
+    historyButton.setAttribute("aria-expanded", String(openingHistory));
+    const historyLabel = t(openingHistory ? "home" : "assistantHistory");
+    historyButton.setAttribute("aria-label", historyLabel);
+    historyButton.title = historyLabel;
+    historyButton.replaceChildren(glyph(openingHistory ? "chevron-left" : "history"));
+    if (openingHistory && visible) history.show(id);
+    else history.hide();
+    if (visible && mode === "dashboard") assistant.show();
+    else assistant.hide();
+    if (mode === "settings" && prefs) renderSettings();
   }
 
   function clearDrag() {
@@ -295,12 +326,17 @@ export function renderHome(options) {
   return {
     root,
     focusPrompt() {
-      if (!settings.hidden) toggleSettings();
+      if (mode !== "dashboard") setMode("dashboard");
       assistant.focus();
     },
     attach(source) {
-      if (!settings.hidden) toggleSettings();
+      if (mode !== "dashboard") setMode("dashboard");
       return assistant.addSource(source);
+    },
+    openHistory: id => setMode("history", id),
+    updateAccount(id) {
+      assistant.updateAccount(id);
+      history.updateAccount(id);
     },
     update(next) {
       state = next;
@@ -310,23 +346,26 @@ export function renderHome(options) {
         prefsKey = key;
         if (!settings.hidden) renderSettings();
       }
-      assistant.updateAccount(next.accountId);
+      this.updateAccount(next.accountId);
       assistant.updateModules(next.tabs);
       assistant.updateLanguages({ learning: next.flashcards.language, translation: next.translationTarget });
       renderWidgets();
     },
     show() {
       visible = true;
-      if (settings.hidden) assistant.show();
+      if (mode === "dashboard") assistant.show();
+      if (mode === "history") history.show();
     },
     hide() {
       visible = false;
       clearTimeout(reviewTimer);
       assistant.hide();
+      history.hide();
     },
     dispose() {
       this.hide();
       assistant.dispose();
+      history.dispose();
     }
   };
 }

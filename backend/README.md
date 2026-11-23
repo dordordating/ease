@@ -81,7 +81,7 @@ Ease tries the fallback once if the primary fails before sending visible text or
 
 The request includes a prompt, interface locale, local Gregorian date and time, calendar preference, and up to four source excerpts. It can also include up to two brief previous exchanges and the user’s preferred learning and translation languages.
 
-Successful streams return `application/x-ndjson` with answer `delta` packets and a final `done` packet containing validated draft actions and source IDs. A terminal `error` packet indicates a quota, provider, or interruption problem. The extension reviews or applies actions through the corresponding modules. PostgreSQL records only aggregate usage for the request. Keep request-body logging disabled for this route.
+Successful streams return `application/x-ndjson` with answer `delta` packets and a final `done` packet containing validated draft actions, source IDs, and execution metadata with the guide version, model, and fallback status. Both models use the same guide for matching the user's tone and keeping replies respectful. A terminal `error` packet indicates a quota, provider, or interruption problem. The extension reviews or applies actions through the corresponding modules. PostgreSQL records only aggregate usage for the request. Keep request-body logging disabled for this route.
 
 ## Encrypted workspace sync
 

@@ -4,6 +4,7 @@ import { renderFlashcards } from "./flashcards.js";
 import { renderTodo } from "./todo.js";
 import { renderSpaces } from "./spaces.js";
 import { renderHome } from "./home.js";
+import { findAssistantHistory, watchAssistantHistory } from "./assistant-history-store.js";
 import { assistantSourceReady, captureAssistantSource, receiveAssistantSource } from "./home-sources.js";
 import { spacesMessage } from "./spaces-browser.js";
 import { spaceColors, spaceLimits, spaceNameTaken } from "./spaces-store.js";
@@ -83,6 +84,7 @@ let currentWindowId;
 let inToolbarPopup = false;
 let homeController;
 let homeLocale;
+let assistantHistorySearch;
 const calendarNavigation = {};
 let calendarController;
 let calendarConnectionsRefresh;
@@ -1224,6 +1226,10 @@ function renderSearch() {
       }
     },
     {
+      title: t("assistantHistory"), icon: "history", keywords: [t("assistantHistory"), translate("en", "assistantHistory")],
+      open: () => openHomeHistory()
+    },
+    {
       title: t("newSnippet"), icon: "plus", keywords: [t("newSnippet"), translate("en", "newSnippet")],
       open() {
         switchTo("clipboard", false);
@@ -1244,14 +1250,29 @@ function renderSearch() {
     }))
   };
   const results = searchWorkspaceModules(query, workspace.locale, [...sources, history, { id: "commands", label: "commands", entries: commands }]);
-  if (!results.length) {
-    emptyState(t("emptySearch"), t("emptySearchHint"), "search");
-    return;
-  }
   results.forEach(renderSearchGroup);
+  const noResults = () => { if (!results.length) emptyState(t("emptySearch"), t("emptySearchHint"), "search"); };
+  const account = translatorAccountId;
+  if (!account) return noResults();
+  const { locale } = workspace;
+  const controller = new AbortController();
+  assistantHistorySearch = controller;
+  findAssistantHistory(account, query, locale, controller.signal).then(matches => {
+    if (controller.signal.aborted) return;
+    if (!matches.length) return noResults();
+    renderSearchGroup({
+      id: "assistant-history", label: "assistantHistory", icon: "history",
+      entries: matches.map(({ id, prompt, answer }) => ({
+        id: `assistant-history-result-${id}`, title: prompt, detail: answer.slice(0, 180).toWellFormed(),
+        open: () => openHomeHistory(id)
+      }))
+    });
+  }, () => { if (!controller.signal.aborted) noResults(); });
 }
 
 function render() {
+  assistantHistorySearch?.abort();
+  assistantHistorySearch = undefined;
   clearTimeout(inlinePinTimer);
   closeWorkspaceMenu();
   const folderRail = view.querySelector(".folder-quick");
@@ -1587,6 +1608,13 @@ function showHome(dateLocale) {
       openSource: openHomeSource,
       onAction: reviewAssistantAction,
       onCopy: copyWorkspaceText,
+      confirmClear(clear) {
+        if (editor.open) return;
+        const fields = openEditor(t("assistantHistoryClear"), t("remove"), clear);
+        fields.append(node("p", "", t("assistantHistoryClearConfirm")));
+        editor.showModal();
+        editor.querySelector(".dialog-footer .secondary-button").focus();
+      },
       onSignIn: async () => {
         try { return await signInWorkspaceAccount(); }
         catch (error) { reportError(error?.code ?? "accountFailed"); return false; }
@@ -1597,6 +1625,11 @@ function showHome(dateLocale) {
   view.append(homeController.root);
   homeController.show();
   refreshHome();
+}
+
+function openHomeHistory(id) {
+  switchTo(home.id, false);
+  homeController?.openHistory(id);
 }
 
 async function openHomeModule(id, replyDraft) {
@@ -3136,10 +3169,14 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes[accountStorageKey]) {
     translatorAccountId = changes[accountStorageKey].newValue?.id ?? null;
     translatorController?.update({ accountId: translatorAccountId });
-    refreshHome();
+    homeController?.updateAccount(translatorAccountId);
+    if (query) render();
     accountRefresh?.().catch(() => reportError("accountFailed"));
     workspaceSyncRefresh?.();
   }
+});
+watchAssistantHistory(event => {
+  if (query && event?.accountId === translatorAccountId && ["add", "finish", "remove", "clear"].includes(event.change)) render();
 });
 function updateClipboardReadPermission(permissions) {
   if (permissions.permissions?.includes("clipboardRead")) refreshClipboardHistory();

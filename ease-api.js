@@ -430,7 +430,11 @@ async function readAssistantStream(response, signal, onDelta) {
           throw new EaseTranslationError(Object.hasOwn(assistantErrors, packet.code) ? assistantErrors[packet.code] : "assistantUnavailable");
         }
         if (packet?.type === "done" && answerLength && Array.isArray(packet.actions) && Array.isArray(packet.citations)) {
-          return { actions: packet.actions.slice(0, 4), citations: packet.citations.slice(0, assistantLimits.sources) };
+          return {
+            actions: packet.actions.slice(0, 4),
+            citations: packet.citations.slice(0, assistantLimits.sources),
+            execution: packet.execution
+          };
         }
         if (packet?.type !== "delta" || typeof packet.text !== "string" || !packet.text.length) throw interrupted();
         answerLength += packet.text.length;
