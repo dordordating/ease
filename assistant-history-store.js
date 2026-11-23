@@ -1,4 +1,5 @@
 import { assistantLimits } from "./home-store.js";
+import { archiveAssistantDrafts } from "./assistant-actions.js";
 import { normalizeSearchText } from "./workspace-search.js";
 
 const databaseName = "ease-assistant-history";
@@ -142,7 +143,7 @@ export async function beginAssistantHistory(accountId, { id, createdAt, prompt, 
   return written;
 }
 
-export async function finishAssistantHistory(accountId, id, { answer, actions = [], execution, error, duration }) {
+export async function finishAssistantHistory(accountId, id, { answer, drafts = [], execution, error, duration }) {
   const written = await transaction([records, texts], "readwrite", async tx => {
     const key = [accountId, id];
     const requests = tx.objectStore(records);
@@ -151,7 +152,7 @@ export async function finishAssistantHistory(accountId, id, { answer, actions = 
     const content = tx.objectStore(texts);
     const text = await resultOf(content.get(key));
     if (!text) return false;
-    const kinds = actionKinds.filter(kind => actions.some(action => action.kind === kind));
+    const kinds = actionKinds.filter(kind => drafts.some(({ action }) => action.kind === kind));
     requests.put({
       ...record, status: error === "assistantStopped" ? "stopped" : error ? "failed" : "complete",
       error: errorCodes.includes(error) ? error : null, actionKinds: kinds,
@@ -159,7 +160,8 @@ export async function finishAssistantHistory(accountId, id, { answer, actions = 
         : kinds.length === 1 ? kinds[0] : kinds.length > 1 ? "workflow" : record.category,
       execution: executionMetadata(execution), duration: Math.max(0, Math.round(duration)),
     });
-    content.put({ ...text, answer: answer.slice(0, assistantLimits.answer * 2).toWellFormed() });
+    content.put({ ...text, answer: answer.slice(0, assistantLimits.answer * 2).toWellFormed(),
+      ...(drafts.length ? { drafts: archiveAssistantDrafts(drafts) } : {}) });
     return true;
   });
   if (written) announce(accountId, "finish", id);
@@ -176,7 +178,7 @@ export function readAssistantHistory(accountId, page = 1, { latest = false } = {
     const entries = [];
     await readInOrder(index, range, (current - 1) * pageSize, async record => {
       const text = await resultOf(tx.objectStore(texts).get([accountId, record.id]));
-      if (text) entries.push({ ...record, prompt: text.prompt, answer: text.answer });
+      if (text) entries.push({ ...record, prompt: text.prompt, answer: text.answer, ...(latest && { drafts: text.drafts }) });
       return entries.length < (latest ? 1 : pageSize);
     });
     return { enabled, total, page: current, pageCount, entries };
@@ -189,7 +191,7 @@ export function readAssistantHistoryEntry(accountId, id) {
     const record = await resultOf(tx.objectStore(records).get(key));
     const text = await resultOf(tx.objectStore(texts).get(key));
     const enabled = (await resultOf(tx.objectStore(preferences).get(accountId)))?.enabled !== false;
-    return { enabled, entry: text && record ? { ...record, prompt: text.prompt, answer: text.answer } : undefined };
+    return { enabled, entry: text && record ? { ...record, prompt: text.prompt, answer: text.answer, drafts: text.drafts } : undefined };
   });
 }
 
@@ -238,7 +240,10 @@ export function findAssistantHistory(accountId, query, locale, signal) {
       if (signal?.aborted) return false;
       const text = await resultOf(tx.objectStore(texts).get([accountId, record.id]));
       if (!text) return true;
-      const content = normalizeSearchText(`${text.prompt}\n${text.answer}`, locale);
+      const suggestions = (text.drafts ?? []).flatMap(({ action }) => [
+        action.title, action.front, action.text, action.back, action.body, action.notes, ...(action.checklist ?? [])
+      ]);
+      const content = normalizeSearchText([text.prompt, text.answer, ...suggestions].join("\n"), locale);
       if (terms.every(term => content.includes(term))) matches.push({ id: record.id, prompt: text.prompt, answer: text.answer });
       return matches.length < pageSize;
     });

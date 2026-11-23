@@ -2,7 +2,7 @@ import { calendarReminderOffsets, calendarReminderSchedule } from "./calendar-ti
 import { spaceIdValid } from "./spaces-store.js";
 
 export const defaultTodo = { items: [], dailyTime: "" };
-export const taskLimits = { title: 160, notes: 2000 };
+export const taskLimits = { title: 160, notes: 2000, checklistItems: 24, checklistText: 240 };
 export const taskSections = ["today", "inbox", "upcoming"];
 export const collapsedTaskKey = section => `easeTodoCollapsed:${section}`;
 export const taskRetentionOptions = [0.5, 1, 3, 7];
@@ -109,6 +109,20 @@ function assignedLabels(ids, allowed) {
   return Array.isArray(ids) ? [...new Set(ids.filter(id => allowed.has(id)))] : [];
 }
 
+function readChecklist(value) {
+  if (!Array.isArray(value) || value.length > taskLimits.checklistItems) return null;
+  const ids = new Set();
+  const items = [];
+  for (const item of value) {
+    const text = typeof item?.text === "string" ? item.text.trim() : "";
+    if (typeof item?.id !== "string" || !taskId.test(item.id) || ids.has(item.id)
+      || !text || text.length > taskLimits.checklistText || typeof item.done !== "boolean") return null;
+    ids.add(item.id);
+    items.push({ id: item.id, text, done: item.done });
+  }
+  return items;
+}
+
 export function restoreTodo(value) {
   if (value === undefined) return defaultTodo;
   if (!Array.isArray(value?.items) || (value.dailyTime !== "" && !isTime(value.dailyTime))) return null;
@@ -123,13 +137,15 @@ export function restoreTodo(value) {
       || !Number.isSafeInteger(task.createdAt) || task.createdAt < 0) return null;
     const fields = taskFields(task);
     const source = taskSource(task.source);
+    const checklist = task.checklist === undefined ? undefined : readChecklist(task.checklist);
     if (!fields.title || !validFields(fields) || (task.source && !source)
-      || (task.focusDay && !taskDateValid(task.focusDay))) return null;
+      || checklist === null || (task.focusDay && !taskDateValid(task.focusDay))) return null;
     ids.add(task.id);
     const labelIds = assignedLabels(task.labelIds, allowed);
     items.push({ id: task.id, ...fields, createdAt: task.createdAt, done: task.done, focusDay: task.focusDay || "", source,
       ...(task.done && validCompletion(task.completedAt) ? { completedAt: task.completedAt } : {}),
       ...(spaceIdValid(task.spaceId) ? { spaceId: task.spaceId } : {}),
+      ...(checklist && { checklist }),
       ...(labelIds.length ? { labelIds } : {}) });
   }
   return { dailyTime: value.dailyTime, items,
@@ -225,6 +241,12 @@ export function taskAction(workspace, action, data) {
     const task = record ? { ...record, ...(duplicate ? { dueDate: fields.dueDate, dueTime: fields.dueTime } : fields) }
       : { id: crypto.randomUUID(), ...fields, createdAt: Date.now(), done: false, focusDay: "", source };
     if (!duplicate) {
+      if (data.checklist === null) delete task.checklist;
+      else if (Object.hasOwn(data, "checklist")) {
+        const checklist = readChecklist(data.checklist);
+        if (!checklist) return "saveFailed";
+        task.checklist = checklist;
+      }
       if (Object.hasOwn(data, "spaceId")) {
         if (!data.spaceId) delete task.spaceId;
         else if (workspace.spaces?.some(space => space.id === data.spaceId)) task.spaceId = data.spaceId;
@@ -246,6 +268,13 @@ export function taskAction(workspace, action, data) {
   if (!existing) return "todoMissing";
   let next;
   switch (action) {
+    case "check-task-item": {
+      const item = existing.checklist?.find(item => item.id === data.itemId);
+      if (!item || typeof data.done !== "boolean") return "todoMissing";
+      if (item.done === data.done) return;
+      next = { ...existing, checklist: existing.checklist.map(other => other === item ? { ...item, done: data.done } : other) };
+      break;
+    }
     case "remove-task":
       workspace.todo = { ...todo, items: items.filter(task => task !== existing) };
       return;

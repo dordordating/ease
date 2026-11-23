@@ -380,6 +380,7 @@ async function updateWorkspace(workspace, action, data, transaction) {
     case "save-todo-label":
     case "remove-todo-label":
     case "save-task":
+    case "check-task-item":
     case "remove-task":
     case "complete-task":
     case "reschedule-task":

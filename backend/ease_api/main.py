@@ -466,7 +466,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             kinds = {action["kind"] for action in event["actions"]}
                             category = execution.get("lookup") or (next(iter(kinds)) if len(kinds) == 1 else "workflow" if kinds else "general")
                             saved = await persist_assistant_history(database.complete_assistant_request(
-                                user.id, history_id, payload.prompt, "".join(answer), execution, category,
+                                user.id, history_id, payload.prompt, "".join(answer), execution, category, event["actions"],
                             ))
                             if saved:
                                 recording = False

@@ -61,11 +61,24 @@ export function renderTodo(container, {
   const add = button(t("todoAdd"), null, { glyph: "plus", compact: true });
   add.type = "submit";
   add.classList.add("todo-add");
+  const addChecklist = button(t("todoChecklistNew"), () => {
+    const entered = input.value;
+    const task = { ...parsed(), checklist: [], ...(labelFilter && { labelIds: [labelFilter] }) };
+    edit(task, "draft", { onSaved({ dueDate }) {
+      if (input.value === entered) {
+        input.value = "";
+        ignoreDate = false;
+      }
+      if (!dueDate) setView("inbox", titleFocus);
+      else if (dueDate > localTaskDay()) setView("upcoming", titleFocus);
+      else setView("today", titleFocus);
+    } });
+  }, { glyph: "todo", compact: true });
   const interpreted = button("", () => { ignoreDate = true; updateQuick(); input.focus(); }, { glyph: "close" });
   interpreted.className = "todo-interpret secondary-button";
   interpreted.setAttribute("aria-label", t("todoKeepAsTitle"));
   interpreted.title = t("todoKeepAsTitle");
-  form.append(input, add, interpreted);
+  form.append(input, addChecklist, add, interpreted);
   const tabs = node("nav", "todo-tabs");
   tabs.setAttribute("aria-label", t("todo"));
   const filters = node("div", "todo-filters");
@@ -83,6 +96,7 @@ export function renderTodo(container, {
     interpreted.hidden = !dueDate;
     interpreted.lastElementChild.textContent = dateText(dueDate, dueTime);
     add.disabled = pending || !title;
+    addChecklist.disabled = pending;
   }
 
   input.addEventListener("input", () => {
@@ -265,6 +279,7 @@ export function renderTodo(container, {
       summary.dataset.overdue = String(!task.done && date === task.dueDate && date < today);
       content.append(summary);
     }
+    if (task.checklist?.length) content.append(node("small", "todo-item-checklist-count", checklistProgress(task.checklist)));
     const tags = taskLabels(task);
     if (tags) content.append(tags);
     item.append(check(task), content);
@@ -294,6 +309,44 @@ export function renderTodo(container, {
     return list;
   }
 
+  function checklistProgress(items) {
+    return t("todoChecklistProgress", {
+      done: formatNumber.format(items.filter(item => item.done).length), total: formatNumber.format(items.length)
+    });
+  }
+
+  function renderChecklist(task) {
+    const section = node("div", "todo-checklist-detail");
+    const heading = node("div", "todo-checklist-heading");
+    heading.append(node("strong", "", t("todoChecklist")), node("small", "", checklistProgress(task.checklist)));
+    section.append(heading);
+    const list = node("ul", "todo-checklist-list");
+    for (const item of task.checklist) {
+      const li = node("li");
+      const row = node("label", "todo-checklist-row");
+      const check = node("input");
+      check.type = "checkbox";
+      check.id = `todo-checklist-${item.id}`;
+      check.checked = item.done;
+      check.addEventListener("change", async () => {
+        const done = check.checked;
+        const focused = document.activeElement === check;
+        check.disabled = true;
+        try {
+          if (!await change("check-task-item", { id: task.id, itemId: item.id, done })) check.checked = !done;
+        } finally {
+          check.disabled = false;
+          if (focused && document.activeElement === document.body) document.getElementById(check.id)?.focus({ preventScroll: true });
+        }
+      });
+      row.append(check, node("bdi", "", item.text));
+      li.append(row);
+      list.append(li);
+    }
+    section.append(list);
+    return section;
+  }
+
   function renderDetail(task) {
     const controls = node("div", "todo-toolbar");
     controls.append(back(), check(task), button(t("edit"), () => edit(task), { glyph: "edit", compact: true }));
@@ -301,7 +354,8 @@ export function renderTodo(container, {
     title.dir = "auto";
     const details = node("section", "todo-panel");
     details.append(title);
-    if (task.notes) {
+    if (task.checklist) details.append(renderChecklist(task));
+    else if (task.notes) {
       const notes = node("p", "todo-notes", task.notes);
       notes.dir = "auto";
       details.append(notes);
@@ -435,7 +489,7 @@ export function renderTodo(container, {
     else if (stacked) renderStack();
     else renderList(body, current, false);
     if (focusedTab && inList) tabs.querySelector(`[data-todo-view="${focusedTab}"]`)?.focus({ preventScroll: true });
-    else if (focusId && focusId !== input.id && ["todo-layout-", "todo-filter-", "todo-section-"].some(prefix => focusId.startsWith(prefix))) {
+    else if (focusId && focusId !== input.id && ["todo-layout-", "todo-filter-", "todo-section-", "todo-checklist-"].some(prefix => focusId.startsWith(prefix))) {
       document.getElementById(focusId)?.focus({ preventScroll: true });
     }
     updateQuick();

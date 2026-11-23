@@ -3,6 +3,7 @@ import {
   setAssistantHistoryEnabled, watchAssistantHistory
 } from "./assistant-history-store.js";
 import { assistantHistoryMessage } from "./ease-api.js";
+import { renderAssistantDrafts } from "./assistant-actions.js";
 
 const statuses = {
   submitted: "assistantHistorySubmitted",
@@ -16,7 +17,8 @@ const categoryLabels = {
   market: "markets", weather: "assistantWeather",
 };
 
-export function renderAssistantHistory({ node, glyph, button, t, locale, dateLocale, onCopy, onReuse, confirmClear, reportError }) {
+export function renderAssistantHistory(options) {
+  const { node, glyph, button, t, locale, dateLocale, onCopy, onReuse, confirmClear, reportError } = options;
   const root = node("section", "assistant-history");
   root.id = "assistant-history";
   root.setAttribute("aria-label", t("assistantHistory"));
@@ -96,10 +98,8 @@ export function renderAssistantHistory({ node, glyph, button, t, locale, dateLoc
         });
       }
     }));
-    const local = node("p", "assistant-history-local", t("assistantHistoryLocal"));
-    local.hidden = !enabled;
     if (!entries.length) {
-      layout([settings, local, node("p", "assistant-history-empty", t("assistantHistoryEmpty"))]);
+      layout([settings, node("p", "assistant-history-empty", t("assistantHistoryEmpty"))]);
       return;
     }
 
@@ -118,7 +118,7 @@ export function renderAssistantHistory({ node, glyph, button, t, locale, dateLoc
       item.append(row);
       list.append(item);
     }
-    const items = [settings, local];
+    const items = [settings];
     if (pageCount > 1) {
       const controls = node("nav", "assistant-history-pages");
       controls.setAttribute("aria-label", t("assistantHistory"));
@@ -188,7 +188,8 @@ export function renderAssistantHistory({ node, glyph, button, t, locale, dateLoc
       footer.append(feedback);
     }
     const focused = root.contains(document.activeElement) ? document.activeElement.id : null;
-    layout([actions, metadata, prompt, response, footer]);
+    const drafts = renderAssistantDrafts(entry.drafts, options);
+    layout([actions, metadata, prompt, response, ...(drafts ? [drafts] : []), footer]);
     if (focusBack) {
       focusBack = false;
       previous.focus();
@@ -246,7 +247,8 @@ export function renderAssistantHistory({ node, glyph, button, t, locale, dateLoc
     show(id) {
       visible = true;
       root.hidden = false;
-      openEntry(id);
+      if (id) openEntry(id);
+      else refresh();
     },
     hide() {
       visible = false;

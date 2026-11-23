@@ -23,12 +23,13 @@ CONTEXT_LIMIT = 12_000
 PRIMARY_FIRST_TEXT_TIMEOUT = 10
 REQUEST_TIMEOUT = 45
 _ACCESS_ERROR_CODES = (401, 402, 403)
-_GUIDE = {"id": "ease-assistant", "version": 4}
+_GUIDE = {"id": "ease-assistant", "version": 5}
 REMINDERS = Literal[0, 5, 10, 15, 30, 60, 1440]
 SourceId = Annotated[str, Field(pattern=r"^s[1-9][0-9]{0,5}$")]
 Day = Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
 Clock = Annotated[str, Field(pattern=r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")]
 Title = Annotated[str, Field(min_length=1, max_length=160)]
+ChecklistText = Annotated[str, Field(min_length=1, max_length=240)]
 Language = Annotated[str, Field(pattern=r"^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8}){0,2}$")]
 LabelRef = Annotated[str, Field(pattern=r"^l[1-9][0-9]?$", max_length=3)]
 RequestId = Annotated[str, Field(pattern=r"^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$")]
@@ -132,6 +133,7 @@ class TaskAction(InputModel):
     kind: Literal["task"]
     title: Title
     notes: str = Field(default="", max_length=2000)
+    checklist: list[ChecklistText] = Field(default_factory=list, max_length=24)
     date: Day | None = None
     time: Clock | None = None
     reminder: REMINDERS | None = None
@@ -211,6 +213,7 @@ After the answer, write a newline, then <EASE_RESULT> on its own line, then one 
 Its exact keys are "citations" (source ids actually used, no invented ids) and "actions" (array).
 Draft shapes:
 {"kind":"task","title":"...","notes":"...","date":"YYYY-MM-DD","time":"HH:mm","reminder":0,"source":"s1","label":"l1"}
+{"kind":"task","title":"...","checklist":["First step","Second step"],"label":"l1"}
 {"kind":"event","title":"...","date":"YYYY-MM-DD","start":"HH:mm","end":"HH:mm","notes":"...","reminder":15,"source":"s1"}
 {"kind":"snippet","title":"...","text":"..."}
 {"kind":"reply","source":"s1","body":"..."}
@@ -219,6 +222,9 @@ Omit optional fields that do not apply. Task time needs a date, and a reminder n
 are 0, 5, 10, 15, 30, 60 or 1440 minutes. Use 0 if asked to remind at the specified task time.
 For each task, choose the most relevant existing item in task_labels and put its id in label. Choose exactly one when
 task_labels is nonempty. Never invent or echo a label name in the visible answer.
+When the user asks for a checklist, propose one task whose checklist contains the steps as separate short strings,
+up to 24, with no numbering, bullets, or checkbox symbols. Leave notes empty for a checklist task. Use separate
+task actions only when the user asks for separate tasks.
 Event date is required, with optional start and end. End needs a start. A reply needs an attached mail source.
 For a flashcard, put the learning language on the front and its meaning on the back. Keep titles under 100
 characters, both sides of a flashcard under 280, and its usage notes under 360. Never supply URLs or recipients
@@ -281,6 +287,8 @@ def read_result(metadata: str, sources: list[Source], task_labels: list[TaskLabe
             ):
                 continue
             data = draft.model_dump(exclude_none=True, exclude_defaults=True)
+            if isinstance(draft, TaskAction) and draft.checklist:
+                data.pop("notes", None)
             if data.get("source") and data["source"] not in known:
                 del data["source"]
             if data not in actions:

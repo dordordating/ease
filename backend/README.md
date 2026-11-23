@@ -87,7 +87,9 @@ The assistant can resolve market quotes through the same market feeds as the ext
 
 When the browser has assistant history enabled, it sends a request UUID. The API saves successful requests with two message rows and references to the model and guide version, plus locale, category, source count, fallback status, timestamps, and optional feedback. The message rows hold the submitted prompt and visible answer. The UUID links the server records to the browser history and stays out of provider requests. Entries expire after 30 days. The cleanup job removes expired records at startup and every 15 minutes. `POST /v1/assistant/history` uses the signed-in account to delete entries, clear server history, or record a rating.
 
-Use `ease_assistant_review` from PostgreSQL to inspect unexpired records for prompt evaluation. The view excludes account identifiers. Keep request-body logging disabled.
+Each validated draft is saved in `ease_assistant_actions` with its position, kind, and structured payload. A task checklist uses its own array of steps. Draft records share the request’s expiry and are deleted with it.
+
+Use `ease_assistant_review` and `ease_assistant_action_review` from PostgreSQL to inspect unexpired exchanges and drafts for prompt evaluation. The views exclude account identifiers. Keep request-body logging disabled.
 
 ```sql
 SELECT created_at, category, model, guide_version, feedback, prompt, answer

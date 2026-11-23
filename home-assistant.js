@@ -1,11 +1,11 @@
 import { assistantPort } from "./ease-api.js";
 import { streamAnswerText } from "./assistant-answer-stream.js";
 import { renderAssistantExamples } from "./assistant-examples.js";
+import { prepareAssistantDrafts, renderAssistantDrafts } from "./assistant-actions.js";
 import { beginAssistantHistory, finishAssistantHistory, readAssistantHistory, watchAssistantHistory } from "./assistant-history-store.js";
 import { assistantExamples } from "./home-locales.js";
 import { assistantLimits } from "./home-store.js";
-import { calendarReminderLabel } from "./calendar-timing.js";
-import { localTaskDay, taskDateValid, taskTimestamp } from "./todo-store.js";
+import { localTaskDay } from "./todo-store.js";
 
 const sourceInfo = {
   page: ["assistantSourcePage", "open-window"],
@@ -13,14 +13,6 @@ const sourceInfo = {
   mail: ["assistantSourceMail", "mail"],
   tab: ["assistantSourceTabs", "spaces"]
 };
-const actionInfo = {
-  task: ["assistantTaskAction", "todo"],
-  event: ["assistantEventAction", "calendar"],
-  snippet: ["assistantSnippetAction", "clipboard"],
-  reply: ["assistantReplyAction", "reply"],
-  flashcard: ["assistantFlashcardAction", "flashcards"]
-};
-const quickActions = new Set(["task", "snippet", "flashcard"]);
 const errors = new Set([
   "assistantBusy", "assistantLimit", "assistantUnavailable", "assistantInterrupted", "assistantInputError", "assistantSignIn"
 ]);
@@ -29,14 +21,10 @@ const textLimit = (value, limit) => value.slice(0, limit).toWellFormed().trim();
 
 export function renderHomeAssistant({
   node, glyph, button, t, locale, dateLocale, calendar, navigation, capture, chooseTabs, previewSource, openSource,
-  onAction, onCopy, onSignIn, reportError
+  onAction, onCopy, onSignIn, taskLabelFor, reportError
 }) {
-  const dateFormat = new Intl.DateTimeFormat(dateLocale, { weekday: "short", month: "short", day: "numeric" });
-  const clockFormat = new Intl.DateTimeFormat(dateLocale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-  const numbers = new Intl.NumberFormat(locale);
   const root = node("section", "home-assistant");
   root.setAttribute("aria-label", t("assistantAsk"));
-  const reset = button(t("assistantClear"), "icon-button assistant-reset", { symbol: "plus", iconOnly: true, onClick: () => clearConversation() });
 
   const form = node("form", "assistant-form");
   const input = node("textarea", "assistant-input");
@@ -70,7 +58,9 @@ export function renderHomeAssistant({
   send.type = "submit";
   const hint = node("p", "assistant-context-hint", t("assistantContextHint"));
   hint.id = "assistant-context-hint";
-  form.append(attach, input, send, sourceList, hint);
+  const tools = node("div", "assistant-compose-controls");
+  tools.append(attach, send);
+  form.append(input, tools, sourceList, hint);
   const status = node("p", "assistant-status");
   status.setAttribute("role", "status");
   const signIn = button(t("signInGoogle"), "secondary-button assistant-signin", { symbol: "user", onClick: signIntoAssistant });
@@ -84,7 +74,7 @@ export function renderHomeAssistant({
   } });
   const subbar = node("div", "assistant-subbar");
   const controls = node("div", "assistant-controls");
-  controls.append(reset, navigation);
+  controls.append(navigation);
   subbar.append(examples.root, controls);
   const transcript = node("div", "assistant-transcript");
   root.append(form, subbar, access, transcript);
@@ -111,8 +101,7 @@ export function renderHomeAssistant({
     send.title = t(key);
     send.setAttribute("aria-label", t(key));
     send.disabled = !active && (!input.value.trim() || signingIn);
-    send.dataset.running = String(Boolean(active));
-    reset.hidden = !recent && !sources.length && !input.value;
+    form.dataset.running = String(Boolean(active));
     signIn.hidden = Boolean(account) && assistantStatus !== "assistantSignIn";
     signIn.disabled = signingIn;
     status.textContent = assistantStatus ? t(assistantStatus) : "";
@@ -199,18 +188,6 @@ export function renderHomeAssistant({
     }
   }
 
-  function describeTime(action) {
-    if (!taskDateValid(action.date)) return "";
-    const date = new Date(`${action.date}T12:00`);
-    const format = time => {
-      const timeAt = taskTimestamp(action.date, time);
-      return timeAt === null ? "" : clockFormat.format(timeAt);
-    };
-    const timing = [format(action.start ?? action.time), format(action.end)].filter(Boolean).join("–");
-    const reminder = action.reminder == null ? "" : calendarReminderLabel(t, numbers, action.reminder);
-    return [dateFormat.format(date), timing, reminder].filter(Boolean).join(" · ");
-  }
-
   function renderResult(turn, target) {
     const content = [];
     if (turn.citations?.length) {
@@ -225,70 +202,8 @@ export function renderHomeAssistant({
       group.append(items);
       content.push(group);
     }
-    if (turn.actions?.length) {
-      const group = node("div", "assistant-actions");
-      group.append(node("h4", "", t("assistantActions")));
-      turn.actions.forEach((action, index) => {
-        const row = node("div", "assistant-action");
-        const [label, symbol] = actionInfo[action.kind];
-        const original = turn.sources.find(source => source.id === action.source);
-        const title = node("bdi", "assistant-action-title", action.title ?? action.front ?? original?.label ?? t(label));
-        const timing = describeTime(action);
-        const taskLabel = action.kind === "task" ? turn.labels.get(action.label) ?? turn.labels.values().next().value : undefined;
-        const excerpt = action.body || action.text || action.back || action.notes;
-        const info = node("div", "assistant-action-copy");
-        info.append(title);
-        if (timing) info.append(node("small", "", timing));
-        if (taskLabel) {
-          const labelChip = node("bdi", "todo-label assistant-task-label", taskLabel.name);
-          labelChip.style.setProperty("--label-color", taskLabel.color);
-          info.append(labelChip);
-        }
-        if (excerpt) {
-          const detail = node("p", "", excerpt);
-          detail.dir = "auto";
-          info.append(detail);
-        }
-        const applied = turn.saved.has(index);
-        const status = action.kind === "reply" ? "mailSent" : "assistantSaved";
-        const buttons = node("div", "assistant-action-buttons");
-        const review = button(t(applied ? status : label), "assistant-action-review", {
-          symbol: applied ? "check" : "arrow", onClick: () => apply(false)
-        });
-        const quick = !applied && quickActions.has(action.kind) ? button(t("assistantSaveNow"), "assistant-action-quick", {
-          symbol: "check", onClick: () => apply(true)
-        }) : undefined;
-        review.id = `assistant-review-${turn.id}-${index}`;
-        review.disabled = applied;
-        buttons.append(review);
-        if (quick) buttons.append(quick);
-        row.append(glyph(symbol, "assistant-action-icon"), info, buttons);
-        group.append(row);
-
-        async function apply(immediately) {
-          if (review.disabled) return;
-          review.disabled = true;
-          if (quick) quick.disabled = true;
-          try {
-            await onAction(action, original, {
-              immediately, labelId: taskLabel?.id,
-              onSaved() {
-                turn.saved.add(index);
-                review.replaceChildren(glyph("check"), node("span", "", t(status)));
-                review.disabled = true;
-                quick?.remove();
-              }
-            });
-          } catch {
-            reportError("saveFailed");
-          } finally {
-            review.disabled = turn.saved.has(index);
-            if (quick) quick.disabled = false;
-          }
-        }
-      });
-      content.push(group);
-    }
+    const drafts = renderAssistantDrafts(turn.drafts, { node, button, glyph, t, locale, dateLocale, taskLabelFor, onAction, reportError }, turn.saved);
+    if (drafts) content.push(drafts);
     target.replaceChildren(...content);
     target.hidden = !content.length;
   }
@@ -424,9 +339,7 @@ export function renderHomeAssistant({
         } else if (packet.type === "done") {
           const references = Array.isArray(packet.citations) ? packet.citations : [];
           turn.citations = turn.sources.filter(source => references.includes(source.id));
-          turn.actions = (Array.isArray(packet.actions) ? packet.actions : []).filter(action => action
-            && Object.hasOwn(actionInfo, action.kind) && (action.kind !== "reply"
-              || turn.sources.some(source => source.id === action.source && source.kind === "mail")));
+          turn.drafts = prepareAssistantDrafts(packet.actions, turn.sources, turn.labels);
           turn.complete = true;
           turn.execution = packet.execution;
           finish();
@@ -452,14 +365,14 @@ export function renderHomeAssistant({
       const duration = performance.now() - started;
       history.then(written => {
         if (written) return finishAssistantHistory(owner, turn.id, {
-          answer: turn.answer, actions: turn.actions, execution: turn.execution, error, duration,
+          answer: turn.answer, drafts: turn.drafts, execution: turn.execution, error, duration,
         });
       }).catch(() => { if (owner === account) reportError("assistantHistoryFailed"); });
       reflect();
     }
   }
 
-  function clearConversation(focus = true) {
+  function clearConversation() {
     active?.finish("assistantStopped");
     recentRevision += 1;
     recent = undefined;
@@ -469,7 +382,6 @@ export function renderHomeAssistant({
     assistantStatus = undefined;
     transcript.replaceChildren();
     renderSources();
-    if (focus) input.focus();
   }
 
   async function signIntoAssistant() {
@@ -535,7 +447,7 @@ export function renderHomeAssistant({
     updateLanguages(next) { languages = next; },
     updateAccount(next) {
       if (account !== next) {
-        if (account) clearConversation(false);
+        if (account) clearConversation();
         account = next;
         if (account) restoreRecent();
       }
@@ -557,7 +469,7 @@ export function renderHomeAssistant({
     dispose() {
       unsubscribeHistory();
       this.hide();
-      clearConversation(false);
+      clearConversation();
     }
   };
 }

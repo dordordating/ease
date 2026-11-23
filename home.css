@@ -55,6 +55,7 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
 }
 
 .assistant-subbar {
+  align-items: flex-start;
   gap: 4px;
 }
 
@@ -79,15 +80,16 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
 }
 
 .assistant-form {
+  --assistant-control-size: clamp(25px, calc(var(--control-height) - 4px), 32px);
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: end;
-  column-gap: 3px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 5px;
   padding: 5px;
-  border: 1px solid var(--stroke);
+  border: 1px solid color-mix(in srgb, var(--accent) 46%, var(--stroke));
   border-radius: 12px;
-  background: var(--surface);
-  box-shadow: 0 3px 10px color-mix(in srgb, var(--shadow) 47%, transparent);
+  background: linear-gradient(153deg, color-mix(in srgb, var(--accent) 6%, var(--surface)), var(--surface) 72%);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 10%, transparent);
+  transition: border-color .16s ease, box-shadow .16s ease;
 }
 
 .assistant-form:focus-within {
@@ -95,11 +97,21 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
   box-shadow: 0 0 0 2px var(--accent-wash);
 }
 
+.assistant-form[data-running="true"] {
+  border-color: var(--accent);
+  animation: assistant-compose-pulse 2.1s ease-in-out infinite alternate;
+}
+
+@keyframes assistant-compose-pulse {
+  from { box-shadow: 0 0 0 1px var(--accent-wash); }
+  to { box-shadow: 0 0 0 2px var(--accent-wash), 0 0 12px var(--accent-wash); }
+}
+
 .assistant-input {
   inline-size: 100%;
-  min-block-size: calc(2lh + 4px);
+  min-block-size: calc(2lh + 12px);
   max-block-size: 140px;
-  padding: 2px 3px;
+  padding: 6px;
   resize: none;
   border: 0;
   outline: 0;
@@ -115,6 +127,12 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
   color: var(--quiet);
 }
 
+.assistant-compose-controls {
+  display: grid;
+  align-self: end;
+  gap: 3px;
+}
+
 .assistant-attach {
   position: relative;
   min-inline-size: 0;
@@ -124,10 +142,9 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  min-block-size: var(--control-height);
-  min-inline-size: var(--control-height);
-  padding: 0 5px;
+  inline-size: var(--assistant-control-size);
+  block-size: var(--assistant-control-size);
+  padding: 0;
   border-radius: 8px;
   background: transparent;
   color: var(--muted);
@@ -153,7 +170,7 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
 .assistant-attach-options {
   position: absolute;
   z-index: 3;
-  inset-inline-start: 0;
+  inset-inline-end: 0;
   inset-block-start: calc(100% + 4px);
   display: grid;
   gap: 2px;
@@ -187,7 +204,6 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
 
 .assistant-send {
   flex: none;
-  inline-size: calc(var(--control-height) + 2px);
   background: var(--accent);
   color: var(--accent-ink);
 }
@@ -282,43 +298,36 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
   min-block-size: 31px;
 }
 
-.assistant-example, .assistant-example-next {
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--accent);
-}
-
 .assistant-example {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-content: center;
   flex: 1;
   min-inline-size: 0;
   min-block-size: 31px;
   padding: 2px 4px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--accent);
   text-align: start;
 }
 
-.assistant-example:hover, .assistant-example-next:hover {
+.assistant-example:hover {
   background: var(--accent-wash);
 }
 
-.assistant-example svg, .assistant-example-next svg {
-  inline-size: 13px;
-  block-size: 13px;
-}
-
-.assistant-example-text {
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+.assistant-example-fit, .assistant-example-text {
+  grid-area: 1 / 1;
+  align-self: start;
   font-size: 11px;
-  line-height: 1.35;
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 
-.assistant-examples[data-typing="true"] .assistant-example-text::after {
+.assistant-example-fit { visibility: hidden; }
+
+.assistant-example-fit::after, .assistant-examples[data-typing="true"] .assistant-example-text::after {
   display: inline-block;
   inline-size: 1px;
   block-size: 1em;
@@ -326,16 +335,14 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
   vertical-align: -.12em;
   background: currentColor;
   content: "";
+}
+
+.assistant-example-text::after {
   animation: assistant-caret .95s step-end infinite;
 }
 
 @keyframes assistant-caret {
   50% { opacity: 0; }
-}
-
-.assistant-example-next {
-  inline-size: 25px;
-  block-size: 25px;
 }
 
 .assistant-transcript:empty {
@@ -425,7 +432,8 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .assistant-shimmer span, .assistant-example-text::after { animation: none; }
+  .assistant-shimmer span, .assistant-example-text::after, .assistant-form[data-running="true"] { animation: none; }
+  .assistant-form { transition: none; }
 }
 
 .assistant-turn-feedback {
@@ -449,7 +457,7 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
   border-block-start: 1px solid var(--stroke-subtle);
 }
 
-.assistant-result h4 {
+.assistant-result h4, .assistant-actions-heading {
   margin: 0;
   color: var(--quiet);
   font-size: 10.5px;
@@ -498,6 +506,31 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
   display: block;
   color: var(--muted);
   font-size: 10.5px;
+}
+
+.assistant-action-checklist {
+  display: grid;
+  gap: 2px;
+  margin: 3px 0;
+  padding: 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  list-style: none;
+}
+
+.assistant-action-checklist li {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+
+.assistant-action-checklist li::before {
+  flex: none;
+  inline-size: 4px;
+  block-size: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  content: "";
 }
 
 .assistant-action-copy p {
@@ -903,7 +936,7 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
   cursor: pointer;
 }
 
-.assistant-history-local, .assistant-history-meta, .assistant-history-pages > span {
+.assistant-history-meta, .assistant-history-pages > span {
   color: var(--quiet);
   font-size: 10.5px;
 }

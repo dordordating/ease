@@ -369,7 +369,6 @@ function moduleNeighbors(id) {
 
 function bindModuleReorder(tab, id) {
   tab.draggable = true;
-  tab.title += `\n${t("moduleOrderHint")}`;
   tab.setAttribute("aria-description", t("moduleOrderHint"));
   tab.setAttribute("aria-keyshortcuts", "Alt+ArrowUp Alt+ArrowDown");
   tab.addEventListener("dragstart", (event) => {
@@ -1116,7 +1115,7 @@ const moduleSearchSources = {
     label: "todo",
     entries: workspace.tabs.includes("todo") ? (workspace.todo?.items ?? []).map(task => ({
       id: `task-result-${task.id}`, title: task.title, detail: task.notes || (task.done ? t("todoCompleted") : undefined),
-      keywords: [task.title, task.notes, task.dueDate, task.planDate,
+      keywords: [task.title, task.notes, task.dueDate, task.planDate, ...(task.checklist ?? []).map(item => item.text),
         workspace.spaces?.find(space => space.id === task.spaceId)?.name,
         ...(workspace.todo?.labels ?? []).filter(label => task.labelIds?.includes(label.id)).map(label => label.name)],
       open: () => openTodoTask(task.id)
@@ -1607,6 +1606,7 @@ function showHome(dateLocale) {
       previewSource: previewHomeSource,
       openSource: openHomeSource,
       onAction: reviewAssistantAction,
+      taskLabelFor: assistantTaskLabel,
       onCopy: copyWorkspaceText,
       confirmClear(clear) {
         if (editor.open) return;
@@ -1755,6 +1755,11 @@ function mailTaskSource(message) {
   };
 }
 
+function assistantTaskLabel(id) {
+  const labels = workspace.todo?.labels ?? [];
+  return labels.find(label => label.id === id) ?? labels[0];
+}
+
 async function reviewAssistantAction(action, source, { immediately, labelId, onSaved }) {
   if (editor.open) return;
   const message = source?.message;
@@ -1766,10 +1771,12 @@ async function reviewAssistantAction(action, source, { immediately, labelId, onS
   }
   switch (action.kind) {
     case "task": {
-      const labels = workspace.todo?.labels ?? [];
-      const taskLabel = labels.find(label => label.id === labelId) ?? labels[0];
+      const taskLabel = assistantTaskLabel(labelId);
       const task = {
         title: action.title, notes: action.notes, dueDate: action.date, dueTime: action.time, reminderMinutes: action.reminder,
+        ...(action.checklist?.length && {
+          checklist: action.checklist.map(text => ({ id: crypto.randomUUID(), text, done: false }))
+        }),
         spaceId: workspace.spaces.some(space => space.id === source?.spaceId) ? source.spaceId : undefined,
         labelIds: taskLabel ? [taskLabel.id] : [],
         source: message ? mailTaskSource(message) : url ? { kind: "web", url } : undefined
@@ -2063,6 +2070,85 @@ function editTodoLabel(label) {
   name.focus();
 }
 
+function editTodoContent(fields, task) {
+  const choices = node("fieldset", "choice-group todo-content-types");
+  choices.setAttribute("aria-label", t("todoContentType"));
+  const switcher = node("div", "choice-options");
+  const initial = task.checklist ? "checklist" : "notes";
+  for (const [value, label, symbol] of [["notes", "calendarNotes", "edit"], ["checklist", "todoChecklist", "todo"]]) {
+    const { label: option, face } = radioOption("todo-content-type", value, initial, "choice-option");
+    face.append(glyph(symbol), node("span", "", t(label)));
+    switcher.append(option);
+  }
+  choices.append(switcher);
+
+  const textRow = node("div", "field");
+  const notes = node("textarea");
+  notes.dir = "auto";
+  notes.maxLength = taskLimits.notes;
+  notes.rows = 3;
+  notes.placeholder = t("calendarNotes");
+  notes.setAttribute("aria-label", t("calendarNotes"));
+  notes.value = task.notes ?? "";
+  textRow.append(notes);
+
+  const checklist = node("div", "todo-checklist-editor");
+  const rows = node("div", "todo-checklist-rows");
+  const add = button(t("todoChecklistAdd"), "secondary-button todo-checklist-add", {
+    symbol: "plus", onClick: () => addItem()?.focus()
+  });
+  checklist.append(rows, add);
+  fields.append(choices, textRow, checklist);
+
+  function addItem(item) {
+    if (rows.childElementCount >= taskLimits.checklistItems) return undefined;
+    const row = node("div", "todo-checklist-edit-row");
+    row.dataset.id = item?.id ?? crypto.randomUUID();
+    const check = node("input");
+    check.type = "checkbox";
+    check.checked = item?.done === true;
+    check.setAttribute("aria-label", t("todoComplete"));
+    const input = node("input", "translator-select");
+    input.type = "text";
+    input.dir = "auto";
+    input.maxLength = taskLimits.checklistText;
+    input.value = item?.text ?? "";
+    input.placeholder = t("todoChecklistItem");
+    input.setAttribute("aria-label", t("todoChecklistItem"));
+    input.addEventListener("keydown", event => {
+      if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      if (input.value.trim()) addItem()?.focus();
+    });
+    const remove = button(t("remove"), "icon-button", { symbol: "close", iconOnly: true, onClick: () => {
+      const neighbor = row.nextElementSibling ?? row.previousElementSibling;
+      row.remove();
+      add.disabled = false;
+      (neighbor?.querySelector('input[type="text"]') ?? add).focus();
+    } });
+    row.append(check, input, remove);
+    rows.append(row);
+    add.disabled = rows.childElementCount === taskLimits.checklistItems;
+    return input;
+  }
+
+  function select(type) {
+    textRow.hidden = type === "checklist";
+    checklist.hidden = !textRow.hidden;
+    if (!checklist.hidden && !rows.childElementCount) addItem();
+  }
+
+  for (const item of task.checklist ?? []) addItem(item);
+  select(initial);
+  switcher.addEventListener("change", event => select(event.target.value));
+
+  return () => checklist.hidden ? { notes: notes.value, checklist: null } : {
+    notes: "", checklist: Array.from(rows.children, row => ({
+      id: row.dataset.id, text: row.querySelector('input[type="text"]').value.trim(), done: row.firstElementChild.checked
+    })).filter(item => item.text)
+  };
+}
+
 function editTodo(task, mode, { onSaved } = {}) {
   if (editor.open) return;
   if (mode === "remove") {
@@ -2084,7 +2170,7 @@ function editTodo(task, mode, { onSaved } = {}) {
     const end = usePlan ? planEnd.value : "";
     const keepLegacy = reminder.value === "legacy";
     const saved = await updateTodo("save-task", {
-      id: task.id, title: title.value, notes: notes.value, labelIds: [...labelIds],
+      id: task.id, title: title.value, ...content(), labelIds: [...labelIds],
       ...(isDraft ? { source: task.source, showModule: true } : {}),
       ...(spaceSelect ? { spaceId: spaceSelect.value } : {}),
       dueDate: due.value, dueTime: dueTime.value, planDate, planTime: start, planEnd: end,
@@ -2093,11 +2179,11 @@ function editTodo(task, mode, { onSaved } = {}) {
       reminderDate: keepLegacy ? task.reminderDate : "",
       reminderTime: keepLegacy ? task.reminderTime : ""
     });
-    if (saved) onSaved?.();
+    if (saved) onSaved?.({ dueDate: due.value });
     return saved;
   });
   const title = field(fields, { label: t("todoTitle"), value: task.title, required: true, maxLength: taskLimits.title });
-  const notes = field(fields, { label: t("calendarNotes"), value: task.notes, maxLength: taskLimits.notes, multiline: true });
+  const content = editTodoContent(fields, task);
   let spaceSelect;
   if (workspace.spaces.length) {
     const selection = node("label", "field");

@@ -2744,11 +2744,11 @@ button.calendar-event-content:hover {
 }
 
 .calendar-time-fields {
+  align-items: start;
   margin-block-start: 0;
 }
 
 .calendar-end-fields {
-  position: relative;
   display: grid;
   align-content: start;
   gap: 4px;
@@ -2759,15 +2759,14 @@ button.calendar-event-content:hover {
   min-block-size: 20px;
 }
 
-.calendar-end-fields .calendar-field > span {
-  padding-inline-end: 25px;
-  overflow-wrap: anywhere;
+.calendar-end-time {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
 }
 
 .calendar-remove-end {
-  position: absolute;
-  inset-block-start: -3px;
-  inset-inline-end: 0;
   inline-size: 24px;
   block-size: 24px;
   border-color: var(--stroke-subtle);
@@ -5250,7 +5249,7 @@ body[data-surface="panel"] .mail-reader > .mail-attachments {
 
 .todo-quick {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 5px;
   padding: 4px;
@@ -5466,6 +5465,72 @@ body[data-surface="panel"] .mail-reader > .mail-attachments {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+.todo-content-types {
+  margin-block-end: 0;
+}
+
+.todo-checklist-detail, .todo-checklist-editor, .todo-checklist-rows, .todo-checklist-list {
+  display: grid;
+  gap: 4px;
+  min-inline-size: 0;
+}
+
+.todo-checklist-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.todo-checklist-heading, .todo-checklist-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-inline-size: 0;
+}
+
+.todo-checklist-heading {
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.todo-checklist-row {
+  min-block-size: 26px;
+  padding: 3px 6px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 6px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.todo-checklist-row bdi { overflow-wrap: anywhere; }
+
+.todo-checklist-row:has(:checked) bdi {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.todo-item-checklist-count {
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.todo-checklist-edit-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.todo-checklist-row input, .todo-checklist-edit-row input[type="checkbox"] {
+  flex: none;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.todo-checklist-edit-row .icon-button { inline-size: 27px; block-size: 27px; }
+.todo-checklist-add { justify-self: start; }
 
 .todo-edit-fields {
   display: grid;

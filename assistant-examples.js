@@ -6,19 +6,20 @@ export function renderAssistantExamples({ node, button, t, locale, onSelect }) {
   const motion = matchMedia("(prefers-reduced-motion: reduce)");
   const root = node("div", "assistant-examples");
   const example = button("", "assistant-example", { iconOnly: true, onClick: () => onSelect(current.prompt) });
+  const fit = node("span", "assistant-example-fit");
+  fit.dir = "auto";
+  fit.setAttribute("aria-hidden", "true");
   const text = node("span", "assistant-example-text");
   text.dir = "auto";
   text.setAttribute("aria-hidden", "true");
-  example.append(text);
-  const next = button(t("assistantNextExample"), "icon-button assistant-example-next", {
-    symbol: "refresh", iconOnly: true, onClick: showNext
-  });
-  root.append(example, next);
+  example.append(fit, text);
+  root.append(example);
 
   let queue = [];
   let current;
   let characters = [];
   let position = 0;
+  let phase = "typing";
   let timer;
   let visible = false;
 
@@ -26,26 +27,29 @@ export function renderAssistantExamples({ node, button, t, locale, onSelect }) {
     text.textContent = characters.slice(0, position).join("");
   }
 
-  function advance(erase) {
-    position = erase ? Math.max(0, position - 2) : Math.min(characters.length, position + 2);
+  function advance() {
+    if (phase === "pause") return showNext();
+    if (phase === "read") phase = "erase";
+    position += phase === "erase" ? -1 : 1;
     draw();
-    if (erase && position === 0) timer = setTimeout(showNext, 150);
-    else if (!erase && position === characters.length) timer = setTimeout(() => advance(true), 2400);
-    else timer = setTimeout(() => advance(erase), erase ? 18 : 42);
+    if (position === 0) phase = "pause";
+    if (position === characters.length) phase = "read";
+    schedule();
   }
 
-  function resume() {
+  function schedule() {
     clearTimeout(timer);
-    const playing = visible && !document.hidden && !root.matches(":has(:focus-visible)");
+    const playing = visible && !document.hidden;
     root.dataset.typing = String(playing && !motion.matches);
-    if (!playing || motion.matches) {
+    if (!playing) return;
+    if (motion.matches) {
       position = characters.length;
+      phase = "read";
       draw();
-      if (playing) timer = setTimeout(showNext, 4800);
-    } else {
-      timer = position === characters.length
-        ? setTimeout(() => advance(true), 2400)
-        : setTimeout(() => advance(false), 42);
+      if (!example.matches(":focus-visible")) timer = setTimeout(showNext, 6500);
+    } else if (!example.matches(":focus-visible") || phase === "typing") {
+      const delay = { typing: 64, read: 4200, erase: 24, pause: 310 };
+      timer = setTimeout(advance, delay[phase]);
     }
   }
 
@@ -61,30 +65,33 @@ export function renderAssistantExamples({ node, button, t, locale, onSelect }) {
     current = queue.pop();
     characters = Array.from(graphemes.segment(current.prompt), item => item.segment);
     position = 0;
+    phase = "typing";
+    fit.textContent = current.prompt;
     draw();
     const label = t("assistantUseExample", { prompt: current.prompt });
     example.setAttribute("aria-label", label);
     example.title = current.prompt;
-    resume();
+    schedule();
   }
 
-  root.addEventListener("focusin", resume);
-  root.addEventListener("focusout", () => queueMicrotask(resume));
+  root.addEventListener("focusin", schedule);
+  root.addEventListener("focusout", () => queueMicrotask(schedule));
 
   return {
     root,
     show() {
       visible = true;
-      document.addEventListener("visibilitychange", resume);
-      motion.addEventListener("change", resume);
-      if (current) resume();
+      document.addEventListener("visibilitychange", schedule);
+      motion.addEventListener("change", schedule);
+      if (current) schedule();
       else showNext();
     },
     hide() {
       visible = false;
       clearTimeout(timer);
-      document.removeEventListener("visibilitychange", resume);
-      motion.removeEventListener("change", resume);
+      root.dataset.typing = "false";
+      document.removeEventListener("visibilitychange", schedule);
+      motion.removeEventListener("change", schedule);
     }
   };
 }

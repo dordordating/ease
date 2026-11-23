@@ -54,6 +54,12 @@ class AssistantInputTest(TestCase):
         result = assistant.read_result(json.dumps({"actions": items}), [], [assistant.TaskLabel(id="l2", name="Work")])
         self.assertEqual([item.get("label") for item in result["actions"]], ["l2", None, None])
 
+    def test_checklist_steps_have_their_own_fields(self):
+        draft = {"kind": "task", "title": "Ship the extension", "checklist": [" Review the package ", "Publish"],
+                 "notes": "1. Review the package\n2. Publish"}
+        result = assistant.read_result(json.dumps({"actions": [draft]}), [])
+        self.assertEqual(result["actions"], [{"kind": "task", "title": "Ship the extension", "checklist": ["Review the package", "Publish"]}])
+
 
 def delta(text):
     chunk = {"choices": [{"delta": {"content": text}, "finish_reason": None}]}
@@ -108,7 +114,7 @@ class AssistantFallbackTest(IsolatedAsyncioTestCase):
         self.assertEqual(events[0], {"type": "delta", "text": "Primary draft"})
         self.assertEqual(events[-1]["actions"][0]["date"], "2026-11-24")
         self.assertEqual(events[-1]["execution"], {
-            "guide": {"id": "ease-assistant", "version": 4}, "model": PRIMARY, "fallback": False,
+            "guide": {"id": "ease-assistant", "version": 5}, "model": PRIMARY, "fallback": False,
         })
 
     async def test_provider_error_tries_fallback_with_the_same_payload_and_privacy(self):

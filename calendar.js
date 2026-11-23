@@ -176,8 +176,10 @@ export function renderCalendar(container, {
             <div class="calendar-end-fields" hidden>
               <div class="calendar-field" data-calendar-time="end">
                 <span data-label="calendarEnds"></span>
+                <div class="calendar-end-time">
+                  <button type="button" class="icon-button calendar-remove-end">${icon('close')}</button>
+                </div>
               </div>
-              <button type="button" class="icon-button calendar-remove-end">${icon('close')}</button>
               <label class="calendar-end-next-day">
                 <input name="endNextDay" type="checkbox">
                 <span data-label="calendarEndNextDay"></span>
@@ -263,7 +265,7 @@ export function renderCalendar(container, {
   const startField = createTimePicker({ locale, t, label: t('calendarStarts') });
   const endField = createTimePicker({ locale, t, label: t('calendarEnds') });
   editor.querySelector('[data-calendar-time="start"]').append(startField.element);
-  editor.querySelector('[data-calendar-time="end"]').append(endField.element);
+  removeEnd.before(endField.element);
   const endNextDay = editor.elements.namedItem('endNextDay');
   const reminderField = editor.querySelector('.calendar-reminder-field');
   const reminder = editor.elements.namedItem('reminder');

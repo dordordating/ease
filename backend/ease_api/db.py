@@ -1,6 +1,7 @@
 """PostgreSQL persistence for users, quotas, workspaces and assistant history."""
 
 from asyncio import Lock, timeout
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +10,7 @@ from uuid import UUID, uuid4
 
 from psycopg import Error
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 _MIGRATIONS = Path(__file__).with_name("migrations")
@@ -147,6 +149,7 @@ class Database:
 
     async def complete_assistant_request(
         self, user_id: UUID, request_id: UUID, prompt: str, answer: str, execution: dict, category: str,
+        actions: Sequence[dict] = (),
     ) -> bool:
         guide = execution["guide"]
         model = execution["model"]
@@ -170,6 +173,14 @@ class Database:
                     INSERT INTO ease_assistant_messages (user_id, request_id, role, body)
                     VALUES (%s, %s, 'prompt', %s), (%s, %s, 'answer', %s)
                 """, (user_id, request_id, prompt.replace("\0", "\ufffd"), user_id, request_id, answer.replace("\0", "\ufffd")))
+                if actions:
+                    await connection.cursor().executemany("""
+                        INSERT INTO ease_assistant_actions (user_id, request_id, position, kind, payload)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, [
+                        (user_id, request_id, position, action["kind"], Jsonb({key: value for key, value in action.items() if key != "kind"}))
+                        for position, action in enumerate(actions, start=1)
+                    ])
             return True
 
     async def delete_assistant_history(self, user_id: UUID, request_id: UUID | None = None, *, pending=False) -> None:
