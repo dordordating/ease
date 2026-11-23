@@ -5391,7 +5391,7 @@ body[data-surface="panel"] .mail-reader > .mail-attachments {
 }
 
 .todo-item-date,
-.todo-edit-date {
+.todo-reminder-hint {
   color: var(--muted);
   font-size: 10px;
 }
@@ -5500,8 +5500,9 @@ body[data-surface="panel"] .mail-reader > .mail-attachments {
 .todo-edit-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 5px;
-  margin-block-start: 4px;
+  align-items: start;
+  gap: 6px;
+  padding: 4px 7px 7px;
 }
 
 .todo-edit-fields input {
@@ -5519,4 +5520,221 @@ body[data-surface="panel"] .mail-reader > .mail-attachments {
 .calendar-todo-row .calendar-event-card {
   flex: 1;
   border-inline-start-color: var(--accent);
+}
+
+.todo-layout-choices,
+.todo-filters,
+.todo-labels {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-inline-size: 0;
+}
+
+.todo-layout-choices > button {
+  flex: 1 1 100px;
+  justify-content: center;
+  white-space: normal;
+}
+
+:is(.todo-layout-choices, .todo-filters, .todo-assign-labels) button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.todo-label-heading {
+  justify-content: space-between;
+}
+
+.todo-label-heading h3 {
+  font-size: 12px;
+}
+
+.todo-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-inline-size: 100%;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--label-color) 36%, var(--stroke-subtle));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--label-color) 10%, var(--surface));
+  color: var(--text);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+
+.todo-label::before {
+  flex: none;
+  inline-size: 6px;
+  block-size: 6px;
+  border-radius: 50%;
+  background: var(--label-color);
+  content: "";
+}
+
+:is(.todo-filters, .todo-assign-labels) button {
+  min-block-size: 25px;
+  padding: 2px 5px;
+}
+
+:is(.todo-filters, .todo-assign-labels) button > .todo-label {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.todo-assign-labels .todo-labels {
+  margin-block-start: 4px;
+}
+
+.todo-label-color-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.todo-label-color-field input {
+  inline-size: 48px;
+  block-size: 32px;
+  padding: 3px;
+  border: 1px solid var(--stroke);
+  border-radius: 7px;
+  background: var(--subtle);
+  cursor: pointer;
+}
+
+.todo-remove-label {
+  justify-self: start;
+  color: var(--danger);
+}
+
+.todo-section-content {
+  display: grid;
+  gap: 4px;
+  padding: 4px 6px 6px;
+}
+
+.todo-section > summary {
+  color: var(--text);
+}
+
+.todo-section .todo-empty {
+  border-color: transparent;
+}
+
+.todo-edit-fields :is(.date-picker-trigger, input[type="time"]) {
+  min-block-size: 35px;
+}
+
+.todo-edit-fields input[type="time"] {
+  direction: ltr;
+  padding-block: 4px;
+}
+
+.todo-reminder-fields {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.todo-reminder-hint,
+.todo-overnight {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.date-picker-trigger {
+  justify-content: space-between;
+  inline-size: 100%;
+  min-inline-size: 0;
+  border-color: var(--stroke-subtle);
+  background: var(--surface);
+  text-align: start;
+}
+
+.date-picker-trigger > span {
+  min-inline-size: 0;
+}
+
+.date-picker-trigger svg {
+  inline-size: 13px;
+  block-size: 13px;
+}
+
+.date-picker-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.date-picker-panel {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 5px;
+  min-inline-size: 0;
+  padding: 6px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.date-picker-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  text-align: center;
+}
+
+.date-picker-heading .icon-button {
+  inline-size: 26px;
+  block-size: 26px;
+}
+
+.date-picker-heading svg {
+  inline-size: 14px;
+  block-size: 14px;
+}
+
+.date-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 2px;
+  text-align: center;
+}
+
+.date-picker-weekdays {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.date-picker-weekdays > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.date-picker-day {
+  min-block-size: 26px;
+  padding: 2px 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+}
+
+.date-picker-day:hover {
+  background: var(--hover);
+}
+
+.date-picker-day[aria-current="date"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.date-picker-day[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
 }

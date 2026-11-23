@@ -1,9 +1,10 @@
 import { defaultCalendar } from "./workspace-data.js";
 import { mailMessageLink } from "./mail-api.js";
+import { calendarReminderOffsets } from "./calendar-timing.js";
+export { calendarReminderOffsets, calendarReminderSchedule } from "./calendar-timing.js";
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
 const timePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/u;
-export const calendarReminderOffsets = Object.freeze([0, 5, 10, 15, 30, 60, 1440]);
 
 function clean(value, limit) {
   return typeof value === "string" ? value.trim().slice(0, limit) : "";
@@ -15,18 +16,6 @@ function validateDate(date) {
   if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString().slice(0, 10) !== date) {
     throw new Error("Invalid date");
   }
-}
-
-export function calendarReminderSchedule(event) {
-  if (event?.readOnly || !datePattern.test(event?.date) || !timePattern.test(event.start)
-    || !calendarReminderOffsets.includes(event.reminderMinutes)) return null;
-  const start = new Date(`${event.date}T${event.start}:00`);
-  const [year, month, day] = event.date.split("-").map(Number);
-  const [hours, minutes] = event.start.split(":").map(Number);
-  // Reject normalized dates and times that do not exist on a daylight-saving transition.
-  if (start.getFullYear() !== year || start.getMonth() + 1 !== month || start.getDate() !== day
-    || start.getHours() !== hours || start.getMinutes() !== minutes) return null;
-  return { startAt: start.getTime(), reminderAt: start.getTime() - event.reminderMinutes * 60_000 };
 }
 
 export function changeCalendarPreferences(workspace, patch) {

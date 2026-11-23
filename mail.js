@@ -280,9 +280,9 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     if (blockedMailSender(message, account?.blockedSenders)) opened = undefined;
   }
 
-  async function openMessage(message) {
+  async function openMessage(message, returnTo) {
     folder = message.folder ?? "inbox";
-    const choice = { message, loading: true };
+    const choice = { message, loading: true, returnTo };
     opened = choice;
     error = undefined;
     render();
@@ -297,10 +297,14 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
 
   function renderReader() {
     if (!opened) return;
-    const { message, loading, result, error: readError } = opened;
+    const { message, loading, result, error: readError, returnTo } = opened;
     const account = accounts.find(item => item.id === message.accountId);
     const actions = element("div", "mail-provider-buttons");
-    actions.append(control("calendarBack", null, () => { opened = undefined; render(); }));
+    actions.append(control("calendarBack", null, () => {
+      opened = undefined;
+      if (returnTo) returnTo();
+      else render();
+    }));
     const replyButton = control("mailReply", "reply", () => respondTo(message, result, false), true);
     const forwardButton = control("mailForward", "forward", () => respondTo(message, result, true), true);
     replyButton.disabled = !result || busy;
@@ -319,7 +323,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
       && (readError === "mailReadPermission" || readError === "mailReconnect")) {
       const upgrade = control("mailReadPermissionAction", null, async () => {
         if (await act("upgrade", { id: account.id, provider: account.provider, send: account.capabilities.send,
-          mark: account.capabilities.mark })) openMessage(message);
+          mark: account.capabilities.mark })) openMessage(message, returnTo);
       });
       upgrade.disabled = busy;
       reader.append(upgrade);
@@ -347,7 +351,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
         if (account && account.provider !== "imap" && !account.capabilities.mark) {
           const upgrade = control("mailMarkPermission", null, async () => {
             if (await act("upgrade", { id: account.id, provider: account.provider, send: account.capabilities.send, mark: true })) {
-              openMessage(message);
+              openMessage(message, returnTo);
             }
           });
           upgrade.disabled = busy;

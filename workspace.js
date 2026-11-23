@@ -2,7 +2,9 @@ import { renderCalendar } from "./calendar.js";
 import { renderTranslator } from "./translator.js";
 import { renderFlashcards } from "./flashcards.js";
 import { renderTodo } from "./todo.js";
-import { defaultTodo, localTaskDay, taskCalendarEntries, taskLimits } from "./todo-store.js";
+import { collapsedTaskKey, defaultTodo, localTaskDay, taskCalendarEntries, taskLimits, taskSections } from "./todo-store.js";
+import { calendarReminderLabel, calendarReminderOffsets, calendarSuggestedEnd } from "./calendar-timing.js";
+import { createDatePicker } from "./date-picker.js";
 import { quickTaskKey, takeQuickTask } from "./todo-background.js";
 import { renderMarkets } from "./markets.js";
 import { inboxMessages, renderMail } from "./mail.js";
@@ -86,6 +88,7 @@ let flashcardController;
 let flashcardLocale;
 let todoController;
 let todoLocale;
+const collapsedTodo = new Set();
 let marketsController;
 let marketsLocale;
 let marketAlertState = {};
@@ -1092,7 +1095,8 @@ const moduleSearchSources = {
     label: "todo",
     entries: workspace.tabs.includes("todo") ? (workspace.todo?.items ?? []).map(task => ({
       id: `task-result-${task.id}`, title: task.title, detail: task.notes || (task.done ? t("todoCompleted") : undefined),
-      keywords: [task.title, task.notes, task.dueDate, task.planDate],
+      keywords: [task.title, task.notes, task.dueDate, task.planDate,
+        ...(workspace.todo?.labels ?? []).filter(label => task.labelIds?.includes(label.id)).map(label => label.name)],
       open: () => openTodoTask(task.id)
     })) : []
   }),
@@ -1415,7 +1419,19 @@ function render() {
     todoController = renderTodo(body, {
       t, icon, locale: workspace.locale, dateLocale, settingsButton: settings,
       state: workspace.todo ?? defaultTodo, events: appointmentEvents(),
-      change: updateTodo, complete: completeTodo, openSource: openTodoSource, edit: editTodo,
+      change: updateTodo, complete: completeTodo, openSource: openTodoSource, edit: editTodo, editLabel: editTodoLabel,
+      collapsed: collapsedTodo,
+      onCollapse(section, closing) {
+        const previous = collapsedTodo.has(section);
+        if (closing) collapsedTodo.add(section);
+        else collapsedTodo.delete(section);
+        chrome.storage.local.set({ [collapsedTaskKey(section)]: closing }).catch(() => {
+          if (previous) collapsedTodo.add(section);
+          else collapsedTodo.delete(section);
+          todoController?.updateCollapsed();
+          reportError("saveFailed");
+        });
+      },
       openEvent(id) {
         switchTo("calendar", false);
         calendarController?.openEvent(id);
@@ -1493,7 +1509,7 @@ async function followUpMail(message) {
 
 async function updateTodo(action, data) {
   const needsNotifications = (action === "todo-preferences" && data.dailyTime)
-    || (action === "save-task" && data.reminderTime);
+    || (action === "save-task" && calendarReminderOffsets.includes(data.reminderMinutes));
   if (needsNotifications && !inToolbarPopup) {
     const allowed = await chrome.permissions.request({ permissions: ["notifications"] }).catch(() => false);
     if (!allowed) {
@@ -1555,7 +1571,7 @@ async function openTodoSource(task) {
           id: source.messageId, accountId: account.id, provider: account.provider, email: account.email, folder: source.folder,
           subject: task.title, sender: source.senderAddress, unread: false, url: mailMessageLink(account.provider, source.url)
         }), taskId: task.id
-      });
+      }, () => openTodoTask(task.id));
       return;
     }
     const link = mailMessageLink(null, source.url);
@@ -1566,6 +1582,32 @@ async function openTodoSource(task) {
   }
 }
 
+function editTodoLabel(label) {
+  if (editor.open) return;
+  const fields = openEditor(t(label ? "todoEditLabel" : "todoNewLabel"), t("save"), () => mutate("save-todo-label", {
+    id: label?.id, name: name.value, color: color.value
+  }));
+  const name = field(fields, { label: t("todoLabelName"), value: label?.name, maxLength: 32, required: true });
+  const colorRow = node("label", "todo-label-color-field");
+  const color = node("input");
+  color.type = "color";
+  color.value = label?.color ?? palettes[workspace.palette];
+  colorRow.append(node("span", "", t("todoLabelColor")), color);
+  fields.append(colorRow);
+
+  if (label) {
+    fields.append(button(t("remove"), "secondary-button todo-remove-label", {
+      symbol: "trash",
+      onClick() {
+        const confirmation = openEditor(t("remove"), t("remove"), () => mutate("remove-todo-label", { id: label.id }));
+        confirmation.append(node("p", "", t("todoRemoveLabel", { name: label.name })));
+      }
+    }));
+  }
+  editor.showModal();
+  name.focus();
+}
+
 function editTodo(task, mode) {
   if (editor.open) return;
   if (mode === "remove") {
@@ -1574,42 +1616,158 @@ function editTodo(task, mode) {
     editor.showModal();
     return;
   }
-  const inputs = {};
-  const fields = openEditor(t("todoEdit"), t("save"), () => updateTodo("save-task", {
-    id: task.id, ...Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value]))
-  }));
-  inputs.title = field(fields, { label: t("todoTitle"), value: task.title, required: true, maxLength: taskLimits.title });
-  inputs.notes = field(fields, { label: t("calendarNotes"), value: task.notes, maxLength: taskLimits.notes, multiline: true });
-  const dateFormat = new Intl.DateTimeFormat(workspaceDateLocale(), { dateStyle: "medium", timeZone: "UTC" });
-  function addDateTimeGroup(label, keys) {
-    const group = node("details", "snippet-advanced todo-edit-group");
-    group.open = keys.some(([key]) => task[key]) || label === "todoDue";
-    group.append(node("summary", "", t(label)));
-    const row = node("div", "todo-edit-fields");
-    group.append(row);
-    for (const [key, type, label] of keys) {
-      const input = field(row, { label: t(label) });
-      input.type = type;
-      input.value = task[key] || "";
-      inputs[key] = input;
-      if (type === "date") {
-        const selected = node("small", "todo-edit-date");
-        const refresh = () => {
-          selected.hidden = !input.value;
-          selected.textContent = input.value ? dateFormat.format(new Date(input.value + "T00:00:00Z")) : "";
-        };
-        input.after(selected);
-        input.addEventListener("input", refresh);
-        refresh();
-      }
+
+  const dateLocale = workspaceDateLocale();
+  const labelIds = new Set(task.labelIds ?? []);
+  let dueEdited = false;
+  const manualPlan = new Set();
+  const fields = openEditor(t("todoEdit"), t("save"), () => {
+    const usePlan = Boolean(planTime.value && (task.planDate || dueEdited || manualPlan.size));
+    const planDate = usePlan ? plan.value : "";
+    const start = usePlan ? planTime.value : "";
+    const end = usePlan ? planEnd.value : "";
+    const keepLegacy = reminder.value === "legacy";
+    return updateTodo("save-task", {
+      id: task.id, title: title.value, notes: notes.value, labelIds: [...labelIds],
+      dueDate: due.value, dueTime: dueTime.value, planDate, planTime: start, planEnd: end,
+      planEndNextDay: Boolean(start && end && end < start),
+      reminderMinutes: !reminder.disabled && !keepLegacy && reminder.value !== "" ? Number(reminder.value) : null,
+      reminderDate: keepLegacy ? task.reminderDate : "",
+      reminderTime: keepLegacy ? task.reminderTime : ""
+    });
+  });
+  const title = field(fields, { label: t("todoTitle"), value: task.title, required: true, maxLength: taskLimits.title });
+  const notes = field(fields, { label: t("calendarNotes"), value: task.notes, maxLength: taskLimits.notes, multiline: true });
+
+  if (workspace.todo?.labels?.length) {
+    const labels = node("fieldset", "choice-group todo-assign-labels");
+    labels.append(node("legend", "", t("todoLabels")));
+    const choices = node("div", "todo-labels");
+    for (const label of workspace.todo.labels) {
+      const choice = button(label.name, "secondary-button", {
+        onClick() {
+          if (labelIds.has(label.id)) labelIds.delete(label.id);
+          else labelIds.add(label.id);
+          choice.setAttribute("aria-pressed", String(labelIds.has(label.id)));
+        }
+      });
+      choice.firstElementChild.classList.add("todo-label");
+      choice.firstElementChild.style.setProperty("--label-color", label.color);
+      choice.firstElementChild.dir = "auto";
+      choice.setAttribute("aria-pressed", String(labelIds.has(label.id)));
+      choices.append(choice);
     }
-    fields.append(group);
+    labels.append(choices);
+    fields.append(labels);
   }
-  addDateTimeGroup("todoDue", [["dueDate", "date", "calendarEventDate"], ["dueTime", "time", "todoTime"]]);
-  addDateTimeGroup("todoPlan", [["planDate", "date", "calendarEventDate"], ["planTime", "time", "calendarStarts"], ["planEnd", "time", "calendarEnds"]]);
-  addDateTimeGroup("todoReminder", [["reminderDate", "date", "calendarEventDate"], ["reminderTime", "time", "todoTime"]]);
+
+  function timingGroup(label, open) {
+    const group = node("details", "snippet-advanced todo-edit-group");
+    group.open = open;
+    const row = node("div", "todo-edit-fields");
+    group.append(node("summary", "", t(label)), row);
+    fields.append(group);
+    return row;
+  }
+
+  const pickers = [];
+  function dateField(row, key, value, onChange) {
+    const picker = createDatePicker({
+      dateLocale, firstDay: workspace.calendar?.firstDay, label: t("calendarEventDate"), t, icon, value, onChange,
+      onOpen(panel) {
+        for (const other of pickers) if (other.panel !== panel) other.close();
+      }
+    });
+    picker.field.dataset.dateField = key;
+    pickers.push(picker);
+    row.append(picker.field);
+    return picker;
+  }
+
+  function timeField(row, key, label, value) {
+    const input = field(row, { label: t(label) });
+    input.type = "time";
+    input.value = value;
+    input.name = key;
+    return input;
+  }
+
+  const dueRow = timingGroup("todoDue", true);
+  const due = dateField(dueRow, "dueDate", task.dueDate, copyDue);
+  const dueTime = timeField(dueRow, "dueTime", "todoTime", task.dueTime);
+  dueRow.append(due.panel);
+
+  const planRow = timingGroup("todoPlan", Boolean(task.planDate));
+  const plan = dateField(planRow, "planDate", task.planDate || task.dueDate, () => {
+    manualPlan.add("date");
+    updateReminder();
+  });
+  const planTime = timeField(planRow, "planTime", "calendarStarts", task.planTime || (!task.planDate ? task.dueTime : ""));
+  const planEnd = timeField(planRow, "planEnd", "calendarEnds", task.planDate ? task.planEnd : calendarSuggestedEnd(planTime.value).time);
+  const overnight = node("small", "todo-overnight", t("calendarEndNextDay"));
+  planEnd.after(overnight);
+  planTime.parentElement.after(plan.panel);
+
+  if (task.planDate) {
+    manualPlan.add("date");
+    manualPlan.add("start");
+    if (task.planEnd !== calendarSuggestedEnd(task.planTime).time) manualPlan.add("end");
+  }
+
+  const reminderRow = timingGroup("todoReminder", Boolean(task.reminderDate || calendarReminderOffsets.includes(task.reminderMinutes)));
+  reminderRow.classList.add("todo-reminder-fields");
+  const reminder = node("select", "calendar-select");
+  reminder.name = "reminderMinutes";
+  reminder.setAttribute("aria-label", t("todoReminder"));
+  reminder.add(new Option(t("calendarNoReminder"), ""));
+  const numbers = new Intl.NumberFormat(workspace.locale);
+  for (const minutes of calendarReminderOffsets) reminder.add(new Option(calendarReminderLabel(t, numbers, minutes), String(minutes)));
+  if (task.reminderDate) {
+    const format = new Intl.DateTimeFormat(dateLocale, { dateStyle: "medium", timeStyle: "short" });
+    reminder.add(new Option(format.format(new Date(task.reminderDate + "T" + task.reminderTime)), "legacy"));
+  }
+  reminder.value = task.reminderDate ? "legacy" : String(task.reminderMinutes ?? "");
+  const hint = node("small", "todo-reminder-hint");
+  hint.setAttribute("aria-live", "polite");
+  reminderRow.append(reminder, hint);
+
+  function updateReminder() {
+    const hasPlan = Boolean(plan.value && planTime.value && (task.planDate || dueEdited || manualPlan.size));
+    const hasDue = Boolean(due.value && dueTime.value);
+    reminder.disabled = !task.reminderDate && !hasPlan && !hasDue;
+    for (const option of reminder.options) {
+      if (option.value && option.value !== "legacy") option.disabled = !hasPlan && !hasDue;
+    }
+    hint.hidden = Boolean(task.reminderDate && reminder.value === "legacy");
+    hint.textContent = t(hasPlan ? "todoRemindByPlan" : hasDue ? "todoRemindByDue" : "todoRemindNeedsTime");
+    overnight.hidden = !planEnd.value || !planTime.value || planEnd.value >= planTime.value;
+  }
+
+  function copyDue() {
+    dueEdited = true;
+    if (!due.value) dueTime.value = "";
+    if (!manualPlan.has("date")) plan.setValue(due.value);
+    if (!manualPlan.has("start")) {
+      planTime.value = dueTime.value;
+      if (!manualPlan.has("end")) planEnd.value = calendarSuggestedEnd(planTime.value).time;
+    }
+    updateReminder();
+  }
+
+  dueTime.addEventListener("input", copyDue);
+  planTime.addEventListener("input", () => {
+    manualPlan.add("start");
+    if (!manualPlan.has("end")) planEnd.value = calendarSuggestedEnd(planTime.value).time;
+    updateReminder();
+  });
+  planEnd.addEventListener("input", () => {
+    manualPlan.add("end");
+    updateReminder();
+  });
+  reminder.addEventListener("change", updateReminder);
+  updateReminder();
   editor.showModal();
-  inputs.title.focus();
+  title.focus();
 }
 
 async function createMarketAlert(data) {
@@ -2518,6 +2676,13 @@ chrome.storage.onChanged.addListener((changes, area) => {
     takeQuickTask().then(received => { if (received) focusQuickTask(); });
   }
   if (area !== "local") return;
+  for (const section of taskSections) {
+    const change = changes[collapsedTaskKey(section)];
+    if (!change || collapsedTodo.has(section) === Boolean(change.newValue)) continue;
+    if (change.newValue) collapsedTodo.add(section);
+    else collapsedTodo.delete(section);
+    todoController?.updateCollapsed();
+  }
   if (changes[clipboardHistoryKey]) refreshClipboardHistory();
   if (changes[marketAlertStateKey]) {
     marketAlertState = changes[marketAlertStateKey].newValue ?? {};
@@ -2549,11 +2714,13 @@ chrome.permissions.onRemoved?.addListener(updateClipboardReadPermission);
 if (inPanel) chrome.tabs?.onActivated?.addListener(receiveTranslationSelection);
 const initialTranslationSelection = await takeTranslatorSelection();
 if (initialTranslationSelection !== null) activePage = "translate";
-const [initialAccount, initialHistory, initialMarketAlerts, rememberedTab] = await Promise.all([
+const [initialAccount, initialHistory, initialMarketAlerts, rememberedTab, savedCollapse] = await Promise.all([
   getGoogleAccount().catch(() => null), readTranslationHistory().catch(() => null), readMarketAlertState().catch(() => ({})),
   chrome.storage.local.get(lastWorkspaceTabKey).then(saved => saved[lastWorkspaceTabKey]).catch(() => undefined),
+  chrome.storage.local.get(taskSections.map(collapsedTaskKey)).catch(() => ({})),
   refreshClipboardHistory()
 ]);
+for (const section of taskSections) if (savedCollapse[collapsedTaskKey(section)]) collapsedTodo.add(section);
 translatorAccountId = initialAccount?.id ?? null;
 if (initialHistory) translationHistory = initialHistory;
 marketAlertState = initialMarketAlerts;

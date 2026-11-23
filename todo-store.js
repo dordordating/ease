@@ -1,10 +1,15 @@
+import { calendarReminderOffsets, calendarReminderSchedule } from "./calendar-timing.js";
+
 export const defaultTodo = { items: [], dailyTime: "" };
 export const taskLimits = { title: 160, notes: 2000 };
+export const taskSections = ["today", "inbox", "upcoming"];
+export const collapsedTaskKey = section => `easeTodoCollapsed:${section}`;
 
 const iso = /^\d{4}-\d{2}-\d{2}$/u;
 const clock = /^(?:[01]\d|2[0-3]):[0-5]\d$/u;
 const uid = /^[1-9]\d{0,9}$/u;
 const taskId = /^[a-f0-9-]{36}$/u;
+const labelColor = /^#[0-9a-f]{6}$/iu;
 const isTime = value => typeof value === "string" && clock.test(value);
 
 export function taskDateValid(value) {
@@ -59,7 +64,9 @@ function taskFields(data) {
     title: bounded(data.title, taskLimits.title), notes: bounded(data.notes, taskLimits.notes),
     dueDate: data.dueDate || "", dueTime: data.dueTime || "",
     planDate: data.planDate || "", planTime: data.planTime || "", planEnd: data.planEnd || "",
-    reminderDate: data.reminderDate || "", reminderTime: data.reminderTime || ""
+    reminderDate: data.reminderDate || "", reminderTime: data.reminderTime || "",
+    ...(data.planEndNextDay === true ? { planEndNextDay: true } : {}),
+    ...(data.reminderMinutes != null ? { reminderMinutes: data.reminderMinutes } : {})
   };
 }
 
@@ -67,13 +74,39 @@ function validFields(task) {
   return [task.dueDate, task.planDate, task.reminderDate].every(date => date === "" || taskDateValid(date))
     && [task.dueTime, task.planTime, task.planEnd, task.reminderTime].every(time => time === "" || isTime(time))
     && (!task.dueTime || task.dueDate) && Boolean(task.planDate) === Boolean(task.planTime)
-    && (!task.planEnd || (task.planTime && task.planEnd > task.planTime))
-    && Boolean(task.reminderDate) === Boolean(task.reminderTime);
+    && (!task.planEnd || (task.planTime && (task.planEndNextDay || task.planEnd > task.planTime)))
+    && (!task.planEndNextDay || Boolean(task.planEnd))
+    && Boolean(task.reminderDate) === Boolean(task.reminderTime)
+    && (task.reminderMinutes === undefined || (calendarReminderOffsets.includes(task.reminderMinutes)
+      && (task.planTime || task.dueTime) && !task.reminderDate));
+}
+
+function readLabels(labels = []) {
+  if (!Array.isArray(labels)) return null;
+  const ids = new Set();
+  const names = new Set();
+  const result = [];
+  for (const label of labels) {
+    const name = bounded(label?.name, 32);
+    if (typeof label?.id !== "string" || !taskId.test(label.id) || ids.has(label.id)
+      || !name || names.has(name.toLowerCase()) || typeof label.color !== "string" || !labelColor.test(label.color)) return null;
+    result.push({ id: label.id, name, color: label.color.toLowerCase() });
+    ids.add(label.id);
+    names.add(name.toLowerCase());
+  }
+  return result;
+}
+
+function assignedLabels(ids, allowed) {
+  return Array.isArray(ids) ? [...new Set(ids.filter(id => allowed.has(id)))] : [];
 }
 
 export function restoreTodo(value) {
   if (value === undefined) return defaultTodo;
   if (!Array.isArray(value?.items) || (value.dailyTime !== "" && !isTime(value.dailyTime))) return null;
+  const labels = readLabels(value.labels);
+  if (!labels || (value.layout !== undefined && !["tabs", "stacked"].includes(value.layout))) return null;
+  const allowed = new Set(labels.map(label => label.id));
   const ids = new Set();
   const items = [];
   for (const task of value.items) {
@@ -84,25 +117,56 @@ export function restoreTodo(value) {
     if (!fields.title || !validFields(fields) || (task.source && !source)
       || (task.focusDay && !taskDateValid(task.focusDay))) return null;
     ids.add(task.id);
-    items.push({ id: task.id, ...fields, createdAt: task.createdAt, done: task.done, focusDay: task.focusDay || "", source });
+    const labelIds = assignedLabels(task.labelIds, allowed);
+    items.push({ id: task.id, ...fields, createdAt: task.createdAt, done: task.done, focusDay: task.focusDay || "", source,
+      ...(labelIds.length ? { labelIds } : {}) });
   }
-  return { dailyTime: value.dailyTime, items };
+  return { dailyTime: value.dailyTime, items,
+    ...(labels.length ? { labels } : {}), ...(value.layout === "stacked" ? { layout: "stacked" } : {}) };
+}
+
+function updateLabels(workspace, todo, action, data) {
+  const labels = todo.labels ?? [];
+  const existing = labels.find(label => label.id === data.id);
+  if (data.id && !existing) return "todoLabelMissing";
+  if (action === "remove-todo-label") {
+    if (!existing) return "todoLabelMissing";
+    workspace.todo = { ...todo, labels: labels.filter(label => label !== existing), items: todo.items.map(task => {
+      if (!task.labelIds?.includes(data.id)) return task;
+      const { labelIds, ...rest } = task;
+      const remaining = labelIds.filter(id => id !== data.id);
+      return remaining.length ? { ...rest, labelIds: remaining } : rest;
+    }) };
+    return;
+  }
+  const name = bounded(data.name, 32);
+  if (!name || typeof data.color !== "string" || !labelColor.test(data.color)) return "todoLabelInvalid";
+  if (labels.some(label => label !== existing && label.name.toLowerCase() === name.toLowerCase())) return "todoLabelDuplicate";
+  const label = { id: existing?.id ?? crypto.randomUUID(), name, color: data.color.toLowerCase() };
+  workspace.todo = { ...todo, labels: existing ? labels.map(item => item === existing ? label : item) : [...labels, label] };
 }
 
 export function taskAction(workspace, action, data) {
   const todo = workspace.todo ?? defaultTodo;
   const items = todo.items;
   const existing = items.find(task => task.id === data.id);
+  if (action === "save-todo-label" || action === "remove-todo-label") return updateLabels(workspace, todo, action, data);
   if (action === "todo-preferences") {
-    if (data.dailyTime !== "" && !isTime(data.dailyTime)) return "todoInvalidSchedule";
-    workspace.todo = { ...todo, dailyTime: data.dailyTime };
+    const next = { ...todo };
+    if (Object.hasOwn(data, "dailyTime")) {
+      if (data.dailyTime !== "" && !isTime(data.dailyTime)) return "todoInvalidSchedule";
+      next.dailyTime = data.dailyTime;
+    }
+    if (data.layout === "stacked") next.layout = "stacked";
+    else if (data.layout === "tabs") delete next.layout;
+    workspace.todo = next;
     return;
   }
   if (data.id && !existing) return "todoMissing";
   if (action === "save-task") {
     const fields = taskFields(data);
     if (!fields.title) return "todoTitleRequired";
-    if (!validFields(fields) || (fields.reminderDate && taskTimestamp(fields.reminderDate, fields.reminderTime) === null)) {
+    if (!validFields(fields) || ((fields.reminderDate || fields.reminderMinutes !== undefined) && !taskReminderSchedule(fields))) {
       return "todoInvalidSchedule";
     }
     const source = existing?.source ?? taskSource(data.source);
@@ -112,6 +176,16 @@ export function taskAction(workspace, action, data) {
     const record = existing || duplicate;
     const task = record ? { ...record, ...(duplicate ? { dueDate: fields.dueDate, dueTime: fields.dueTime } : fields) }
       : { id: crypto.randomUUID(), ...fields, createdAt: Date.now(), done: false, focusDay: "", source };
+    if (!duplicate) {
+      for (const key of ["reminderMinutes", "planEndNextDay"]) {
+        if (!Object.hasOwn(fields, key)) delete task[key];
+      }
+      if (Array.isArray(data.labelIds)) {
+        const labelIds = assignedLabels(data.labelIds, new Set(todo.labels?.map(label => label.id)));
+        if (labelIds.length) task.labelIds = labelIds;
+        else delete task.labelIds;
+      }
+    }
     workspace.todo = { ...todo, items: record ? items.map(item => item.id === record.id ? task : item) : [task, ...items] };
     if (data.showModule === true && !workspace.tabs.includes("todo")) workspace.tabs.push("todo");
     return;
@@ -147,6 +221,17 @@ export function taskToday(task, today = localTaskDay()) {
   return Boolean(task.focusDay === today || (task.dueDate && task.dueDate <= today) || task.planDate === today);
 }
 
+export function taskReminderSchedule(task) {
+  if (task.reminderMinutes === undefined) {
+    const when = taskTimestamp(task.reminderDate, task.reminderTime);
+    return when === null ? null : { when, signature: `${task.reminderDate}:${task.reminderTime}` };
+  }
+  const date = task.planDate || task.dueDate;
+  const start = task.planTime || task.dueTime;
+  const schedule = calendarReminderSchedule({ date, start, reminderMinutes: task.reminderMinutes });
+  return schedule ? { when: schedule.reminderAt, signature: `${date}T${start}/${task.reminderMinutes}` } : null;
+}
+
 export function taskCalendarEntries(tasks) {
   return tasks.flatMap(task => {
     const common = { taskId: task.id, completed: task.done, title: task.title, notes: task.notes, readOnly: true };
@@ -155,7 +240,8 @@ export function taskCalendarEntries(tasks) {
       ...common, id: `todo-due:${task.id}`, date: task.dueDate, start: task.dueTime, display: "due"
     });
     if (task.planDate) entries.push({
-      ...common, id: `todo-plan:${task.id}`, date: task.planDate, start: task.planTime, end: task.planEnd, display: "plan"
+      ...common, id: `todo-plan:${task.id}`, date: task.planDate, start: task.planTime, end: task.planEnd,
+      endNextDay: task.planEndNextDay, display: "plan"
     });
     return entries;
   });

@@ -42,7 +42,9 @@ function portableWorkspace(workspace) {
   if (moduleOrder.some((id, index) => id !== defaultModuleOrder[index])) snapshot.moduleOrder = moduleOrder;
   snapshot.zoom = normalizeWorkspaceZoom(snapshot.zoom);
   if (snapshot.zoom === defaultWorkspace.zoom) delete snapshot.zoom;
-  if (!snapshot.todo.items.length && !snapshot.todo.dailyTime) delete snapshot.todo;
+  const { labels, layout, ...tasks } = snapshot.todo;
+  snapshot.todo = { ...tasks, ...(labels?.length ? { labels } : {}), ...(layout === "stacked" ? { layout } : {}) };
+  if (!tasks.items.length && !tasks.dailyTime && !labels?.length && layout !== "stacked") delete snapshot.todo;
   const { inlineEnabled, inlineSites, ...translator } = { ...defaultWorkspace.translator, ...snapshot.translator };
   snapshot.translator = translator;
   snapshot.folders = snapshot.folders.map((folder) => folder.vault ? { ...folder, vault: portableVault(folder.vault) } : folder);

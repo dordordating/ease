@@ -1,17 +1,7 @@
-import { calendarReminderOffsets, calendarReminderSchedule } from './calendar-store.js';
+import { calendarReminderLabel, calendarReminderOffsets, calendarReminderSchedule, calendarSuggestedEnd } from './calendar-timing.js';
+import { calendarMonthStart, dayKey, dayLength, localeWeekStart, localToday, weekOffsetFor } from './calendar-dates.js';
 import { calendarSystemFor, defaultCalendar } from './workspace-data.js';
 import { mailMessageLink } from './mail-api.js';
-
-const dayLength = 86_400_000;
-
-function localToday() {
-  const now = new Date();
-  return Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / dayLength;
-}
-
-function dayKey(day) {
-  return new Date(day * dayLength).toISOString().slice(0, 10);
-}
 
 function timeValue(time) {
   const [hours, minutes] = time.split(':').map(Number);
@@ -36,7 +26,7 @@ export function renderCalendar(container, {
   renderConnections,
 }) {
   const localeInfo = new Intl.Locale(locale);
-  const localeWeekStart = ((localeInfo.getWeekInfo?.() ?? localeInfo.weekInfo)?.firstDay ?? 1) % 7;
+  const firstWeekday = localeWeekStart(locale);
   const direction = (localeInfo.getTextInfo?.() ?? localeInfo.textInfo)?.direction;
   const rtl = (direction ?? container.closest('[dir]')?.dir) === 'rtl';
   const preferences = { ...defaultCalendar, ...initialPreferences };
@@ -80,13 +70,11 @@ export function renderCalendar(container, {
   }
 
   function monthStart(day) {
-    const dayPart = monthDayNumber.formatToParts(day * dayLength).find(part => part.type === 'day');
-    return day - Number(dayPart.value) + 1;
+    return calendarMonthStart(monthDayNumber, day);
   }
 
   function weekOffset(day) {
-    const weekday = new Date(day * dayLength).getUTCDay();
-    return (weekday - (preferences.firstDay ?? localeWeekStart) + 7) % 7;
+    return weekOffsetFor(day, preferences.firstDay ?? firstWeekday);
   }
 
   function nextMonth(start) {
@@ -325,7 +313,7 @@ export function renderCalendar(container, {
     const header = grid.tHead.rows[0];
     header.replaceChildren();
     for (let offset = 0; offset < 7; offset += 1) {
-      const weekday = weekdays[((preferences.firstDay ?? localeWeekStart) + offset) % 7];
+      const weekday = weekdays[((preferences.firstDay ?? firstWeekday) + offset) % 7];
       const cell = document.createElement('th');
       cell.className = 'calendar-weekday';
       cell.scope = 'col';
@@ -580,10 +568,7 @@ export function renderCalendar(container, {
   }
 
   function reminderLabel(minutes) {
-    if (minutes === 0) return t('calendarReminderAtStart');
-    if (minutes === 60) return t('calendarReminderHour');
-    if (minutes === 1440) return t('calendarReminderDay');
-    return t('calendarReminderMinutes', { count: formatCount.format(minutes) });
+    return calendarReminderLabel(t, formatCount, minutes);
   }
 
   function appendText(parent, tag, className, text) {
@@ -751,9 +736,9 @@ export function renderCalendar(container, {
   });
 
   function fillDefaultEnd() {
-    const end = timeValue(startField.value) + 3_600_000;
-    endField.value = new Date(end).toISOString().slice(11, 16);
-    endNextDay.checked = end >= dayLength;
+    const end = calendarSuggestedEnd(startField.value);
+    endField.value = end.time;
+    endNextDay.checked = end.nextDay;
   }
 
   function reminderMinutes() {

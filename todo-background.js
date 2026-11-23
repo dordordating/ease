@@ -1,5 +1,5 @@
 import { translate } from "./locales.js";
-import { defaultTodo, localTaskDay, taskAction, taskLink, taskTimestamp, taskToday } from "./todo-store.js";
+import { defaultTodo, localTaskDay, taskAction, taskLink, taskReminderSchedule, taskTimestamp, taskToday } from "./todo-store.js";
 import { readWorkspace, storageKey } from "./workspace-data.js";
 
 export const quickTaskKey = "easeQuickTask";
@@ -27,8 +27,12 @@ async function reconcile(fired) {
     readWorkspace(), chrome.alarms.get(reminderAlarm), chrome.alarms.get(clockAlarm), chrome.permissions.contains(permission)
   ]);
   const { items, dailyTime } = workspace.todo ?? defaultTodo;
+  const entries = items.filter(task => !task.done).flatMap(task => {
+    const schedule = taskReminderSchedule(task);
+    return schedule ? [{ key: task.id, ...schedule, tasks: [task] }] : [];
+  });
   if (!allowed || !chrome.notifications?.create || !workspace.tabs.includes("todo")
-    || (!dailyTime && !items.some(task => !task.done && task.reminderDate))
+    || (!dailyTime && !entries.length)
     || (chrome.notifications.getPermissionLevel && await chrome.notifications.getPermissionLevel() !== "granted")) {
     if (alarm) await chrome.alarms.clear(reminderAlarm);
     if (clock) await chrome.alarms.clear(clockAlarm);
@@ -38,10 +42,6 @@ async function reconcile(fired) {
   if (!clock) await chrome.alarms.create(clockAlarm, { periodInMinutes: 5 });
   const now = Date.now();
   const today = localTaskDay();
-  const entries = items.filter(task => !task.done && task.reminderDate).flatMap(task => {
-    const when = taskTimestamp(task.reminderDate, task.reminderTime);
-    return when === null ? [] : [{ key: task.id, signature: `${task.reminderDate}:${task.reminderTime}`, when, tasks: [task] }];
-  });
   if (dailyTime) {
     for (const offset of [0, 1, 2]) {
       const date = localTaskDay(offset);
