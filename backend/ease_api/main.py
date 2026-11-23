@@ -414,6 +414,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 stream = stream_assistant(
                     request.app.state.http, settings.openrouter_api_key.get_secret_value(),
                     settings.openrouter_model_assistant, payload, settings.max_output_tokens,
+                    fallback_model=settings.openrouter_model_assistant_fallback,
                 )
                 async with aclosing(stream):
                     async for event in stream:

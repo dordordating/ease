@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     openrouter_model_standard: str = "google/gemini-2.5-flash-lite"
     openrouter_model_premium: str = "openai/gpt-5.6-luna"
     openrouter_model_assistant: str = "google/gemini-3.1-flash-lite"
+    openrouter_model_assistant_fallback: str = "openai/gpt-5.6-luna"
     user_daily_limit: int = Field(default=30, ge=1)
     global_daily_limit: int = Field(default=200, ge=1)
     session_ttl_minutes: int = Field(default=30, ge=5, le=120)
@@ -73,7 +74,10 @@ class Settings(BaseSettings):
             raise ValueError("MAIL_EXTENSION_IDS must list Chrome extension IDs")
         return ",".join(dict.fromkeys(ids))
 
-    @field_validator("openrouter_model_economy", "openrouter_model_standard", "openrouter_model_premium", "openrouter_model_assistant")
+    @field_validator(
+        "openrouter_model_economy", "openrouter_model_standard", "openrouter_model_premium",
+        "openrouter_model_assistant", "openrouter_model_assistant_fallback",
+    )
     @classmethod
     def validate_model(cls, value: str) -> str:
         if not OPENROUTER_MODEL.fullmatch(value):

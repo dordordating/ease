@@ -75,7 +75,11 @@ Include `"notes_language":"fa"` to request learning notes in Persian. For an eli
 
 ## Home assistant
 
-`POST /v1/assistant` uses the same verified Ease session, concurrency slots, and daily limits as online translation. The default model is `google/gemini-3.1-flash-lite`. Set `OPENROUTER_MODEL_ASSISTANT` to override it with a model that supports zero-data-retention routing. Provider data collection is disabled. The request includes a prompt, interface locale, local Gregorian date and time, calendar preference, and up to four source excerpts. It can also include up to two brief previous exchanges and the user’s preferred learning and translation languages.
+`POST /v1/assistant` uses the same verified Ease session, concurrency slots, and daily limits as online translation. Gemini 3.1 Flash Lite (`google/gemini-3.1-flash-lite`) is the primary model and GPT-5.6 Luna (`openai/gpt-5.6-luna`) is the fallback. Set `OPENROUTER_MODEL_ASSISTANT` or `OPENROUTER_MODEL_ASSISTANT_FALLBACK` to override either model. Both models require zero-data-retention routing with provider data collection disabled.
+
+Ease tries the fallback once if the primary fails before sending visible text or takes 10 seconds to start the answer. The two attempts share one quota reservation and a 45-second model deadline. OpenRouter account and billing errors return immediately. Once the answer starts, the client can retry an interrupted stream.
+
+The request includes a prompt, interface locale, local Gregorian date and time, calendar preference, and up to four source excerpts. It can also include up to two brief previous exchanges and the user’s preferred learning and translation languages.
 
 Successful streams return `application/x-ndjson` with answer `delta` packets and a final `done` packet containing validated draft actions and source IDs. A terminal `error` packet indicates a quota, provider, or interruption problem. The extension reviews or applies actions through the corresponding modules. PostgreSQL records only aggregate usage for the request. Keep request-body logging disabled for this route.
 
