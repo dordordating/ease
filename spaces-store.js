@@ -17,6 +17,23 @@ export function spaceUrl(value) {
 const text = (value, max) => typeof value === "string" ? value.trim().slice(0, max) : "";
 const validTime = value => Number.isSafeInteger(value) && value >= 0 && value <= 8.64e15;
 
+function spaceNameKey(name) {
+  return text(name, spaceLimits.name).normalize("NFKC").toLowerCase()
+    .replace(/ي/gu, "ی").replace(/ك/gu, "ک").replace(/[\s\u200c]+/gu, " ").trim();
+}
+
+export function spaceNameTaken(spaces, name, exceptId) {
+  const key = spaceNameKey(name);
+  return Boolean(key) && spaces.some(space => space.id !== exceptId && spaceNameKey(space.name) === key);
+}
+
+export function spaceTabsTaken(spaces, tabs, exceptId) {
+  if (!tabs.length) return false;
+  const signature = JSON.stringify(tabs.map(tab => tab.url).sort());
+  return spaces.some(space => space.id !== exceptId && space.tabs.length === tabs.length
+    && JSON.stringify(space.tabs.map(tab => tab.url).sort()) === signature);
+}
+
 function cleanBundle(bundle) {
   if (!Array.isArray(bundle?.tabs) || !Array.isArray(bundle.groups) || bundle.tabs.length > spaceLimits.tabs
     || bundle.groups.length > bundle.tabs.length) return null;
@@ -102,7 +119,11 @@ export function updateSpaces(workspace, action, data) {
   let next;
   if (action === "save-space") {
     const name = text(data.name, spaceLimits.name);
-    if (!name) return "spaceNameRequired";
+    const nameKey = spaceNameKey(name);
+    if (!nameKey) return "spaceNameRequired";
+    if ((!existing || nameKey !== spaceNameKey(existing.name)) && spaceNameTaken(spaces, name, existing?.id)) {
+      return "spaceDuplicateName";
+    }
     if (!existing && spaces.length >= spaceLimits.spaces) return "spaceLimit";
     const id = existing?.id ?? (spaceIdValid(data.newId) && !spaces.some(space => space.id === data.newId) ? data.newId : crypto.randomUUID());
     const bundle = existing ?? { id, createdAt: Date.now(), favorite: false, tabs: [], groups: [], activeTabId: "" };
@@ -124,6 +145,7 @@ export function updateSpaces(workspace, action, data) {
       const { bundle, added } = appendSpaceBundle(existing, { tabs, groups: [] });
       if (!added) return "spaceAlreadySaved";
       if (bundle.tabs.length > spaceLimits.tabs) return "spaceTabLimit";
+      if (spaceTabsTaken(spaces, bundle.tabs, existing.id)) return "spaceDuplicateTabs";
       Object.assign(next, bundle);
     } else return "saveFailed";
   }

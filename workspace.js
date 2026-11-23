@@ -4,7 +4,7 @@ import { renderFlashcards } from "./flashcards.js";
 import { renderTodo } from "./todo.js";
 import { renderSpaces } from "./spaces.js";
 import { spacesMessage } from "./spaces-browser.js";
-import { spaceColors, spaceLimits } from "./spaces-store.js";
+import { spaceColors, spaceLimits, spaceNameTaken } from "./spaces-store.js";
 import { collapsedTaskKey, defaultTodo, localTaskDay, taskCalendarEntries, taskLimits, taskSections } from "./todo-store.js";
 import { calendarReminderLabel, calendarReminderOffsets, calendarSuggestedEnd } from "./calendar-timing.js";
 import { createDatePicker } from "./date-picker.js";
@@ -1623,12 +1623,19 @@ function editSpace(space, mode) {
   if (editor.open) return;
   const newId = space ? undefined : crypto.randomUUID();
   const fields = openEditor(t(mode === "capture" ? "spaceSaveWindow" : space ? "spaceEdit" : "spaceNew"), t("save"), async () => {
-    const data = { id: space?.id, newId, name: name.value.trim(), notes: notes.value, color: color.value };
+    const data = { id: space?.id, newId, name: name.value.trim(), notes: notes.value,
+      color: colorPicker.querySelector("input:checked").value };
     if (!data.name) {
       reportError("spaceNameRequired");
       return false;
     }
-    if (mode === "capture") return captureSpace("create", data);
+    if (mode === "capture") {
+      if (spaceNameTaken(workspace.spaces, data.name)) {
+        reportError("spaceDuplicateName");
+        return false;
+      }
+      return captureSpace("create", data);
+    }
     const saved = await mutate("save-space", data);
     if (saved && !space) {
       await refreshWorkspace();
@@ -1639,12 +1646,19 @@ function editSpace(space, mode) {
   const name = field(fields, { label: t("spaceName"), value: space?.name, maxLength: spaceLimits.name, required: true });
   const notes = field(fields, { label: t("calendarNotes"), value: space?.notes, maxLength: spaceLimits.notes, multiline: true });
   notes.rows = 2;
-  const selection = node("label", "field");
-  const color = node("select", "translator-select");
-  for (const key of spaceColors) color.add(new Option(t(key), key));
-  color.value = space?.color ?? workspace.palette;
-  selection.append(node("span", "", t("spaceColor")), color);
-  fields.append(selection);
+  const colorPicker = node("fieldset", "choice-group space-color-picker");
+  const options = node("div", "space-color-options");
+  const selected = space?.color ?? workspace.palette;
+  for (const key of spaceColors) {
+    const choice = radioOption("space-color", key, selected, "choice-option space-color-option");
+    choice.label.dataset.spaceColor = key;
+    const swatch = node("span", "space-color-swatch");
+    swatch.setAttribute("aria-hidden", "true");
+    choice.face.append(swatch, node("span", "space-color-name", t(key)), glyph("check", "space-color-check"));
+    options.append(choice.label);
+  }
+  colorPicker.append(node("legend", "", t("spaceColor")), options);
+  fields.append(colorPicker);
   if (mode === "capture") fields.append(node("p", "field-hint", t("spaceCaptureHint")));
   editor.showModal();
   name.focus();

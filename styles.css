@@ -5952,6 +5952,47 @@ body[data-surface="panel"] .mail-reader > .mail-attachments {
 [data-space-color="mint"] { --space-color: #52a58e; }
 [data-space-color="amber"] { --space-color: #cc9b52; }
 
+.space-color-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 100px), 1fr));
+  gap: 5px;
+}
+
+.space-color-option > input + span {
+  flex: 1;
+  min-inline-size: 0;
+  padding-inline: 7px;
+}
+
+.space-color-option > input:checked + span {
+  border-color: color-mix(in srgb, var(--space-color) 70%, var(--stroke));
+  background: color-mix(in srgb, var(--space-color) 16%, var(--surface));
+  color: var(--text);
+}
+
+.space-color-swatch {
+  flex: none;
+  inline-size: 15px;
+  block-size: 15px;
+  border: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
+  border-radius: 50%;
+  background: var(--space-color);
+}
+
+.space-color-name {
+  overflow-wrap: anywhere;
+}
+
+.space-color-check {
+  flex: none;
+  margin-inline-start: auto;
+  visibility: hidden;
+}
+
+.space-color-option > input:checked + span .space-color-check {
+  visibility: visible;
+}
+
 .spaces-summary {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

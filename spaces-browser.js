@@ -1,4 +1,4 @@
-import { appendSpaceBundle, chromeGroupColors, spaceIdValid, spaceLimits, spaceUrl, updateSpaces } from "./spaces-store.js";
+import { appendSpaceBundle, chromeGroupColors, spaceIdValid, spaceLimits, spaceTabsTaken, spaceUrl, updateSpaces } from "./spaces-store.js";
 import { readWorkspace, storageKey } from "./workspace-data.js";
 
 export const spacesMessage = "ease-tab-spaces";
@@ -85,6 +85,7 @@ async function saveCapture(message, windowId, queueWorkspace) {
       : appendSpaceBundle(space, captured.bundle);
     if (!added) throw new SpaceError("spaceAlreadySaved");
     if (bundle.tabs.length > spaceLimits.tabs) throw new SpaceError("spaceTabLimit");
+    if (spaceTabsTaken(spaces, bundle.tabs, space.id)) throw new SpaceError("spaceDuplicateTabs");
     Object.assign(space, bundle, { updatedAt: Date.now() });
     await chrome.storage.local.set({ [storageKey]: workspace });
     return { id: space.id, count: added, skipped: captured.skipped };
