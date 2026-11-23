@@ -3,11 +3,13 @@ import { readWorkspace, storageKey } from "./workspace-data.js";
 
 export const spacesMessage = "ease-tab-spaces";
 const savedWindowKey = id => `easeSpaceWindow:${id}`;
+const savedGroupsKey = id => `easeSpaceGroups:${id}`;
 const tabsAccess = { permissions: ["tabs"] };
 const groupsAccess = { permissions: ["tabGroups"] };
+const spaceGroupColors = { violet: "purple", blue: "blue", mint: "green", amber: "orange" };
 
 export async function forgetSpaceWindow(id) {
-  await chrome.storage.session.remove(savedWindowKey(id)).catch(() => {});
+  await chrome.storage.session.remove([savedWindowKey(id), savedGroupsKey(id)]).catch(() => {});
 }
 
 class SpaceError extends Error {
@@ -117,14 +119,36 @@ async function restoreGroups(space, windowId, created, active, canGroup, matched
   return degraded;
 }
 
+async function restoreSpaceGroup(space, windowId, groupId, tabIds, savedGroups) {
+  if (groupId === undefined && !tabIds.length) return false;
+  const saveGroup = entry => chrome.storage.session.set({ [savedGroupsKey(space.id)]: { ...savedGroups, [windowId]: entry } }).catch(() => {});
+  try {
+    if (tabIds.length) {
+      // A retry can reuse these tabs if Chrome opens them but rejects the grouping operation.
+      await saveGroup({ groupId, pending: tabIds });
+      groupId = await chrome.tabs.group(groupId === undefined
+        ? { tabIds, createProperties: { windowId } }
+        : { tabIds, groupId });
+      if (!Number.isInteger(groupId)) return true;
+      await saveGroup({ groupId });
+    }
+    await chrome.tabGroups.update(groupId, { title: space.name, color: spaceGroupColors[space.color] ?? "purple" });
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 async function openSpace(space, { mode, windowId, canReadTabs, canGroup }) {
   if (!space.tabs.length) throw new SpaceError("spaceEmpty");
   const key = savedWindowKey(space.id);
+  const grouped = mode === "group";
+  if (grouped && (!canReadTabs || !canGroup)) throw new SpaceError("spaceGroupPermission");
   let target;
   let createdWindow = false;
   let starter;
   const tabs = [...space.tabs.filter(tab => tab.pinned), ...space.tabs.filter(tab => !tab.pinned)];
-  if (mode === "here") target = await browserWindow(windowId);
+  if (mode !== "window") target = await browserWindow(windowId);
   else {
     const entry = (await chrome.storage.session.get(key).catch(() => ({})))[key];
     if (entry) {
@@ -148,6 +172,10 @@ async function openSpace(space, { mode, windowId, canReadTabs, canGroup }) {
   const matched = new Map();
   const created = new Map();
   const matchedGroups = new Map();
+  const pendingGroupTabs = new Set();
+  const pendingGroupMembers = new Set();
+  let savedGroups;
+  let spaceGroupId;
   let missed = 0;
   let degraded = false;
   if (createdWindow) {
@@ -159,17 +187,35 @@ async function openSpace(space, { mode, windowId, canReadTabs, canGroup }) {
       catch { degraded = true; }
     }
   } else {
+    const openTabs = await chrome.tabs.query({ windowId: target.id });
+    if (grouped) {
+      const groupKey = savedGroupsKey(space.id);
+      savedGroups = (await chrome.storage.session.get(groupKey).catch(() => ({})))[groupKey] ?? {};
+      const entry = savedGroups[target.id];
+      const candidate = entry?.groupId;
+      if (Number.isInteger(candidate) && openTabs.some(tab => tab.groupId === candidate)) spaceGroupId = candidate;
+      for (const id of entry?.pending ?? []) pendingGroupTabs.add(id);
+    }
+    const matchKey = (tab, url) => grouped ? `${tab.pinned === true}:${url}` : url;
     const available = new Map();
-    for (const tab of await chrome.tabs.query({ windowId: target.id })) {
+    for (const tab of openTabs) {
       const url = spaceUrl(tab.pendingUrl) || spaceUrl(tab.url);
       if (!url || !Number.isInteger(tab.id) || tab.incognito) continue;
-      if (!available.has(url)) available.set(url, []);
-      available.get(url).push(tab);
+      // Only reuse pinned tabs or links in the group already opened by Ease.
+      if (grouped && !tab.pinned) {
+        const inGroup = spaceGroupId !== undefined && tab.groupId === spaceGroupId;
+        const pending = !(tab.groupId >= 0) && pendingGroupTabs.has(tab.id);
+        if (!inGroup && !pending) continue;
+      }
+      const key = matchKey(tab, url);
+      if (!available.has(key)) available.set(key, []);
+      available.get(key).push(tab);
     }
     for (const tab of tabs) {
-      const sibling = available.get(tab.url)?.shift();
+      const sibling = available.get(matchKey(tab, tab.url))?.shift();
       if (!sibling) continue;
       matched.set(tab.id, sibling.id);
+      if (grouped && !tab.pinned && !(sibling.groupId >= 0)) pendingGroupMembers.add(sibling.id);
       if (mode === "window" && tab.groupId && sibling.groupId >= 0 && !matchedGroups.has(tab.groupId)) {
         matchedGroups.set(tab.groupId, sibling.groupId);
       }
@@ -190,10 +236,17 @@ async function openSpace(space, { mode, windowId, canReadTabs, canGroup }) {
 
   if (!matched.size) throw new SpaceError("spaceOpenFailed");
   const active = matched.get(space.activeTabId);
-  if (active !== undefined && (createdWindow || mode === "here" || created.size > 0)) {
+  if (active !== undefined && (mode !== "window" || createdWindow || created.size > 0)) {
     await chrome.tabs.update(active, { active: true }).catch(() => { degraded = true; });
   }
-  if (created.size) {
+  if (grouped) {
+    const tabIds = tabs.flatMap(tab => {
+      const id = matched.get(tab.id);
+      return !tab.pinned && (created.has(tab.id) || pendingGroupMembers.has(id)) ? [id] : [];
+    });
+    const groupFailed = await restoreSpaceGroup(space, target.id, spaceGroupId, tabIds, savedGroups);
+    degraded ||= groupFailed;
+  } else if (created.size) {
     const groupsFailed = await restoreGroups(space, target.id, created, active, canGroup, matchedGroups);
     degraded ||= groupsFailed;
   }
@@ -212,7 +265,7 @@ export function registerSpaceHandlers(queueWorkspace) {
       || !(sender.url === workspaceUrl || sender.url?.startsWith(workspaceUrl + "?"))) return;
 
     const capture = message.action === "capture" && ["create", "append", "active", "replace"].includes(message.mode);
-    const restore = message.action === "open" && ["here", "window"].includes(message.mode);
+    const restore = message.action === "open" && ["here", "window", "group"].includes(message.mode);
     if ((!capture && !restore) || (message.mode === "create" ? typeof message.name !== "string" || !message.name.trim()
       : !spaceIdValid(message.id))) {
       respond({ error: "saveFailed" });
@@ -220,12 +273,15 @@ export function registerSpaceHandlers(queueWorkspace) {
     }
 
     const grants = [];
-    if (capture || message.mode === "here") grants.push("tabs");
-    if ((capture && message.mode !== "active") || (restore && message.groups === true)) grants.push("tabGroups");
+    if (capture || message.mode === "here" || message.mode === "group") grants.push("tabs");
+    if ((capture && message.mode !== "active") || (restore && (message.groups === true || message.mode === "group"))) {
+      grants.push("tabGroups");
+    }
     // Invoke the prompt on this message hop so it can outlive the toolbar popup.
     const allowed = grants.length ? chrome.permissions.request({ permissions: grants }).catch(() => false) : Promise.resolve(true);
     const windowId = Number.isInteger(message.windowId) && message.windowId >= 0 ? message.windowId : sender.tab?.windowId;
     const result = allowed.then(async granted => {
+      if (!granted && message.mode === "group") throw new SpaceError("spaceGroupPermission");
       if (!granted && (capture || message.mode === "here")) throw new SpaceError("spaceTabPermission");
       if (capture) return saveCapture(message, windowId, queueWorkspace);
       const open = opening.then(async () => {

@@ -1593,7 +1593,9 @@ async function restoreSpace(space, mode) {
   if (!result) return;
   if (result.missed || result.degraded) return reportError("spacePartialRestore");
   const count = new Intl.NumberFormat(workspace.locale).format(result.count);
-  showToast(t(result.focused ? "spaceWindowFocused" : result.count ? "spaceOpenedCount" : "spaceAlreadyOpen", { count }));
+  const status = mode === "group" ? "spaceGroupOpened"
+    : result.focused ? "spaceWindowFocused" : result.count ? "spaceOpenedCount" : "spaceAlreadyOpen";
+  showToast(t(status, { count, name: space.name }));
 }
 
 async function captureSpace(mode, data) {

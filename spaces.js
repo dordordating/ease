@@ -106,6 +106,7 @@ export function renderSpaces(container, {
       container.querySelector(`#space-item-${space.id}`)?.focus();
     });
     const menu = action("more", "more", () => openMenu(menu, add => {
+      if (space.tabs.some(tab => !tab.pinned)) add("spaceOpenAsGroup", "spaces", () => open(space, "group"));
       add("spaceEdit", "edit", () => edit(space));
       add(space.favorite ? "spaceUnfavorite" : "spaceFavorite", "pin", () => favorite(space));
       add("spaceAppendWindow", "spaces", () => capture("append", space));
