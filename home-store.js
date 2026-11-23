@@ -6,7 +6,7 @@ export const defaultHome = Object.freeze({
   widgets: Object.freeze(["today", "spaces"])
 });
 
-export const assistantLimits = Object.freeze({ prompt: 2000, source: 6000, sources: 4, context: 12000, history: 2, answer: 8000 });
+export const assistantLimits = Object.freeze({ prompt: 2000, source: 6000, sources: 4, context: 12000, history: 2, answer: 8000, taskLabels: 64 });
 
 export function normalizeHome(value) {
   const picks = list => Array.isArray(list) ? list.filter(id => homeWidgets.includes(id)) : [];

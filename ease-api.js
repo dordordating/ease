@@ -4,6 +4,7 @@ import { assistantLimits } from "./home-store.js";
 
 export const easeTranslationMessage = "ease-translate-online";
 export const assistantPort = "ease-assistant";
+export const assistantHistoryMessage = "ease-assistant-history-change";
 export const maxOnlineTranslationLength = 4_000;
 export const onlineTranslationErrorCodes = Object.freeze([
   "translatorOnlineSignIn", "translatorOnlineUnavailable", "translatorOnlineLimit", "translatorOnlineBusy",
@@ -471,6 +472,31 @@ async function requestAssistant(payload, signal, onDelta) {
   if (response.status === 413 || response.status === 422) throw new EaseTranslationError("assistantInputError");
   if (!response.ok) throw new EaseTranslationError("assistantUnavailable");
   return response.data;
+}
+
+export function handleAssistantHistoryMessage(message, respond) {
+  async function change() {
+    const { action, requestId, feedback } = message;
+    if (!(action === "clear" || ["remove", "rate"].includes(action) && uuid.test(requestId ?? ""))
+      || (action === "rate" && !["helpful", "unhelpful"].includes(feedback))) return false;
+    const account = await accountSnapshot();
+    if (account.id !== message.accountId) return false;
+    const send = async () => {
+      const session = await sessionFor(account);
+      await requireAccount(account);
+      const response = await apiPost("/v1/assistant/history", { action, request_id: requestId, feedback }, {
+        token: session.token, milliseconds: 8000
+      });
+      if (response.status === 401) await invalidateSession(session);
+      return response;
+    };
+    let response = await send();
+    if (response.status === 401) response = await send();
+    await requireAccount(account);
+    return response.ok && response.data?.ok === true;
+  }
+  change().then(ok => respond({ ok }), () => respond({ ok: false }));
+  return true;
 }
 
 export function handleAssistantPort(port) {

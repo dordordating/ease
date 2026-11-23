@@ -18,11 +18,10 @@ export function renderHome(options) {
     completeTask, addTask, restoreSpace, openEvent, openMail
   } = options;
   const root = node("div", "home-screen");
-  const title = node("h1", "", t("home"));
-  const date = node("time", "home-date");
+  const title = node("h1");
   const header = node("div", "home-header");
-  const heading = node("div", "home-heading");
-  heading.append(title, date);
+  header.hidden = true;
+  header.append(title);
   const layout = button(t("homeLayout"), "icon-button home-layout-button", { symbol: "sliders", iconOnly: true, onClick: toggleSettings });
   layout.id = "home-layout-button";
   layout.setAttribute("aria-controls", "home-settings");
@@ -34,9 +33,8 @@ export function renderHome(options) {
   historyButton.setAttribute("aria-expanded", "false");
   const headerActions = node("div", "module-title-actions");
   headerActions.append(historyButton, layout);
-  header.append(heading, headerActions);
   const dashboard = node("div", "home-dashboard");
-  const assistant = renderHomeAssistant(options);
+  const assistant = renderHomeAssistant({ ...options, navigation: headerActions });
   const history = renderAssistantHistory({
     ...options,
     onReuse(prompt) {
@@ -80,7 +78,6 @@ export function renderHome(options) {
   history.root.hidden = true;
   root.append(header, dashboard, settings, history.root);
 
-  const fullDate = new Intl.DateTimeFormat(dateLocale, { weekday: "long", month: "long", day: "numeric" });
   const clock = new Intl.DateTimeFormat(dateLocale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   const numbers = new Intl.NumberFormat(locale);
   let state;
@@ -100,8 +97,11 @@ export function renderHome(options) {
   function setMode(next, id) {
     mode = next;
     const openingHistory = mode === "history";
-    title.textContent = t(openingHistory ? "assistantHistory" : "home");
-    date.hidden = openingHistory;
+    const dock = mode === "dashboard" ? assistant.controls : header;
+    const focused = headerActions.contains(document.activeElement) ? document.activeElement : undefined;
+    if (headerActions.parentElement !== dock) dock.append(headerActions);
+    title.textContent = t(openingHistory ? "assistantHistory" : "homeLayout");
+    header.hidden = mode === "dashboard";
     settings.hidden = mode !== "settings";
     dashboard.hidden = mode !== "dashboard";
     layout.setAttribute("aria-expanded", String(mode === "settings"));
@@ -110,6 +110,7 @@ export function renderHome(options) {
     historyButton.setAttribute("aria-label", historyLabel);
     historyButton.title = historyLabel;
     historyButton.replaceChildren(glyph(openingHistory ? "chevron-left" : "history"));
+    focused?.focus({ preventScroll: true });
     if (openingHistory && visible) history.show(id);
     else history.hide();
     if (visible && mode === "dashboard") assistant.show();
@@ -277,8 +278,6 @@ export function renderHome(options) {
     clearTimeout(reviewTimer);
     const now = new Date();
     const day = localTaskDay(0, now);
-    date.dateTime = day;
-    date.textContent = fullDate.format(now);
     const taskOrder = task => task.focusDay === day ? "" : `${task.dueDate || task.planDate}${task.dueTime || task.planTime}`;
     const tasks = state.tasks.filter(task => !task.done && taskToday(task, day))
       .toSorted((a, b) => taskOrder(a).localeCompare(taskOrder(b))).slice(0, 2);
@@ -347,7 +346,7 @@ export function renderHome(options) {
         if (!settings.hidden) renderSettings();
       }
       this.updateAccount(next.accountId);
-      assistant.updateModules(next.tabs);
+      assistant.updateLabels(next.taskLabels);
       assistant.updateLanguages({ learning: next.flashcards.language, translation: next.translationTarget });
       renderWidgets();
     },

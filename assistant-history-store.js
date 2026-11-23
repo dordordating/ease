@@ -9,7 +9,8 @@ const chronological = "byAccountTime";
 const pageSize = 10;
 const sourceKinds = ["selection", "page", "mail", "tab"];
 const actionKinds = ["task", "event", "snippet", "reply", "flashcard"];
-const categories = [...sourceKinds, ...actionKinds, "general"];
+const categories = [...sourceKinds, ...actionKinds, "general", "market", "weather"];
+const lookupKinds = ["market", "weather", "workflow"];
 const feedbackValues = ["helpful", "unhelpful"];
 const errorCodes = [
   "assistantBusy", "assistantLimit", "assistantUnavailable", "assistantInterrupted", "assistantInputError", "assistantSignIn"
@@ -154,7 +155,8 @@ export async function finishAssistantHistory(accountId, id, { answer, actions = 
     requests.put({
       ...record, status: error === "assistantStopped" ? "stopped" : error ? "failed" : "complete",
       error: errorCodes.includes(error) ? error : null, actionKinds: kinds,
-      category: kinds.length === 1 ? kinds[0] : kinds.length > 1 ? "workflow" : record.category,
+      category: lookupKinds.includes(execution?.lookup) ? execution.lookup
+        : kinds.length === 1 ? kinds[0] : kinds.length > 1 ? "workflow" : record.category,
       execution: executionMetadata(execution), duration: Math.max(0, Math.round(duration)),
     });
     content.put({ ...text, answer: answer.slice(0, assistantLimits.answer * 2).toWellFormed() });

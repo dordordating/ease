@@ -2,6 +2,7 @@ import {
   rateAssistantHistory, readAssistantHistory, readAssistantHistoryEntry, removeAssistantHistory,
   setAssistantHistoryEnabled, watchAssistantHistory
 } from "./assistant-history-store.js";
+import { assistantHistoryMessage } from "./ease-api.js";
 
 const statuses = {
   submitted: "assistantHistorySubmitted",
@@ -12,6 +13,7 @@ const statuses = {
 const categoryLabels = {
   task: "todo", event: "calendar", snippet: "clipboard", reply: "mail", mail: "mail", flashcard: "flashcards",
   tab: "spaces", page: "assistantSourcePage", selection: "assistantSourceSelection", workflow: "assistantHistoryWorkflow",
+  market: "markets", weather: "assistantWeather",
 };
 
 export function renderAssistantHistory({ node, glyph, button, t, locale, dateLocale, onCopy, onReuse, confirmClear, reportError }) {
@@ -47,6 +49,11 @@ export function renderAssistantHistory({ node, glyph, button, t, locale, dateLoc
     root.removeAttribute("aria-busy");
   }
 
+  async function changeServer(accountId, action, requestId, feedback) {
+    const result = await chrome.runtime.sendMessage({ type: assistantHistoryMessage, accountId, action, requestId, feedback });
+    if (!result?.ok) throw new Error("Assistant history request failed");
+  }
+
   async function change(operation) {
     const currentAccount = accountId;
     if (!currentAccount || !visible) return;
@@ -60,7 +67,7 @@ export function renderAssistantHistory({ node, glyph, button, t, locale, dateLoc
     }
   }
 
-  function listView({ entries, pageCount, total, enabled }) {
+  function listView({ entries, pageCount, enabled }) {
     const settings = node("div", "assistant-history-settings");
     const toggleLabel = node("label", "assistant-history-toggle");
     const toggle = node("input", "home-widget-switch");
@@ -73,23 +80,22 @@ export function renderAssistantHistory({ node, glyph, button, t, locale, dateLoc
     });
     toggleLabel.append(node("span", "", t("assistantHistorySave")), toggle);
     settings.append(toggleLabel);
-    if (total) {
-      settings.append(button(t("assistantHistoryClear"), "icon-button assistant-history-delete", {
-        symbol: "trash", iconOnly: true, onClick: () => {
-          const id = accountId;
-          confirmClear(async () => {
-            if (id !== accountId) return false;
-            try {
-              await removeAssistantHistory(id);
-              return true;
-            } catch {
-              reportError("assistantHistoryFailed");
-              return false;
-            }
-          });
-        }
-      }));
-    }
+    settings.append(button(t("assistantHistoryClear"), "icon-button assistant-history-delete", {
+      symbol: "trash", iconOnly: true, onClick: () => {
+        const id = accountId;
+        confirmClear(async () => {
+          if (id !== accountId) return false;
+          try {
+            await removeAssistantHistory(id);
+            await changeServer(id, "clear");
+            return true;
+          } catch {
+            reportError("assistantHistoryFailed");
+            return false;
+          }
+        });
+      }
+    }));
     const local = node("p", "assistant-history-local", t("assistantHistoryLocal"));
     local.hidden = !enabled;
     if (!entries.length) {
@@ -142,7 +148,10 @@ export function renderAssistantHistory({ node, glyph, button, t, locale, dateLoc
     });
     previous.id = "assistant-history-back";
     actions.append(previous, button(t("remove"), "icon-button assistant-history-delete", {
-      symbol: "trash", iconOnly: true, onClick: () => change(id => removeAssistantHistory(id, entry.id))
+      symbol: "trash", iconOnly: true, onClick: () => change(async id => {
+        await changeServer(id, "remove", entry.id);
+        await removeAssistantHistory(id, entry.id);
+      })
     }));
     const metadata = node("p", "assistant-history-meta");
     metadata.append(dateLabel(entry.createdAt), node("span", "", label(entry)), node("span", "", t(statuses[entry.status])));
@@ -166,7 +175,10 @@ export function renderAssistantHistory({ node, glyph, button, t, locale, dateLoc
         const control = button(t(key), "icon-button", {
           symbol, iconOnly: true, onClick: () => {
             control.disabled = true;
-            change(id => rateAssistantHistory(id, entry.id, value));
+            change(async id => {
+              await rateAssistantHistory(id, entry.id, value);
+              await changeServer(id, "rate", entry.id, value);
+            });
           }
         });
         control.id = `assistant-history-feedback-${value}`;

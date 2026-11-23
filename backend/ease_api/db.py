@@ -1,4 +1,4 @@
-"""PostgreSQL persistence for users, translation quotas and encrypted workspaces."""
+"""PostgreSQL persistence for users, quotas, workspaces and assistant history."""
 
 from asyncio import Lock, timeout
 from dataclasses import dataclass
@@ -133,6 +133,68 @@ class Database:
             """, (id,))
             row = await cursor.fetchone()
             return User(**row) if row is not None else None
+
+    async def begin_assistant_request(
+        self, user_id: UUID, request_id: UUID, locale: str, source_count: int,
+    ) -> bool:
+        async with self._open_pool().connection() as connection:
+            cursor = await connection.execute("""
+                INSERT INTO ease_assistant_requests (user_id, request_id, locale, source_count)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id, request_id) DO NOTHING
+            """, (user_id, request_id, locale, source_count))
+            return cursor.rowcount == 1
+
+    async def complete_assistant_request(
+        self, user_id: UUID, request_id: UUID, prompt: str, answer: str, execution: dict, category: str,
+    ) -> bool:
+        guide = execution["guide"]
+        model = execution["model"]
+        async with self._open_pool().connection() as connection:
+            await connection.execute("""
+                INSERT INTO ease_assistant_models (name) VALUES (%s) ON CONFLICT (name) DO NOTHING
+            """, (model,))
+            await connection.execute("""
+                INSERT INTO ease_assistant_guides (name, version) VALUES (%s, %s)
+                ON CONFLICT (name, version) DO NOTHING
+            """, (guide["id"], guide["version"]))
+            row = await connection.execute("""
+                UPDATE ease_assistant_requests SET completed_at = CURRENT_TIMESTAMP,
+                    model_id = (SELECT id FROM ease_assistant_models WHERE name = %s),
+                    guide_id = (SELECT id FROM ease_assistant_guides WHERE name = %s AND version = %s),
+                    used_fallback = %s, category = %s
+                WHERE user_id = %s AND request_id = %s AND completed_at IS NULL AND expires_at > CURRENT_TIMESTAMP
+            """, (model, guide["id"], guide["version"], execution["fallback"], category, user_id, request_id))
+            if row.rowcount:
+                await connection.execute("""
+                    INSERT INTO ease_assistant_messages (user_id, request_id, role, body)
+                    VALUES (%s, %s, 'prompt', %s), (%s, %s, 'answer', %s)
+                """, (user_id, request_id, prompt.replace("\0", "\ufffd"), user_id, request_id, answer.replace("\0", "\ufffd")))
+            return True
+
+    async def delete_assistant_history(self, user_id: UUID, request_id: UUID | None = None, *, pending=False) -> None:
+        async with self._open_pool().connection() as connection:
+            if request_id is None:
+                await connection.execute("DELETE FROM ease_assistant_requests WHERE user_id = %s", (user_id,))
+            elif pending:
+                await connection.execute("""
+                    DELETE FROM ease_assistant_requests WHERE user_id = %s AND request_id = %s AND completed_at IS NULL
+                """, (user_id, request_id))
+            else:
+                await connection.execute("""
+                    DELETE FROM ease_assistant_requests WHERE user_id = %s AND request_id = %s
+                """, (user_id, request_id))
+
+    async def rate_assistant_request(self, user_id: UUID, request_id: UUID, value: str) -> None:
+        async with self._open_pool().connection() as connection:
+            await connection.execute("""
+                UPDATE ease_assistant_requests SET feedback = %s
+                WHERE user_id = %s AND request_id = %s AND completed_at IS NOT NULL AND expires_at > CURRENT_TIMESTAMP
+            """, (value, user_id, request_id))
+
+    async def purge_assistant_history(self) -> None:
+        async with self._open_pool().connection() as connection:
+            await connection.execute("DELETE FROM ease_assistant_requests WHERE expires_at <= CURRENT_TIMESTAMP")
 
     async def get_workspace_sync(self, user_id: UUID) -> WorkspaceSnapshot | None:
         async with self._open_pool().connection() as connection:

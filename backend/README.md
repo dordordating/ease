@@ -79,9 +79,22 @@ Include `"notes_language":"fa"` to request learning notes in Persian. For an eli
 
 Ease tries the fallback once if the primary fails before sending visible text or takes 10 seconds to start the answer. The two attempts share one quota reservation and a 45-second model deadline. OpenRouter account and billing errors return immediately. Once the answer starts, the client can retry an interrupted stream.
 
-The request includes a prompt, interface locale, local Gregorian date and time, calendar preference, and up to four source excerpts. It can also include up to two brief previous exchanges and the user’s preferred learning and translation languages.
+The request includes a prompt, interface locale, local Gregorian date and time, calendar preference, and up to four source excerpts. It can also include two brief previous exchanges, the user’s preferred learning and translation languages, and task label names keyed with short request-scoped references.
 
-Successful streams return `application/x-ndjson` with answer `delta` packets and a final `done` packet containing validated draft actions, source IDs, and execution metadata with the guide version, model, and fallback status. Both models use the same guide for matching the user's tone and keeping replies respectful. A terminal `error` packet indicates a quota, provider, or interruption problem. The extension reviews or applies actions through the corresponding modules. PostgreSQL records only aggregate usage for the request. Keep request-body logging disabled for this route.
+Successful streams return `application/x-ndjson` with answer `delta` packets and a final `done` packet containing validated draft actions, source IDs, and execution metadata with the guide version, model, and fallback status. Both models use the same guide for matching the user's tone and keeping replies respectful. A terminal `error` packet indicates a quota, provider, or interruption problem. The extension reviews or applies actions through the corresponding modules.
+
+The assistant can resolve market quotes through the same market feeds as the extension and forecasts through Open-Meteo. Weather requests pass the named city to Open-Meteo’s geocoder and the resulting city coordinates to its forecast endpoint. The development endpoint uses Open-Meteo’s non-commercial terms. [Open-Meteo terms](https://open-meteo.com/en/terms)
+
+When the browser has assistant history enabled, it sends a request UUID. The API saves successful requests with two message rows and references to the model and guide version, plus locale, category, source count, fallback status, timestamps, and optional feedback. The message rows hold the submitted prompt and visible answer. The UUID links the server records to the browser history and stays out of provider requests. Entries expire after 30 days. The cleanup job removes expired records at startup and every 15 minutes. `POST /v1/assistant/history` uses the signed-in account to delete entries, clear server history, or record a rating.
+
+Use `ease_assistant_review` from PostgreSQL to inspect unexpired records for prompt evaluation. The view excludes account identifiers. Keep request-body logging disabled.
+
+```sql
+SELECT created_at, category, model, guide_version, feedback, prompt, answer
+FROM ease_assistant_review
+ORDER BY created_at DESC
+LIMIT 20;
+```
 
 ## Encrypted workspace sync
 

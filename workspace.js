@@ -1575,7 +1575,7 @@ function refreshHome() {
   if (!homeController?.root.isConnected) return;
   homeController.update({
     home: workspace.home, tabs: workspace.tabs, accountId: translatorAccountId, events: appointmentEvents(),
-    tasks: (workspace.todo ?? defaultTodo).items, spaces: workspace.spaces,
+    tasks: (workspace.todo ?? defaultTodo).items, taskLabels: workspace.todo?.labels ?? [], spaces: workspace.spaces,
     flashcards: workspace.flashcards, translationTarget: translationLanguagePreferences(workspace.translator).target,
     mail: inboxMessages(mailAccounts)
   });
@@ -1755,18 +1755,29 @@ function mailTaskSource(message) {
   };
 }
 
-async function reviewAssistantAction(action, source, onSaved) {
+async function reviewAssistantAction(action, source, { immediately, labelId, onSaved }) {
   if (editor.open) return;
   const message = source?.message;
   const url = taskLink(source?.url);
+  async function markSaved(operation) {
+    if (!await operation) return;
+    onSaved();
+    showToast(t("assistantSaved"));
+  }
   switch (action.kind) {
-    case "task":
-      editTodo({
+    case "task": {
+      const labels = workspace.todo?.labels ?? [];
+      const taskLabel = labels.find(label => label.id === labelId) ?? labels[0];
+      const task = {
         title: action.title, notes: action.notes, dueDate: action.date, dueTime: action.time, reminderMinutes: action.reminder,
-        spaceId: source?.spaceId,
+        spaceId: workspace.spaces.some(space => space.id === source?.spaceId) ? source.spaceId : undefined,
+        labelIds: taskLabel ? [taskLabel.id] : [],
         source: message ? mailTaskSource(message) : url ? { kind: "web", url } : undefined
-      }, "draft", { onSaved });
+      };
+      if (immediately) await markSaved(updateTodo("save-task", { ...task, showModule: true }));
+      else editTodo(task, "draft", { onSaved });
       break;
+    }
     case "event":
       if (await openHomeModule("calendar")) calendarController?.openDraft({
         title: action.title, date: action.date, start: action.start, end: action.end, notes: action.notes,
@@ -1774,13 +1785,18 @@ async function reviewAssistantAction(action, source, onSaved) {
       }, onSaved);
       break;
     case "snippet":
-      editSnippet(undefined, { draftText: action.text, draftTitle: action.title, initialFolder: "all", onSaved });
+      if (immediately) await markSaved(mutate("save-snippet", { text: action.text, title: action.title, folderId: null }));
+      else editSnippet(undefined, { draftText: action.text, draftTitle: action.title, initialFolder: "all", onSaved });
       break;
-    case "flashcard":
-      editFlashcard(undefined, undefined, {
-        draft: { term: action.front, answer: action.back, language: action.language, usage: action.notes }, onSaved
-      });
+    case "flashcard": {
+      const draft = {
+        term: action.front, answer: action.back, language: selectableLanguage(action.language) ?? workspace.flashcards.language,
+        usage: action.notes
+      };
+      if (immediately) await markSaved(mutate("save-flashcard", { ...draft, showModule: true }));
+      else editFlashcard(undefined, undefined, { draft, onSaved });
       break;
+    }
     case "reply":
       if (!message || !mailAccounts.some(account => account.id === message.accountId)) return reportError("todoMailUnavailable");
       await openHomeModule("mail", {

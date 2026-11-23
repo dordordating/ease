@@ -2,12 +2,15 @@ import asyncio
 import json
 from contextlib import aclosing
 from unittest import IsolatedAsyncioTestCase, TestCase
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import httpx
 from pydantic import ValidationError
 
 from ease_api import assistant
+from ease_api.assistant_lookups import ASK_CITY, AssistantLookups, LookupCall
+from ease_api.markets import MarketsService
 from ease_api.openrouter import OpenRouterRejected, OpenRouterUnavailable
 
 
@@ -45,6 +48,11 @@ class AssistantInputTest(TestCase):
         self.assertEqual(assistant.assistant_validation_fields(errors), "body,history.answer,sources,sources.label,translation_language")
         with self.assertRaises(ValidationError):
             assistant.AssistantRequest.model_validate({**PAYLOAD.model_dump(), "translation_language": "invalid language"})
+
+    def test_task_label_uses_existing_reference(self):
+        items = [{"kind": "task", "title": label, "label": label} for label in ("l2", "l9", "invalid")]
+        result = assistant.read_result(json.dumps({"actions": items}), [], [assistant.TaskLabel(id="l2", name="Work")])
+        self.assertEqual([item.get("label") for item in result["actions"]], ["l2", None, None])
 
 
 def delta(text):
@@ -100,7 +108,7 @@ class AssistantFallbackTest(IsolatedAsyncioTestCase):
         self.assertEqual(events[0], {"type": "delta", "text": "Primary draft"})
         self.assertEqual(events[-1]["actions"][0]["date"], "2026-11-24")
         self.assertEqual(events[-1]["execution"], {
-            "guide": {"id": "ease-assistant", "version": 3}, "model": PRIMARY, "fallback": False,
+            "guide": {"id": "ease-assistant", "version": 4}, "model": PRIMARY, "fallback": False,
         })
 
     async def test_provider_error_tries_fallback_with_the_same_payload_and_privacy(self):
@@ -180,3 +188,35 @@ class AssistantFallbackTest(IsolatedAsyncioTestCase):
             with self.assertRaises(OpenRouterUnavailable):
                 await anext(self.stream(client))
         self.assertEqual(self.models(), [PRIMARY])
+
+    async def test_fragmented_lookup_returns_provider_price_and_reported_model(self):
+        def packet(function, reason=None):
+            choice = {"delta": {"tool_calls": [{"index": 0, "function": function}]} if function else {}, "finish_reason": reason}
+            return f"data: {json.dumps({'model': 'google/versioned-model', 'choices': [choice]})}\n\n".encode()
+
+        content = (packet({"name": "market_quote", "arguments": '{"base":"USD",'})
+                   + packet({"arguments": '"quote":"TMN"}'}) + packet(None, "tool_calls"))
+        markets = AsyncMock(spec=MarketsService)
+        markets.quotes.return_value = [{"price": 1234, "asOf": "2026-11-23T17:00:00Z", "stale": True}]
+        payload = PAYLOAD.model_copy(update={"request_id": str(uuid4()), "prompt": "قیمت دلار؟", "locale": "fa"})
+        async with self.client(httpx.Response(200, content=content)) as client:
+            events = [event async for event in assistant.stream_assistant(
+                client, "test", PRIMARY, payload, 1600, lookups=AssistantLookups(client, markets),
+            )]
+        markets.quotes.assert_awaited_once_with(("wlx:USDT/TMN",))
+        self.assertNotIn("request_id", json.loads(self.requests[0]["messages"][1]["content"]))
+        self.assertIn("نتونستم تأیید کنم", events[0]["text"])
+        self.assertIn("USDT", events[0]["text"])
+        self.assertIn("۱٬۲۳۴", events[0]["text"])
+        self.assertIn("Wallex", events[0]["text"])
+        self.assertEqual(events[1]["execution"]["model"], "google/versioned-model")
+        self.assertEqual(events[1]["execution"]["lookup"], "market")
+        self.assertEqual(events[1]["actions"], [])
+
+    async def test_forecast_requires_city_from_the_user(self):
+        async with self.client() as client:
+            result = await AssistantLookups(client, AsyncMock(spec=MarketsService)).answer(
+                [LookupCall("weather_forecast", '{"city":"تهران"}')], "fa", ["امروز هوا چطوره؟"],
+            )
+        self.assertEqual(result, (ASK_CITY["fa"], "weather"))
+        self.assertEqual(self.requests, [])

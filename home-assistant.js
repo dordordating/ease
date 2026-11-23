@@ -1,5 +1,6 @@
 import { assistantPort } from "./ease-api.js";
 import { streamAnswerText } from "./assistant-answer-stream.js";
+import { renderAssistantExamples } from "./assistant-examples.js";
 import { beginAssistantHistory, finishAssistantHistory, readAssistantHistory, watchAssistantHistory } from "./assistant-history-store.js";
 import { assistantExamples } from "./home-locales.js";
 import { assistantLimits } from "./home-store.js";
@@ -19,7 +20,7 @@ const actionInfo = {
   reply: ["assistantReplyAction", "reply"],
   flashcard: ["assistantFlashcardAction", "flashcards"]
 };
-const exampleModules = { task: "todo", event: "calendar", mail: "mail", tab: "spaces", flashcard: "flashcards" };
+const quickActions = new Set(["task", "snippet", "flashcard"]);
 const errors = new Set([
   "assistantBusy", "assistantLimit", "assistantUnavailable", "assistantInterrupted", "assistantInputError", "assistantSignIn"
 ]);
@@ -27,19 +28,15 @@ const maxTurns = 8;
 const textLimit = (value, limit) => value.slice(0, limit).toWellFormed().trim();
 
 export function renderHomeAssistant({
-  node, glyph, button, t, locale, dateLocale, calendar, capture, chooseTabs, previewSource, openSource, onAction, onCopy, onSignIn, reportError
+  node, glyph, button, t, locale, dateLocale, calendar, navigation, capture, chooseTabs, previewSource, openSource,
+  onAction, onCopy, onSignIn, reportError
 }) {
   const dateFormat = new Intl.DateTimeFormat(dateLocale, { weekday: "short", month: "short", day: "numeric" });
   const clockFormat = new Intl.DateTimeFormat(dateLocale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
   const numbers = new Intl.NumberFormat(locale);
   const root = node("section", "home-assistant");
-  const hero = node("div", "assistant-hero");
-  const title = node("h2", "", t("assistantAsk"));
-  title.id = "assistant-title";
-  root.setAttribute("aria-labelledby", title.id);
-  const heading = node("div", "assistant-heading");
-  const reset = button(t("assistantClear"), "icon-button assistant-reset", { symbol: "plus", iconOnly: true, onClick: clearConversation });
-  heading.append(glyph("sparkles", "assistant-orb"), title, reset);
+  root.setAttribute("aria-label", t("assistantAsk"));
+  const reset = button(t("assistantClear"), "icon-button assistant-reset", { symbol: "plus", iconOnly: true, onClick: () => clearConversation() });
 
   const form = node("form", "assistant-form");
   const input = node("textarea", "assistant-input");
@@ -50,13 +47,12 @@ export function renderHomeAssistant({
   input.setAttribute("aria-label", t("assistantPrompt"));
   input.dir = "auto";
   const sourceList = node("div", "assistant-attachments");
-  const toolbar = node("div", "assistant-tools");
   const attach = node("details", "assistant-attach");
   const attachButton = node("summary", "assistant-attach-button");
   attachButton.id = "assistant-attach-button";
   attachButton.setAttribute("aria-label", t("assistantAttach"));
   attachButton.title = t("assistantAttach");
-  attachButton.append(glyph("plus"), node("span", "", t("assistantAttach")));
+  attachButton.append(glyph("plus"));
   const attachOptions = node("div", "assistant-attach-options");
   attachOptions.append(
     button(t("assistantSourcePage"), "assistant-attach-option", { symbol: "open-window", onClick: () => attachBrowserSource("page") }),
@@ -69,41 +65,32 @@ export function renderHomeAssistant({
   );
   attach.append(attachButton, attachOptions);
 
-  const send = button(t("assistantSend"), "assistant-send", { symbol: "arrow", iconOnly: true });
+  const send = button(t("assistantSend"), "assistant-send", { symbol: "sparkles", iconOnly: true });
   send.id = "assistant-send";
   send.type = "submit";
-  toolbar.append(attach, send);
   const hint = node("p", "assistant-context-hint", t("assistantContextHint"));
   hint.id = "assistant-context-hint";
-  form.append(input, sourceList, toolbar);
+  form.append(attach, input, send, sourceList, hint);
   const status = node("p", "assistant-status");
   status.setAttribute("role", "status");
   const signIn = button(t("signInGoogle"), "secondary-button assistant-signin", { symbol: "user", onClick: signIntoAssistant });
   const access = node("div", "assistant-access");
   access.append(status, signIn);
 
-  const exampleArea = node("div", "assistant-examples");
-  const exampleButton = node("button", "assistant-example");
-  exampleButton.type = "button";
-  exampleButton.append(glyph("sparkles"));
-  const exampleText = node("span", "assistant-example-text");
-  exampleText.dir = "auto";
-  exampleText.setAttribute("aria-hidden", "true");
-  exampleButton.append(exampleText);
-  const next = button(t("assistantNextExample"), "icon-button assistant-example-next", {
-    symbol: "refresh", iconOnly: true, onClick: () => displayExample(exampleIndex + 1)
-  });
-  exampleArea.append(exampleButton, next);
+  const examples = renderAssistantExamples({ node, button, t, locale, onSelect(prompt) {
+    input.value = prompt;
+    reflect();
+    input.focus();
+  } });
+  const subbar = node("div", "assistant-subbar");
+  const controls = node("div", "assistant-controls");
+  controls.append(reset, navigation);
+  subbar.append(examples.root, controls);
   const transcript = node("div", "assistant-transcript");
-  hero.append(heading, form, hint, exampleArea, access);
-  root.append(hero, transcript);
+  root.append(form, subbar, access, transcript);
 
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
   const catalog = assistantExamples(locale);
-  let examples = catalog;
-  let exampleIndex = 0;
-  let exampleTimer;
-  let phase = "type", position = 0;
   let visible = false;
   let account;
   let signingIn = false;
@@ -114,57 +101,13 @@ export function renderHomeAssistant({
   let turns = [];
   let recent;
   let recentRevision = 0;
-  let modules = [];
+  let taskLabels = [];
   let languages = {};
   let assistantStatus;
 
-  function animateExample() {
-    clearTimeout(exampleTimer);
-    const characters = Array.from(examples[exampleIndex].prompt);
-    if (reducedMotion.matches || !canAnimate()) {
-      exampleText.textContent = characters.join("");
-      return;
-    }
-    const erase = phase === "erase";
-    position += erase ? -1 : 1;
-    exampleText.textContent = characters.slice(0, position).join("");
-    if (erase && position === 0) {
-      exampleTimer = setTimeout(() => displayExample(exampleIndex + 1), 230);
-    } else if (!erase && position === characters.length) {
-      phase = "erase";
-      exampleTimer = setTimeout(animateExample, 4400);
-    } else {
-      exampleTimer = setTimeout(animateExample, erase ? 13 : 27);
-    }
-  }
-
-  function canAnimate() {
-    return visible && !active && !input.value && !exampleArea.matches(":hover, :focus-within")
-      && !document.hidden;
-  }
-
-  function displayExample(index) {
-    clearTimeout(exampleTimer);
-    exampleIndex = index % examples.length;
-    const { prompt } = examples[exampleIndex];
-    exampleButton.setAttribute("aria-label", t("assistantUseExample", { prompt }));
-    exampleButton.title = prompt;
-    phase = "type";
-    position = 0;
-    animateExample();
-  }
-
-  function chooseExamples() {
-    const activeKinds = new Set(sources.map(source => source.kind));
-    const order = entry => activeKinds.has(entry.kind) ? 0
-      : entry === catalog[0] || modules.includes(exampleModules[entry.kind]) ? 1 : 2;
-    examples = catalog.toSorted((a, b) => order(a) - order(b));
-    displayExample(0);
-  }
-
   function reflect() {
     const key = active ? "assistantStop" : "assistantSend";
-    send.replaceChildren(glyph(active ? "stop" : "arrow"));
+    send.replaceChildren(glyph(active ? "stop" : "sparkles"));
     send.title = t(key);
     send.setAttribute("aria-label", t(key));
     send.disabled = !active && (!input.value.trim() || signingIn);
@@ -236,7 +179,6 @@ export function renderHomeAssistant({
     hint.hidden = !sources.length;
     if (sources.length) input.setAttribute("aria-describedby", hint.id);
     else input.removeAttribute("aria-describedby");
-    chooseExamples();
     reflect();
   }
 
@@ -292,10 +234,16 @@ export function renderHomeAssistant({
         const original = turn.sources.find(source => source.id === action.source);
         const title = node("bdi", "assistant-action-title", action.title ?? action.front ?? original?.label ?? t(label));
         const timing = describeTime(action);
+        const taskLabel = action.kind === "task" ? turn.labels.get(action.label) ?? turn.labels.values().next().value : undefined;
         const excerpt = action.body || action.text || action.back || action.notes;
         const info = node("div", "assistant-action-copy");
         info.append(title);
         if (timing) info.append(node("small", "", timing));
+        if (taskLabel) {
+          const labelChip = node("bdi", "todo-label assistant-task-label", taskLabel.name);
+          labelChip.style.setProperty("--label-color", taskLabel.color);
+          info.append(labelChip);
+        }
         if (excerpt) {
           const detail = node("p", "", excerpt);
           detail.dir = "auto";
@@ -303,28 +251,41 @@ export function renderHomeAssistant({
         }
         const applied = turn.saved.has(index);
         const status = action.kind === "reply" ? "mailSent" : "assistantSaved";
+        const buttons = node("div", "assistant-action-buttons");
         const review = button(t(applied ? status : label), "assistant-action-review", {
-          symbol: applied ? "check" : "arrow", onClick: async () => {
-            if (review.disabled) return;
-            review.disabled = true;
-            try {
-              await onAction(action, original, () => {
-                if (!turn.saved.has(index)) {
-                  turn.saved.add(index);
-                  renderResult(turn, target);
-                }
-              });
-            } catch {
-              reportError("saveFailed");
-            } finally {
-              review.disabled = applied;
-            }
-          }
+          symbol: applied ? "check" : "arrow", onClick: () => apply(false)
         });
+        const quick = !applied && quickActions.has(action.kind) ? button(t("assistantSaveNow"), "assistant-action-quick", {
+          symbol: "check", onClick: () => apply(true)
+        }) : undefined;
         review.id = `assistant-review-${turn.id}-${index}`;
         review.disabled = applied;
-        row.append(glyph(symbol, "assistant-action-icon"), info, review);
+        buttons.append(review);
+        if (quick) buttons.append(quick);
+        row.append(glyph(symbol, "assistant-action-icon"), info, buttons);
         group.append(row);
+
+        async function apply(immediately) {
+          if (review.disabled) return;
+          review.disabled = true;
+          if (quick) quick.disabled = true;
+          try {
+            await onAction(action, original, {
+              immediately, labelId: taskLabel?.id,
+              onSaved() {
+                turn.saved.add(index);
+                review.replaceChildren(glyph("check"), node("span", "", t(status)));
+                review.disabled = true;
+                quick?.remove();
+              }
+            });
+          } catch {
+            reportError("saveFailed");
+          } finally {
+            review.disabled = turn.saved.has(index);
+            if (quick) quick.disabled = false;
+          }
+        }
       });
       content.push(group);
     }
@@ -403,7 +364,7 @@ export function renderHomeAssistant({
     }
   }
 
-  function sendPayload(turn, port) {
+  function sendPayload(turn, port, recording) {
     const now = new Date();
     const localTime = [now.getHours(), now.getMinutes()].map(value => String(value).padStart(2, "0")).join(":");
     const contextIds = new Set(turn.sources.map(source => source.id));
@@ -412,6 +373,8 @@ export function renderHomeAssistant({
     port.postMessage({
       prompt: turn.prompt, locale, calendar, local_date: localTaskDay(0, now), local_time: localTime, history,
       learning_language: languages.learning, translation_language: languages.translation,
+      ...(recording && { request_id: turn.id }),
+      ...(turn.labels.size && { task_labels: Array.from(turn.labels, ([id, label]) => ({ id, name: label.name.toWellFormed() })) }),
       sources: turn.sources.map(({ id, kind, label, text }) => ({ id, kind, label, text }))
     });
   }
@@ -426,7 +389,15 @@ export function renderHomeAssistant({
       return;
     }
 
-    const turn = { id: crypto.randomUUID(), createdAt: Date.now(), prompt, answer: "", sources: [...sources], saved: new Set() };
+    const normalizeLabel = value => ` ${value.normalize("NFKC").toLocaleLowerCase(locale)
+      .replace(/ي/gu, "ی").replace(/ك/gu, "ک").replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
+    const normalized = normalizeLabel(prompt);
+    const labels = taskLabels.toSorted((a, b) => Number(normalized.includes(normalizeLabel(b.name)))
+      - Number(normalized.includes(normalizeLabel(a.name)))).slice(0, assistantLimits.taskLabels);
+    const turn = {
+      id: crypto.randomUUID(), createdAt: Date.now(), prompt, answer: "", sources: [...sources], saved: new Set(),
+      labels: new Map(labels.map((label, index) => [`l${index + 1}`, label]))
+    };
     const owner = account;
     const started = performance.now();
     const history = beginAssistantHistory(owner, { ...turn, locale, example: catalog.find(entry => entry.prompt === prompt) })
@@ -439,7 +410,6 @@ export function renderHomeAssistant({
     active = operation;
     input.value = "";
     assistantStatus = "assistantWorking";
-    displayExample(exampleIndex);
     attach.open = false;
     reflect();
 
@@ -466,7 +436,9 @@ export function renderHomeAssistant({
         void chrome.runtime.lastError;
         finish("assistantInterrupted");
       });
-      sendPayload(turn, port);
+      history.then(recording => {
+        if (active === operation) sendPayload(turn, port, recording);
+      }).catch(() => finish("assistantUnavailable"));
     } catch {
       finish("assistantUnavailable");
     }
@@ -483,7 +455,6 @@ export function renderHomeAssistant({
           answer: turn.answer, actions: turn.actions, execution: turn.execution, error, duration,
         });
       }).catch(() => { if (owner === account) reportError("assistantHistoryFailed"); });
-      displayExample(exampleIndex + 1);
       reflect();
     }
   }
@@ -516,10 +487,7 @@ export function renderHomeAssistant({
     }
   }
 
-  input.addEventListener("input", () => {
-    displayExample(exampleIndex);
-    reflect();
-  });
+  input.addEventListener("input", reflect);
   input.addEventListener("keydown", event => {
     if (event.key !== "Enter" || event.shiftKey || event.altKey || event.isComposing || event.keyCode === 229) return;
     event.preventDefault();
@@ -530,17 +498,6 @@ export function renderHomeAssistant({
     if (active) active.finish("assistantStopped");
     else submit();
   });
-  exampleButton.addEventListener("click", () => {
-    input.value = examples[exampleIndex].prompt;
-    displayExample(exampleIndex);
-    reflect();
-    input.focus();
-  });
-  exampleArea.addEventListener("pointerenter", () => displayExample(exampleIndex));
-  exampleArea.addEventListener("pointerleave", () => displayExample(exampleIndex));
-  exampleArea.addEventListener("focusin", () => displayExample(exampleIndex));
-  exampleArea.addEventListener("focusout", () => queueMicrotask(() => displayExample(exampleIndex)));
-  const refreshMotion = () => displayExample(exampleIndex);
   const closeAttach = event => { if (!attach.contains(event.target)) attach.open = false; };
   attach.addEventListener("keydown", event => {
     if (event.key === "Escape" && attach.open) {
@@ -565,6 +522,7 @@ export function renderHomeAssistant({
 
   return {
     root,
+    controls,
     focus: () => input.focus(),
     reuse(prompt) {
       input.value = prompt;
@@ -573,11 +531,7 @@ export function renderHomeAssistant({
       input.focus();
     },
     addSource: source => addSources([source]),
-    updateModules(next) {
-      if (next.join() === modules.join()) return;
-      modules = [...next];
-      chooseExamples();
-    },
+    updateLabels(next) { taskLabels = next; },
     updateLanguages(next) { languages = next; },
     updateAccount(next) {
       if (account !== next) {
@@ -591,18 +545,14 @@ export function renderHomeAssistant({
     show() {
       if (visible) return;
       visible = true;
-      document.addEventListener("visibilitychange", refreshMotion);
       document.addEventListener("pointerdown", closeAttach);
-      reducedMotion.addEventListener("change", refreshMotion);
-      displayExample(exampleIndex);
+      examples.show();
     },
     hide() {
       visible = false;
       attach.open = false;
-      clearTimeout(exampleTimer);
-      document.removeEventListener("visibilitychange", refreshMotion);
+      examples.hide();
       document.removeEventListener("pointerdown", closeAttach);
-      reducedMotion.removeEventListener("change", refreshMotion);
     },
     dispose() {
       unsubscribeHistory();

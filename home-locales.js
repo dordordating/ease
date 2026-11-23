@@ -2,10 +2,10 @@ export const homeMessages = {
   "en": {
     assistantHistory: "Assistant history",
     assistantHistorySave: "Save history",
-    assistantHistoryLocal: "Prompts and replies are saved in this browser.",
+    assistantHistoryLocal: "Your browser saves this history. Ease keeps a copy of completed requests for 30 days to improve the assistant.",
     assistantHistoryEmpty: "No saved requests yet.",
     assistantHistoryClear: "Clear assistant history",
-    assistantHistoryClearConfirm: "Delete all saved assistant requests and replies for this account in this browser?",
+    assistantHistoryClearConfirm: "Clear this account’s assistant history in this browser and on the Ease server?",
     assistantHistoryOlder: "Older",
     assistantHistoryNewer: "Newer",
     assistantHistoryPage: "Page {page} of {count}",
@@ -70,14 +70,16 @@ export const homeMessages = {
     assistantReplyAction: "Open reply draft",
     assistantFlashcardAction: "Review flashcard",
     assistantSaved: "Saved",
+    assistantSaveNow: "Save now",
+    assistantWeather: "Weather",
   },
   "fa": {
     assistantHistory: "تاریخچهٔ دستیار",
     assistantHistorySave: "ذخیرهٔ تاریخچه",
-    assistantHistoryLocal: "دستورها و پاسخ‌ها در همین مرورگر ذخیره می‌شوند.",
+    assistantHistoryLocal: "تاریخچه در همین مرورگر می‌ماند. Ease نسخه‌ای از دستورهای پاسخ‌داده‌شده را برای بهبود دستیار تا ۳۰ روز نگه می‌دارد.",
     assistantHistoryEmpty: "هنوز دستوری ذخیره نشده است.",
     assistantHistoryClear: "پاک کردن تاریخچهٔ دستیار",
-    assistantHistoryClearConfirm: "همهٔ دستورها و پاسخ‌های ذخیره‌شدهٔ این حساب در این مرورگر حذف شوند؟",
+    assistantHistoryClearConfirm: "تاریخچهٔ دستیار این حساب از این مرورگر و سرور Ease پاک شود؟",
     assistantHistoryOlder: "قدیمی‌تر",
     assistantHistoryNewer: "جدیدتر",
     assistantHistoryPage: "صفحهٔ {page} از {count}",
@@ -142,14 +144,16 @@ export const homeMessages = {
     assistantReplyAction: "باز کردن پیش‌نویس پاسخ",
     assistantFlashcardAction: "بازبینی فلش‌کارت",
     assistantSaved: "ذخیره شد",
+    assistantSaveNow: "ذخیرهٔ سریع",
+    assistantWeather: "آب‌وهوا",
   },
   "es": {
     assistantHistory: "Historial del asistente",
     assistantHistorySave: "Guardar historial",
-    assistantHistoryLocal: "Las solicitudes y respuestas se guardan en este navegador.",
+    assistantHistoryLocal: "El navegador guarda este historial. Ease conserva una copia de las solicitudes respondidas durante 30 días para mejorar el asistente.",
     assistantHistoryEmpty: "Aún no hay solicitudes guardadas.",
     assistantHistoryClear: "Borrar historial del asistente",
-    assistantHistoryClearConfirm: "¿Eliminar todas las solicitudes y respuestas guardadas de esta cuenta en este navegador?",
+    assistantHistoryClearConfirm: "¿Borrar el historial del asistente de esta cuenta en el navegador y en Ease?",
     assistantHistoryOlder: "Anteriores",
     assistantHistoryNewer: "Más recientes",
     assistantHistoryPage: "Página {page} de {count}",
@@ -214,14 +218,16 @@ export const homeMessages = {
     assistantReplyAction: "Abrir borrador de respuesta",
     assistantFlashcardAction: "Revisar tarjeta",
     assistantSaved: "Guardado",
+    assistantSaveNow: "Guardar ahora",
+    assistantWeather: "Tiempo",
   },
   "fr": {
     assistantHistory: "Historique de l’assistant",
     assistantHistorySave: "Enregistrer l’historique",
-    assistantHistoryLocal: "Les demandes et les réponses sont enregistrées dans ce navigateur.",
+    assistantHistoryLocal: "Le navigateur enregistre cet historique. Ease conserve une copie des demandes traitées pendant 30 jours pour améliorer l’assistant.",
     assistantHistoryEmpty: "Aucune demande enregistrée pour le moment.",
     assistantHistoryClear: "Effacer l’historique de l’assistant",
-    assistantHistoryClearConfirm: "Supprimer toutes les demandes et réponses enregistrées pour ce compte dans ce navigateur ?",
+    assistantHistoryClearConfirm: "Effacer l’historique de ce compte dans ce navigateur et sur Ease ?",
     assistantHistoryOlder: "Plus anciens",
     assistantHistoryNewer: "Plus récents",
     assistantHistoryPage: "Page {page} sur {count}",
@@ -286,14 +292,16 @@ export const homeMessages = {
     assistantReplyAction: "Ouvrir le brouillon de réponse",
     assistantFlashcardAction: "Vérifier la carte",
     assistantSaved: "Enregistré",
+    assistantSaveNow: "Enregistrer",
+    assistantWeather: "Météo",
   },
   "pt-BR": {
     assistantHistory: "Histórico do assistente",
     assistantHistorySave: "Salvar histórico",
-    assistantHistoryLocal: "As solicitações e respostas ficam neste navegador.",
+    assistantHistoryLocal: "O navegador guarda este histórico. O Ease mantém uma cópia das solicitações respondidas por 30 dias para aprimorar o assistente.",
     assistantHistoryEmpty: "Ainda não há solicitações salvas.",
     assistantHistoryClear: "Limpar histórico do assistente",
-    assistantHistoryClearConfirm: "Excluir todas as solicitações e respostas salvas desta conta neste navegador?",
+    assistantHistoryClearConfirm: "Limpar o histórico do assistente desta conta neste navegador e no Ease?",
     assistantHistoryOlder: "Anteriores",
     assistantHistoryNewer: "Mais recentes",
     assistantHistoryPage: "Página {page} de {count}",
@@ -358,14 +366,16 @@ export const homeMessages = {
     assistantReplyAction: "Abrir rascunho da resposta",
     assistantFlashcardAction: "Revisar cartão",
     assistantSaved: "Salvo",
+    assistantSaveNow: "Salvar agora",
+    assistantWeather: "Tempo",
   },
   "ar": {
     assistantHistory: "سجلّ المساعد",
     assistantHistorySave: "حفظ السجلّ",
-    assistantHistoryLocal: "تُحفظ الطلبات والردود في هذا المتصفح.",
+    assistantHistoryLocal: "يحفظ المتصفح هذا السجل. يحتفظ Ease بنسخة من الطلبات المُجاب عنها لمدة 30 يومًا لتحسين المساعد.",
     assistantHistoryEmpty: "لا توجد طلبات محفوظة بعد.",
     assistantHistoryClear: "مسح سجلّ المساعد",
-    assistantHistoryClearConfirm: "هل تريد حذف كل الطلبات والردود المحفوظة لهذا الحساب في هذا المتصفح؟",
+    assistantHistoryClearConfirm: "هل تريد مسح سجل المساعد لهذا الحساب من هذا المتصفح وخادم Ease؟",
     assistantHistoryOlder: "أقدم",
     assistantHistoryNewer: "أحدث",
     assistantHistoryPage: "الصفحة {page} من {count}",
@@ -430,14 +440,16 @@ export const homeMessages = {
     assistantReplyAction: "فتح مسودة الرد",
     assistantFlashcardAction: "مراجعة البطاقة",
     assistantSaved: "تم الحفظ",
+    assistantSaveNow: "حفظ الآن",
+    assistantWeather: "الطقس",
   },
   "de": {
     assistantHistory: "Assistentenverlauf",
     assistantHistorySave: "Verlauf speichern",
-    assistantHistoryLocal: "Anfragen und Antworten werden in diesem Browser gespeichert.",
+    assistantHistoryLocal: "Der Browser speichert diesen Verlauf. Ease bewahrt eine Kopie beantworteter Anfragen 30 Tage lang auf, um den Assistenten zu verbessern.",
     assistantHistoryEmpty: "Noch keine gespeicherten Anfragen.",
     assistantHistoryClear: "Assistentenverlauf löschen",
-    assistantHistoryClearConfirm: "Alle gespeicherten Anfragen und Antworten dieses Kontos in diesem Browser löschen?",
+    assistantHistoryClearConfirm: "Den Assistentenverlauf dieses Kontos im Browser und bei Ease löschen?",
     assistantHistoryOlder: "Ältere",
     assistantHistoryNewer: "Neuere",
     assistantHistoryPage: "Seite {page} von {count}",
@@ -502,14 +514,16 @@ export const homeMessages = {
     assistantReplyAction: "Antwortentwurf öffnen",
     assistantFlashcardAction: "Lernkarte prüfen",
     assistantSaved: "Gespeichert",
+    assistantSaveNow: "Direkt speichern",
+    assistantWeather: "Wetter",
   },
   "ja": {
     assistantHistory: "アシスタントの履歴",
     assistantHistorySave: "履歴を保存",
-    assistantHistoryLocal: "指示と回答はこのブラウザに保存されます。",
+    assistantHistoryLocal: "この履歴はブラウザに保存されます。アシスタントの改善のため、Ease は回答済みのやり取りのコピーを30日間保持します。",
     assistantHistoryEmpty: "保存されたリクエストはありません。",
     assistantHistoryClear: "アシスタントの履歴を消去",
-    assistantHistoryClearConfirm: "このブラウザでこのアカウントに保存されたすべての指示と回答を削除しますか？",
+    assistantHistoryClearConfirm: "このブラウザと Ease のサーバーから、このアカウントのアシスタント履歴を削除しますか？",
     assistantHistoryOlder: "古い方へ",
     assistantHistoryNewer: "新しい方へ",
     assistantHistoryPage: "{count} ページ中 {page} ページ",
@@ -574,6 +588,8 @@ export const homeMessages = {
     assistantReplyAction: "返信の下書きを開く",
     assistantFlashcardAction: "フラッシュカードを確認",
     assistantSaved: "保存しました",
+    assistantSaveNow: "すぐに保存",
+    assistantWeather: "天気",
   },
 };
 
@@ -581,7 +597,7 @@ const exampleKinds = [
   "task", "general", "page", "task", "mail", "event", "selection", "flashcard",
   "tab", "mail", "snippet", "general", "page", "task", "mail", "selection",
   "event", "flashcard", "tab", "mail", "snippet", "general", "task", "page",
-  "mail", "event", "selection", "general",
+  "mail", "event", "selection", "general", "market", "weather",
 ];
 
 const exampleIds = [
@@ -591,7 +607,7 @@ const exampleIds = [
   "cite-page-recommendation", "notes-to-tasks", "reply-deadline-extension", "translate-informal-selection",
   "agenda-focus-time", "learning-card-with-note", "choose-tabs-for-brief", "reply-with-follow-up",
   "template-with-placeholders", "shorten-message", "weekly-update-task", "extract-page-steps",
-  "unanswered-email-questions", "schedule-demo", "selection-to-checklist", "idea-to-project-plan",
+  "unanswered-email-questions", "schedule-demo", "selection-to-checklist", "idea-to-project-plan", "bitcoin-price", "city-forecast",
 ];
 
 const exampleText = {
@@ -837,8 +853,19 @@ const exampleText = {
   ],
 };
 
+const liveExamples = {
+  en: ["What’s the BTC/USD price?", "Will it rain in Berlin tomorrow?"],
+  fa: ["قیمت بیت‌کوین به دلار چنده؟", "فردا در تهران بارون میاد؟"],
+  es: ["¿Cuál es el precio de BTC en dólares?", "¿Lloverá mañana en Madrid?"],
+  fr: ["Quel est le cours du BTC en dollars ?", "Est-ce qu’il pleuvra à Paris demain ?"],
+  "pt-BR": ["Qual é o preço do BTC em dólares?", "Vai chover amanhã em São Paulo?"],
+  ar: ["كم سعر البيتكوين بالدولار؟", "هل ستمطر في دبي غدًا؟"],
+  de: ["Wie hoch ist der BTC-Kurs in Dollar?", "Regnet es morgen in Berlin?"],
+  ja: ["ビットコインのドル価格は？", "明日の東京は雨が降る？"],
+};
+
 export function assistantExamples(locale) {
-  return (exampleText[locale] ?? exampleText.en).map((prompt, index) => ({
+  return [...(exampleText[locale] ?? exampleText.en), ...(liveExamples[locale] ?? liveExamples.en)].map((prompt, index) => ({
     id: exampleIds[index], prompt, kind: exampleKinds[index],
   }));
 }

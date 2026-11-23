@@ -15,7 +15,10 @@ import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
 import { deleteFolder, hasFolder, moveSnippet, pinFolder, reorderFolder, saveFolder } from "./clipboard-store.js";
 import { registerClipboardHistoryHandlers, suppressClipboardHistoryText } from "./clipboard-history-background.js";
 import { translationLanguagePreferences } from "./translator-engine.js";
-import { assistantPort, easeTranslationMessage, handleAssistantPort, handleEaseTranslationMessage, registerEaseSessionHandlers } from "./ease-api.js";
+import {
+  assistantHistoryMessage, assistantPort, easeTranslationMessage, handleAssistantHistoryMessage, handleAssistantPort,
+  handleEaseTranslationMessage, registerEaseSessionHandlers
+} from "./ease-api.js";
 import { changeHome } from "./home-store.js";
 import { registerAssistantSourceHandlers } from "./home-sources.js";
 import { changeFlashcardPreferences, FlashcardError, removeFlashcard, reviewFlashcard, saveFlashcard } from "./flashcard-store.js";
@@ -562,6 +565,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (fromWorkspace) return handleEaseTranslationMessage(message, respond);
     return;
   }
+  if (message?.type === assistantHistoryMessage && fromWorkspace) return handleAssistantHistoryMessage(message, respond);
   if (message?.type === marketIconMessage && fromWorkspace) {
     cacheMarketIcon(message.symbol).then(cached => respond({ cached }), () => respond({ cached: false }));
     return true;

@@ -2,10 +2,11 @@ import asyncio
 import logging
 import re
 from base64 import b64decode, urlsafe_b64encode
-from contextlib import aclosing, asynccontextmanager
+from contextlib import aclosing, asynccontextmanager, suppress
 from dataclasses import asdict
 from datetime import UTC, datetime, time, timedelta
 from typing import Annotated, Literal
+from uuid import UUID
 
 import httpx
 import jwt
@@ -14,11 +15,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from psycopg import Error as DatabaseError
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .assistant import AssistantRequest, assistant_line, assistant_validation_fields, stream_assistant
+from .assistant import AssistantHistoryChange, AssistantRequest, assistant_line, assistant_validation_fields, stream_assistant
+from .assistant_lookups import AssistantLookups
 from .auth import GoogleAuthUnavailable, InvalidGoogleCredential, issue_session, validate_session, verify_google_access_token
 from .db import MAX_WORKSPACE_SYNC_REVISION, Database, QuotaExceeded, User
 from .mail_imap import router as mail_imap_router
@@ -203,6 +206,24 @@ def retry_after_midnight() -> str:
     return str(max(1, int((next_day - now).total_seconds())))
 
 
+async def maintain_assistant_history(database: Database) -> None:
+    while True:
+        try:
+            await database.purge_assistant_history()
+        except DatabaseError:
+            logging.getLogger("uvicorn.error").warning("assistant_history_cleanup_failed")
+        await asyncio.sleep(15 * 60)
+
+
+async def persist_assistant_history(operation):
+    try:
+        async with asyncio.timeout(3):
+            return await operation
+    except (DatabaseError, TimeoutError):
+        logging.getLogger("uvicorn.error").warning("assistant_history_write_failed")
+        return False
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     session_secret = settings.session_secret.get_secret_value()
@@ -224,7 +245,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 app.state.http = client
                 demo_key = settings.coingecko_demo_api_key
                 app.state.markets = MarketsService(client, demo_key.get_secret_value() if demo_key else None)
-                yield
+                app.state.assistant_lookups = AssistantLookups(client, app.state.markets)
+                cleanup = asyncio.create_task(maintain_assistant_history(database))
+                try:
+                    yield
+                finally:
+                    cleanup.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await cleanup
         finally:
             await database.close()
 
@@ -411,17 +439,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             except TimeoutError:
                 yield assistant_line({"type": "error", "code": "busy"})
                 return
+            database = request.app.state.database
+            history_id = UUID(payload.request_id) if payload.request_id else None
+            recording = False
             try:
-                await request.app.state.database.reserve_translation(
+                await database.reserve_translation(
                     user.id, "assistant", settings.user_daily_limit, settings.global_daily_limit
                 )
+                if history_id:
+                    recording = await persist_assistant_history(database.begin_assistant_request(
+                        user.id, history_id, payload.locale, len(payload.sources),
+                    ))
                 stream = stream_assistant(
                     request.app.state.http, settings.openrouter_api_key.get_secret_value(),
                     settings.openrouter_model_assistant, payload, settings.max_output_tokens,
                     fallback_model=settings.openrouter_model_assistant_fallback,
+                    lookups=request.app.state.assistant_lookups,
                 )
+                answer = []
                 async with aclosing(stream):
                     async for event in stream:
+                        if recording and event["type"] == "delta":
+                            answer.append(event["text"])
+                        if recording and event["type"] == "done":
+                            execution = event["execution"]
+                            kinds = {action["kind"] for action in event["actions"]}
+                            category = execution.get("lookup") or (next(iter(kinds)) if len(kinds) == 1 else "workflow" if kinds else "general")
+                            saved = await persist_assistant_history(database.complete_assistant_request(
+                                user.id, history_id, payload.prompt, "".join(answer), execution, category,
+                            ))
+                            if saved:
+                                recording = False
                         yield assistant_line(event)
             except QuotaExceeded:
                 yield assistant_line({"type": "error", "code": "limit"})
@@ -431,10 +479,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 yield assistant_line({"type": "error", "code": "interrupted"})
             finally:
                 slots.release()
+                if recording:
+                    await persist_assistant_history(database.delete_assistant_history(user.id, history_id, pending=True))
 
         return StreamingResponse(
             events(), media_type="application/x-ndjson",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
+
+    @app.post("/v1/assistant/history")
+    async def change_assistant_history(payload: AssistantHistoryChange, request: Request,
+                                       user: Annotated[User, Depends(require_user)]):
+        database = request.app.state.database
+        history_id = UUID(payload.request_id) if payload.request_id else None
+        if payload.action != "clear" and not history_id:
+            raise HTTPException(422, "assistant_history_id_required")
+        if payload.action == "rate":
+            if not payload.feedback:
+                raise HTTPException(422, "assistant_history_feedback_required")
+            await database.rate_assistant_request(user.id, history_id, payload.feedback)
+        else:
+            await database.delete_assistant_history(user.id, None if payload.action == "clear" else history_id)
+        return {"ok": True}
 
     return app
