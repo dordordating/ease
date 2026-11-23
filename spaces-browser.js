@@ -144,7 +144,9 @@ async function openSpace(space, { mode, windowId, canReadTabs, canGroup, focused
   if (!space.tabs.length) throw new SpaceError("spaceEmpty");
   const key = savedWindowKey(space.id);
   const grouped = mode === "group";
-  if (grouped && (!canReadTabs || !canGroup)) throw new SpaceError("spaceGroupPermission");
+  if (grouped && (!canReadTabs || (!canGroup && space.tabs.some(tab => !tab.pinned)))) {
+    throw new SpaceError("spaceGroupPermission");
+  }
   let target;
   let createdWindow = false;
   let starter;
@@ -237,7 +239,7 @@ async function openSpace(space, { mode, windowId, canReadTabs, canGroup, focused
 
   if (!matched.size) throw new SpaceError("spaceOpenFailed");
   const active = matched.get(space.activeTabId);
-  if (active !== undefined && (mode !== "window" || createdWindow || created.size > 0)) {
+  if (active !== undefined && (mode === "window" ? createdWindow || created.size > 0 : focused)) {
     await chrome.tabs.update(active, { active: true }).catch(() => { degraded = true; });
   }
   if (grouped) {

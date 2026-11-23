@@ -33,10 +33,11 @@ function rankMatches(text, entries, locale) {
     || b.space.updatedAt - a.space.updatedAt);
 }
 
-function showSpaces(focused, issue) {
+function showSpaces(focused, { issue, spaceId, windowId } = {}) {
   const params = new URLSearchParams({ surface: "panel", open: "spaces" });
   if (issue) params.set("spaceIssue", issue);
-  return chrome.tabs.create({ url: chrome.runtime.getURL(`workspace.html?${params}`), active: focused });
+  if (spaceId) params.set("spaceId", spaceId);
+  return chrome.tabs.create({ url: chrome.runtime.getURL(`workspace.html?${params}`), active: focused, windowId });
 }
 
 export function registerSpaceOmnibox() {
@@ -84,10 +85,12 @@ export function registerSpaceOmnibox() {
   api.onInputEntered.addListener((text, disposition) => {
     generation += 1;
     const focused = disposition !== "newBackgroundTab";
+    const currentWindow = chrome.windows.getLastFocused({ windowTypes: ["normal"] }).catch(() => null);
     const suggestedId = suggestedIds.get(text);
     suggestedIds.clear();
     const enter = async () => {
-      if (!text.trim()) return showSpaces(focused);
+      const windowId = (await currentWindow)?.id;
+      if (!text.trim()) return showSpaces(focused, { windowId });
       let id = suggestedId;
       if (!id) {
         const workspace = await readWorkspace();
@@ -95,11 +98,12 @@ export function registerSpaceOmnibox() {
         const match = entries.find(entry => entry.content === text) ?? rankMatches(text, entries, workspace.locale)[0];
         id = match?.space.id;
       }
-      if (!id) return showSpaces(focused, "no-match");
+      if (!id) return showSpaces(focused, { windowId, issue: "no-match" });
       try {
-        await openSavedSpace(id, { focused });
-      } catch {
-        await showSpaces(focused, "open-failed");
+        await openSavedSpace(id, { mode: "group", windowId, focused });
+      } catch (error) {
+        const issue = error.code === "spaceGroupPermission" ? "group-permission" : "open-failed";
+        await showSpaces(focused, { windowId, issue, spaceId: id });
       }
     };
     enter().catch(() => {});

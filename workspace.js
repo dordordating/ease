@@ -183,7 +183,7 @@ function labelButton(element, label, symbol) {
   element.setAttribute("aria-label", label);
 }
 
-function showToast(message, action, error = false) {
+function showToast(message, action, error = false, actionLabel = t("undo")) {
   if (editor.open && error) {
     const feedback = editor.querySelector(".dialog-feedback");
     feedback.hidden = false;
@@ -197,7 +197,7 @@ function showToast(message, action, error = false) {
   toastAction.hidden = !action;
   toastAction.onclick = null;
   if (action) {
-    toastAction.textContent = t("undo");
+    toastAction.textContent = actionLabel;
     toastAction.onclick = action;
   }
   toastTimer = setTimeout(() => {
@@ -2927,10 +2927,16 @@ if (initialTranslationSelection !== null) {
 } else if (workspaceRoute.get("open") === "todo" && savedTabAvailable("todo")) {
   switchTo("todo", false);
 } else if (workspaceRoute.get("open") === "spaces") {
-  switchTo(savedTabAvailable("spaces") ? "spaces" : "library", false);
+  const space = workspace.spaces.find(item => item.id === workspaceRoute.get("spaceId"));
+  if (space && savedTabAvailable("spaces")) openSpaceDetail(space.id);
+  else switchTo(savedTabAvailable("spaces") ? "spaces" : "library", false);
   const issue = workspaceRoute.get("spaceIssue");
   if (issue === "no-match") reportError("spaceOmniboxNoMatch");
   if (issue === "open-failed") reportError("spaceOpenFailed");
+  if (issue === "group-permission") {
+    if (space) showToast(t("spaceGroupPermission"), () => restoreSpace(space, "group"), true, t("spaceOpenAsGroup"));
+    else reportError("spaceGroupPermission");
+  }
 } else if (workspaceRoute.get("open") === "account") {
   switchTo("settings", false);
   document.getElementById("ease-account")?.scrollIntoView({ block: "nearest" });
