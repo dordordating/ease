@@ -1,10 +1,11 @@
 import asyncio
 import json
 from contextlib import aclosing
-from unittest import IsolatedAsyncioTestCase
+from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import patch
 
 import httpx
+from pydantic import ValidationError
 
 from ease_api import assistant
 from ease_api.openrouter import OpenRouterRejected, OpenRouterUnavailable
@@ -16,6 +17,34 @@ PAYLOAD = assistant.AssistantRequest(
     prompt="Draft a follow-up task for tomorrow.", locale="en", calendar="gregory",
     local_date="2026-11-23", local_time="17:30",
 )
+
+
+class AssistantInputTest(TestCase):
+    def test_legacy_automatic_target_resolves_to_english(self):
+        payload = {**PAYLOAD.model_dump(), "locale": "fa", "calendar": "persian", "translation_language": "auto"}
+        self.assertEqual(assistant.AssistantRequest.model_validate(payload).translation_language, "en")
+        self.assertEqual(assistant.AssistantRequest.model_validate({**payload, "translation_language": "fa"}).translation_language, "fa")
+
+    def test_untitled_attachment_has_a_usable_label(self):
+        source = {"id": "s1", "kind": "page", "text": "An excerpt."}
+        for label in ({}, {"label": " \n "}, {"label": None}):
+            with self.subTest(label=label):
+                payload = assistant.AssistantRequest.model_validate({**PAYLOAD.model_dump(), "sources": [{**source, **label}]})
+                self.assertEqual(payload.sources[0].label, "Current page")
+                self.assertEqual(payload.sources[0].text, source["text"])
+
+    def test_validation_log_allowlists_fields_and_omits_input(self):
+        errors = [
+            {"loc": ("body", "translation_language"), "input": "private input"},
+            {"loc": ("body", "sources", 0, "label"), "input": "private title"},
+            {"loc": ("body", "history", 1, "answer"), "input": "private reply"},
+            {"loc": ("body", "sources", 0, "private field name")},
+            {"loc": ("body", "private field name")},
+            {"loc": ("body", 2)},
+        ]
+        self.assertEqual(assistant.assistant_validation_fields(errors), "body,history.answer,sources,sources.label,translation_language")
+        with self.assertRaises(ValidationError):
+            assistant.AssistantRequest.model_validate({**PAYLOAD.model_dump(), "translation_language": "invalid language"})
 
 
 def delta(text):

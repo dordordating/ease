@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import re
 from collections.abc import AsyncIterator
 from contextlib import aclosing
@@ -9,7 +10,7 @@ from datetime import date
 from typing import Annotated, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, ValidationInfo, field_validator
 
 from .openrouter import OPENROUTER_ENDPOINT, OpenRouterRejected, OpenRouterUnavailable
 
@@ -36,8 +37,16 @@ class InputModel(BaseModel):
 class Source(InputModel):
     id: SourceId
     kind: Literal["selection", "page", "mail", "tab"]
-    label: str = Field(min_length=1, max_length=180)
+    label: str = Field(default="", min_length=1, max_length=180, validate_default=True)
     text: str = Field(min_length=1, max_length=SOURCE_LIMIT)
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def name_untitled_source(cls, value: object, info: ValidationInfo) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            labels = {"selection": "Selected text", "page": "Current page", "mail": "Email", "tab": "Saved tab"}
+            return labels.get(info.data.get("kind"), "Source")
+        return value
 
 
 class Turn(InputModel):
@@ -56,6 +65,15 @@ class AssistantRequest(InputModel):
     sources: list[Source] = Field(default_factory=list, max_length=4)
     history: list[Turn] = Field(default_factory=list, max_length=2)
 
+    @field_validator("translation_language", mode="before")
+    @classmethod
+    def restore_translation_target(cls, value: object) -> object:
+        # Older Ease builds saved an automatic target. The current translator resolves it to English.
+        if value == "auto":
+            logging.getLogger("uvicorn.error").info("assistant_legacy_target_normalized")
+            return "en"
+        return value
+
     @field_validator("local_date")
     @classmethod
     def valid_date(cls, value: str) -> str:
@@ -68,6 +86,22 @@ class AssistantRequest(InputModel):
         if len({source.id for source in sources}) != len(sources) or sum(len(source.text) for source in sources) > CONTEXT_LIMIT:
             raise ValueError("Invalid source set")
         return sources
+
+
+def assistant_validation_fields(errors: list[dict]) -> str:
+    nested = {"history": Turn.model_fields, "sources": Source.model_fields}
+    fields = set()
+    for error in errors:
+        location = error["loc"]
+        if len(location) < 2 or location[0] != "body" or location[1] not in AssistantRequest.model_fields:
+            fields.add("body")
+            continue
+        field = location[1]
+        if field in nested and len(location) > 3 and location[3] in nested[field]:
+            fields.add(f"{field}.{location[3]}")
+        else:
+            fields.add(field)
+    return ",".join(sorted(fields))
 
 
 class TaskAction(InputModel):

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 from base64 import b64decode, urlsafe_b64encode
 from contextlib import aclosing, asynccontextmanager
@@ -17,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .assistant import AssistantRequest, assistant_line, stream_assistant
+from .assistant import AssistantRequest, assistant_line, assistant_validation_fields, stream_assistant
 from .auth import GoogleAuthUnavailable, InvalidGoogleCredential, issue_session, validate_session, verify_google_access_token
 from .db import MAX_WORKSPACE_SYNC_REVISION, Database, QuotaExceeded, User
 from .mail_imap import router as mail_imap_router
@@ -244,8 +245,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return response
 
     @app.exception_handler(RequestValidationError)
-    async def invalid_request(_request: Request, _error: RequestValidationError):
+    async def invalid_request(request: Request, error: RequestValidationError):
         # Validation errors can include the original token or text.
+        if request.url.path == "/v1/assistant":
+            fields = assistant_validation_fields(error.errors())
+            logging.getLogger("uvicorn.error").warning("assistant_input_rejected fields=%s", fields)
         return JSONResponse({"detail": "invalid_request"}, status_code=422)
 
     @app.get("/healthz")

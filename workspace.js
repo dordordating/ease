@@ -19,7 +19,7 @@ import { mailMessage, mailUpdateKey } from "./mail-background.js";
 import { marketAlertStateKey, readMarketAlertState } from "./markets-alerts.js";
 import { marketLabel, workspaceMarketInstruments } from "./markets-store.js";
 import { flashcardFieldLimits } from "./flashcard-store.js";
-import { selectableLanguage, translatorLanguages } from "./translator-engine.js";
+import { selectableLanguage, translationLanguagePreferences, translatorLanguages } from "./translator-engine.js";
 import { takeTranslatorSelection, translatorSelectionKey } from "./translator-selection.js";
 import { renderTranslatorSites } from "./translator-sites-ui.js";
 import { readTranslationHistory, translationHistoryKey, translationHistoryMessage } from "./translation-history-store.js";
@@ -1555,7 +1555,7 @@ function refreshHome() {
   homeController.update({
     home: workspace.home, tabs: workspace.tabs, accountId: translatorAccountId, events: appointmentEvents(),
     tasks: (workspace.todo ?? defaultTodo).items, spaces: workspace.spaces,
-    flashcards: workspace.flashcards, translationTarget: workspace.translator?.target ?? defaultTranslator.target,
+    flashcards: workspace.flashcards, translationTarget: translationLanguagePreferences(workspace.translator).target,
     mail: inboxMessages(mailAccounts)
   });
 }

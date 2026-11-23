@@ -196,7 +196,7 @@ export function renderHomeAssistant({
       }
       sources.push({
         ...item, id: `s${++sourceNumber}`, text: excerpt,
-        label: textLimit(item.label || t(sourceInfo[item.kind][0]), 180),
+        label: textLimit(item.label ?? "", 180) || t(sourceInfo[item.kind][0]),
         truncated: Boolean(item.truncated || excerpt.length < text.length)
       });
       available -= excerpt.length;
