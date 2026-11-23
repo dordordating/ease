@@ -1,7 +1,7 @@
 import asyncio
 import re
 from base64 import b64decode, urlsafe_b64encode
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime, time, timedelta
 from typing import Annotated, Literal
@@ -11,12 +11,13 @@ import jwt
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from .assistant import AssistantRequest, assistant_line, stream_assistant
 from .auth import GoogleAuthUnavailable, InvalidGoogleCredential, issue_session, validate_session, verify_google_access_token
 from .db import MAX_WORKSPACE_SYNC_REVISION, Database, QuotaExceeded, User
 from .mail_imap import router as mail_imap_router
@@ -127,7 +128,11 @@ class RequestBodyLimit:
         if scope["type"] != "http" or scope["method"] != "POST":
             await self.app(scope, receive, send)
             return
-        if scope.get("path") != "/v1/mail/smtp/send":
+        path = scope.get("path")
+        if path == "/v1/assistant":
+            await self.read_body(scope, receive, send, 108_000, timeout=15)
+            return
+        if path != "/v1/mail/smtp/send":
             await self.read_body(scope, receive, send, self.limit)
             return
 
@@ -392,5 +397,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if result.learning is not None:
             response["learning"] = result.learning
         return response
+
+    @app.post("/v1/assistant")
+    async def assistant(payload: AssistantRequest, request: Request, user: Annotated[User, Depends(require_user)]):
+        async def events():
+            slots = request.app.state.translation_slots
+            try:
+                await asyncio.wait_for(slots.acquire(), timeout=1.0)
+            except TimeoutError:
+                yield assistant_line({"type": "error", "code": "busy"})
+                return
+            try:
+                await request.app.state.database.reserve_translation(
+                    user.id, "assistant", settings.user_daily_limit, settings.global_daily_limit
+                )
+                stream = stream_assistant(
+                    request.app.state.http, settings.openrouter_api_key.get_secret_value(),
+                    settings.openrouter_model_assistant, payload, settings.max_output_tokens,
+                )
+                async with aclosing(stream):
+                    async for event in stream:
+                        yield assistant_line(event)
+            except QuotaExceeded:
+                yield assistant_line({"type": "error", "code": "limit"})
+            except OpenRouterUnavailable:
+                yield assistant_line({"type": "error", "code": "unavailable"})
+            except OpenRouterRejected:
+                yield assistant_line({"type": "error", "code": "interrupted"})
+            finally:
+                slots.release()
+
+        return StreamingResponse(
+            events(), media_type="application/x-ndjson",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     return app

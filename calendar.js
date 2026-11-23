@@ -800,19 +800,20 @@ export function renderCalendar(container, {
     addButton.disabled = true;
     editor.querySelector('.calendar-form-title').textContent = t(event ? 'calendarEditEvent' : 'calendarAddEvent');
     editorDate.textContent = formatDate.format(editorDay * dayLength);
-    followUpHint.hidden = !followUp;
+    followUpHint.hidden = !followUp || followUp.assistant === true;
     editorTitle.value = event?.title ?? (seed?.title ?? '').slice(0, 160);
     const mailUrl = mailMessageLink(null, event?.mailUrl ?? seed?.mailUrl);
     editorMail.hidden = !mailUrl;
     if (mailUrl) editorMail.href = mailUrl;
     else editorMail.removeAttribute('href');
-    startField.value = event?.start ?? '';
-    endField.value = event?.end ?? '';
-    endNextDay.checked = event?.endNextDay === true;
-    endMode = event?.end ? 'manual' : event?.start ? 'omitted' : 'auto';
-    reminder.value = calendarReminderOffsets.includes(event?.reminderMinutes) ? String(event.reminderMinutes) : '';
+    const timing = event ?? seed;
+    startField.value = timing?.start ?? '';
+    endField.value = timing?.end ?? '';
+    endNextDay.checked = timing?.endNextDay === true;
+    endMode = timing?.end ? 'manual' : timing?.start ? 'omitted' : 'auto';
+    reminder.value = calendarReminderOffsets.includes(timing?.reminderMinutes) ? String(timing.reminderMinutes) : '';
     editor.elements.namedItem('location').value = event?.location ?? '';
-    editor.elements.namedItem('notes').value = event?.notes ?? '';
+    editor.elements.namedItem('notes').value = event?.notes ?? seed?.notes ?? '';
     editorTitle.setCustomValidity('');
     endField.setCustomValidity('');
     setStatus(editorStatus);
@@ -886,7 +887,9 @@ export function renderCalendar(container, {
     setEditorBusy(false);
     if (saved) {
       if (draft.id && detailEvent?.id === draft.id) detailEvent = { ...detailEvent, ...draft };
+      const onSaved = followUp?.onSaved;
       closeEditor();
+      onSaved?.();
     } else {
       setStatus(editorStatus, 'saveFailed');
     }
@@ -1066,6 +1069,17 @@ export function renderCalendar(container, {
   renderConnections?.(container.querySelector('.calendar-connections'));
   return {
     update, openEvent,
+    openDraft(draft, onSaved) {
+      if (!editor.hidden) return;
+      const day = Date.parse(draft.date) / dayLength;
+      if (!Number.isInteger(day)) return;
+      showDay(day, { select: true });
+      openEditor(undefined, {
+        ...draft, assistant: true, onSaved,
+        endNextDay: Boolean(draft.start && draft.end && draft.end < draft.start)
+      });
+      editor.scrollIntoView({ block: 'nearest' });
+    },
     openFollowUp({ title, url }) {
       const mailUrl = mailMessageLink(null, url);
       if (!editor.hidden) return;

@@ -1,3 +1,5 @@
+import { homeMessages } from "./home-locales.js";
+
 export const localeNames = Object.freeze({
   en: "English",
   fa: "فارسی",
@@ -15,8 +17,10 @@ export function isRtl(locale) {
 
 export function translate(locale, key, values = {}) {
   const catalog = Object.hasOwn(messages, locale) ? messages[locale] : messages.en;
-  const fallback = Object.hasOwn(messages.en, key) ? messages.en[key] : key;
-  const message = Object.hasOwn(catalog, key) ? catalog[key] : fallback;
+  const home = homeMessages[locale] ?? homeMessages.en;
+  const fallback = Object.hasOwn(messages.en, key) ? messages.en[key]
+    : Object.hasOwn(homeMessages.en, key) ? homeMessages.en[key] : key;
+  const message = Object.hasOwn(catalog, key) ? catalog[key] : Object.hasOwn(home, key) ? home[key] : fallback;
   return message.replace(/\{(\w+)\}/g, (placeholder, name) => (
     Object.hasOwn(values, name) ? String(values[name]) : placeholder
   ));

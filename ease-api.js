@@ -1,7 +1,9 @@
 import { getGoogleAccount, getSilentGoogleProfileToken, googleAccountStorageKey } from "./providers.js";
 import { validateWorkspaceSyncEnvelope } from "./workspace-sync-crypto.js";
+import { assistantLimits } from "./home-store.js";
 
 export const easeTranslationMessage = "ease-translate-online";
+export const assistantPort = "ease-assistant";
 export const maxOnlineTranslationLength = 4_000;
 export const onlineTranslationErrorCodes = Object.freeze([
   "translatorOnlineSignIn", "translatorOnlineUnavailable", "translatorOnlineLimit", "translatorOnlineBusy",
@@ -30,6 +32,10 @@ let accountVersion = 0;
 let watchingAccount = false;
 const activeRequests = new Map();
 const activeSyncRequests = new Set();
+const activeAssistantRequests = new Set();
+const assistantErrors = {
+  busy: "assistantBusy", limit: "assistantLimit", unavailable: "assistantUnavailable", interrupted: "assistantInterrupted"
+};
 
 class EaseTranslationError extends Error {
   constructor(code) {
@@ -61,6 +67,7 @@ export function registerEaseSessionHandlers() {
       request.abort(new EaseTranslationError("translatorOnlineSignIn"));
     }
     for (const request of activeSyncRequests) request.abort(new EaseTranslationError("syncSignInRequired"));
+    for (const request of activeAssistantRequests) request.abort(new EaseTranslationError("assistantSignIn"));
   });
   watchingAccount = true;
 }
@@ -94,11 +101,11 @@ async function requireAccount(expected) {
   if (!matchesAccount(await accountSnapshot(), expected)) throw new EaseTranslationError("translatorOnlineSignIn");
 }
 
-async function apiRequest(path, { method, body, token, signal, milliseconds = 27_000 }) {
+async function apiRequest(path, { method, body, token, signal, milliseconds = 27_000, consume }) {
   signal?.throwIfAborted();
   const timeout = AbortSignal.timeout(milliseconds);
   const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  const headers = { Accept: "application/json" };
+    const headers = { Accept: consume ? "application/x-ndjson" : "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (token) headers.Authorization = `Bearer ${token}`;
   // A long translation can outlast Chrome's worker idle timer. Limit activity to this request.
@@ -119,6 +126,9 @@ async function apiRequest(path, { method, body, token, signal, milliseconds = 27
     let data = null;
     if (response.status === 401) {
       response.body?.cancel().catch(() => {});
+    } else if (consume && response.ok) {
+      data = await consume(response, requestSignal);
+      requestSignal.throwIfAborted();
     } else {
       data = await response.json().catch((error) => {
         if (error instanceof SyntaxError) return null;
@@ -127,8 +137,9 @@ async function apiRequest(path, { method, body, token, signal, milliseconds = 27
       requestSignal.throwIfAborted();
     }
     return { ok: response.ok, status: response.status, data };
-  } catch {
+  } catch (error) {
     signal?.throwIfAborted();
+    if (error instanceof EaseTranslationError) throw error;
     throw new EaseTranslationError(timeout.aborted ? "translatorOnlineTimeout" : "translatorOnlineConnection");
   } finally {
     if (keepAlive !== undefined) clearInterval(keepAlive);
@@ -389,6 +400,105 @@ export async function translateOnline(text, { source = "auto", target, engine, s
   } finally {
     if (abort) signal.removeEventListener("abort", abort);
   }
+}
+
+async function readAssistantStream(response, signal, onDelta) {
+  const interrupted = () => new EaseTranslationError("assistantInterrupted");
+  if (!response.headers.get("content-type")?.startsWith("application/x-ndjson") || !response.body) throw interrupted();
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "", size = 0, answerLength = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      signal.throwIfAborted();
+      if (done) throw interrupted();
+      size += value.byteLength;
+      if (size > 135_000) throw interrupted();
+      buffer += decoder.decode(value, { stream: true });
+      let end;
+      while ((end = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, end);
+        buffer = buffer.slice(end + 1);
+        let packet;
+        try {
+          packet = JSON.parse(line);
+        } catch {
+          throw interrupted();
+        }
+        if (packet?.type === "error") {
+          throw new EaseTranslationError(Object.hasOwn(assistantErrors, packet.code) ? assistantErrors[packet.code] : "assistantUnavailable");
+        }
+        if (packet?.type === "done" && answerLength && Array.isArray(packet.actions) && Array.isArray(packet.citations)) {
+          return { actions: packet.actions.slice(0, 4), citations: packet.citations.slice(0, assistantLimits.sources) };
+        }
+        if (packet?.type !== "delta" || typeof packet.text !== "string" || !packet.text.length) throw interrupted();
+        answerLength += packet.text.length;
+        if (answerLength > assistantLimits.answer * 2) throw interrupted();
+        onDelta(packet.text);
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
+async function requestAssistant(payload, signal, onDelta) {
+  const account = await accountSnapshot();
+  const path = "/v1/assistant";
+  const send = async () => {
+    const session = await sessionFor(account);
+    await requireAccount(account);
+    signal.throwIfAborted();
+    const response = await apiPost(path, payload, {
+      token: session.token, signal, milliseconds: 52_000,
+      consume: (response, requestSignal) => readAssistantStream(response, requestSignal, onDelta)
+    });
+    if (response.status === 401) await invalidateSession(session);
+    return response;
+  };
+  let response = await send();
+  if (response.status === 401) response = await send();
+  signal.throwIfAborted();
+  await requireAccount(account);
+  if (response.status === 401) throw new EaseTranslationError("assistantSignIn");
+  if (response.status === 404) throw new EaseTranslationError("assistantUnavailable");
+  if (response.status === 413 || response.status === 422) throw new EaseTranslationError("assistantInputError");
+  if (!response.ok) throw new EaseTranslationError("assistantUnavailable");
+  return response.data;
+}
+
+export function handleAssistantPort(port) {
+  let started = false;
+  let disconnected = false;
+  const controller = new AbortController();
+  function post(packet) {
+    if (!disconnected) port.postMessage(packet);
+  }
+  port.onDisconnect.addListener(() => {
+    disconnected = true;
+    controller.abort();
+  });
+  port.onMessage.addListener((payload) => {
+    if (started) return;
+    started = true;
+    if (!payload || typeof payload.prompt !== "string" || !payload.prompt.trim() || payload.prompt.length > assistantLimits.prompt) {
+      post({ type: "error", code: "assistantInputError" });
+      return;
+    }
+    registerEaseSessionHandlers();
+    activeAssistantRequests.add(controller);
+    requestAssistant(payload, controller.signal, text => post({ type: "delta", text })).then(
+      result => post({ type: "done", ...result }),
+      error => {
+        const code = error?.code;
+        if (code?.startsWith?.("assistant")) post({ type: "error", code });
+        else if (code === "translatorOnlineSignIn") post({ type: "error", code: "assistantSignIn" });
+        else post({ type: "error", code: "assistantUnavailable" });
+      }
+    ).finally(() => activeAssistantRequests.delete(controller)).catch(() => {});
+  });
 }
 
 function validRevision(revision) {

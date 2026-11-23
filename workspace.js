@@ -3,21 +3,23 @@ import { renderTranslator } from "./translator.js";
 import { renderFlashcards } from "./flashcards.js";
 import { renderTodo } from "./todo.js";
 import { renderSpaces } from "./spaces.js";
+import { renderHome } from "./home.js";
+import { assistantSourceReady, captureAssistantSource, receiveAssistantSource } from "./home-sources.js";
 import { spacesMessage } from "./spaces-browser.js";
 import { spaceColors, spaceLimits, spaceNameTaken } from "./spaces-store.js";
-import { collapsedTaskKey, defaultTodo, localTaskDay, taskCalendarEntries, taskLimits, taskSections } from "./todo-store.js";
+import { collapsedTaskKey, defaultTodo, localTaskDay, taskCalendarEntries, taskLimits, taskLink, taskSections } from "./todo-store.js";
 import { calendarReminderLabel, calendarReminderOffsets, calendarSuggestedEnd } from "./calendar-timing.js";
 import { createDatePicker } from "./date-picker.js";
 import { createTimePicker } from "./time-picker.js";
 import { quickTaskKey, takeQuickTask } from "./todo-background.js";
 import { renderMarkets } from "./markets.js";
 import { inboxMessages, renderMail } from "./mail.js";
-import { mailMessageLink, senderAddress } from "./mail-api.js";
+import { htmlText, mailMessageLink, senderAddress } from "./mail-api.js";
 import { mailMessage, mailUpdateKey } from "./mail-background.js";
 import { marketAlertStateKey, readMarketAlertState } from "./markets-alerts.js";
 import { marketLabel, workspaceMarketInstruments } from "./markets-store.js";
 import { flashcardFieldLimits } from "./flashcard-store.js";
-import { translatorLanguages } from "./translator-engine.js";
+import { selectableLanguage, translatorLanguages } from "./translator-engine.js";
 import { takeTranslatorSelection, translatorSelectionKey } from "./translator-selection.js";
 import { renderTranslatorSites } from "./translator-sites-ui.js";
 import { readTranslationHistory, translationHistoryKey, translationHistoryMessage } from "./translation-history-store.js";
@@ -56,12 +58,13 @@ const clipboard = modules[0];
 const lastWorkspaceTabKey = "easeLastWorkspaceTab";
 const clipboardHistoryFolder = Symbol("clipboard history");
 const clipboardReadPermission = { permissions: ["clipboardRead"] };
+const home = { id: "home", icon: "home" };
 const library = { id: "library", icon: "plus" };
 const settings = { id: "settings", icon: "settings" };
-const destinations = [...modules, library, settings];
+const destinations = [home, ...modules, library, settings];
 let workspace = defaultWorkspace;
-let activePage = clipboard.id;
-let lastWorkspaceTab = clipboard.id;
+let activePage = home.id;
+let lastWorkspaceTab = home.id;
 let activeFolder = "all";
 let clipboardHistory = { enabled: false, entries: [] };
 let clipboardHistoryAllowed = false;
@@ -78,6 +81,8 @@ let vaultCopyFeedback;
 let draggedModule;
 let currentWindowId;
 let inToolbarPopup = false;
+let homeController;
+let homeLocale;
 const calendarNavigation = {};
 let calendarController;
 let calendarConnectionsRefresh;
@@ -102,6 +107,7 @@ let mailAccounts = [];
 let mailController;
 let mailLocale;
 let mailReadVersion = 0;
+let pendingMailReply;
 const translatorDraft = {};
 let translatorAccountId = null;
 let workspaceInitialized = false;
@@ -218,7 +224,8 @@ async function mutate(action, data, onError = reportError) {
 }
 
 function savedTabAvailable(page, state = workspace) {
-  return page === clipboard.id || (state.tabs.includes(page) && modules.some(module => module.released && module.id === page));
+  return page === home.id || page === clipboard.id
+    || (state.tabs.includes(page) && modules.some(module => module.released && module.id === page));
 }
 
 function rememberWorkspaceTab(page) {
@@ -283,6 +290,7 @@ function refreshCalendarDay() {
   const now = new Date();
   if (tab) updateCalendarTab(tab, now);
   todoController?.update(workspace.todo ?? defaultTodo, appointmentEvents());
+  refreshHome();
   const nextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
   clearTimeout(calendarDayTimer);
   calendarDayTimer = setTimeout(refreshCalendarDay, nextDay.getTime() - now.getTime());
@@ -316,11 +324,11 @@ function renderTabs() {
   tabBar.setAttribute("role", "tablist");
   tabBar.setAttribute("aria-orientation", "vertical");
   const displayed = visibleModules(workspace);
-  const tabs = [...displayed, library];
+  const tabs = [home, ...displayed, library];
   tabBar.replaceChildren(...tabs.map((module) => {
     const isSelected = activePage === module.id && !query;
     const isLibrary = module === library;
-    const item = button(t(module.id), `module-tab${isLibrary ? " module-tab--library" : ""}`, {
+    const item = button(t(module.id), `module-tab${isLibrary ? " module-tab--library" : module === home ? " module-tab--home" : ""}`, {
       symbol: module.icon,
       iconOnly: true,
       onClick: () => switchTo(module.id)
@@ -331,7 +339,7 @@ function renderTabs() {
     item.setAttribute("aria-controls", "workspace");
     item.setAttribute("aria-selected", String(isSelected));
     item.tabIndex = isSelected || (!tabs.some(({ id }) => id === activePage && !query) && module === tabs[0]) ? 0 : -1;
-    if (!isLibrary && displayed.length > 1) bindModuleReorder(item, module.id);
+    if (displayed.length > 1 && displayed.includes(module)) bindModuleReorder(item, module.id);
     if (module.id === "calendar") updateCalendarTab(item);
     if (module.id === "mail") updateMailBadge(item);
     return item;
@@ -483,7 +491,7 @@ async function refreshWorkspace(raw, initialTab) {
     }
     if (version !== workspaceReadVersion) return;
     workspace = next;
-    if (initialTab && savedTabAvailable(initialTab, next)) activePage = initialTab;
+    if (initialTab) activePage = next.home?.start === "home" || !savedTabAvailable(initialTab, next) ? home.id : initialTab;
     clearExpiredDialog();
     render();
     startVaultTimer();
@@ -1205,9 +1213,16 @@ function renderSearch() {
   section(t("searchResults"));
   const sources = modules.filter(({ id, released }) => released && Object.hasOwn(moduleSearchSources, id))
     .map(({ id, icon }) => ({ id, icon, ...moduleSearchSources[id]() }));
-  const commands = destinations.filter((page) => page === library || page === settings || workspace.tabs.includes(page.id))
+  const commands = destinations.filter((page) => [home, library, settings].includes(page) || workspace.tabs.includes(page.id))
     .map((page) => ({ title: t(page.id), icon: page.icon, keywords: [t(page.id), translate("en", page.id)], open: () => switchTo(page.id) }));
   commands.push(
+    {
+      title: t("assistantAsk"), icon: "sparkles", keywords: [t("assistant"), t("assistantAsk"), "AI", "assistant"],
+      open() {
+        switchTo(home.id, false);
+        homeController?.focusPrompt();
+      }
+    },
     {
       title: t("newSnippet"), icon: "plus", keywords: [t("newSnippet"), translate("en", "newSnippet")],
       open() {
@@ -1263,9 +1278,13 @@ function render() {
   labelButton(panelButton, t("openPanel"), "panel");
   labelButton(settingsButton, t("settings"), "settings");
   settingsButton.setAttribute("aria-pressed", String(activePage === "settings" && !query));
-  if (![library.id, settings.id].includes(activePage)
+  if (![home.id, library.id, settings.id].includes(activePage)
     && !modules.some(({ id, released }) => released && id === activePage)) activePage = clipboard.id;
   renderTabs();
+  if (!query && activePage === home.id && homeController?.root.isConnected && homeLocale === dateLocale) {
+    refreshHome();
+    return;
+  }
   if (!query && activePage === "calendar" && calendarController && calendarLocale === workspace.locale) {
     calendarController.update({ preferences: { ...defaultCalendar, ...workspace.calendar }, events: calendarEvents(), holidays: workspace.holidays });
     return;
@@ -1295,7 +1314,7 @@ function render() {
     marketsController.update({ state: workspace.markets, alertState: marketAlertState });
     return;
   }
-  if (!query && activePage === "mail" && mailController && mailLocale === dateLocale) {
+  if (!query && activePage === "mail" && mailController && mailLocale === dateLocale && !pendingMailReply) {
     mailController.update(mailAccounts);
     return;
   }
@@ -1308,6 +1327,7 @@ function render() {
     return;
   }
   translatorController?.dispose?.();
+  homeController?.hide();
   translatorController = undefined;
   translatorSiteController = undefined;
   translatorHistoryController = undefined;
@@ -1334,6 +1354,7 @@ function render() {
     view.setAttribute("aria-labelledby", `tab-${activePage}`);
   }
   if (query) renderSearch();
+  else if (activePage === home.id) showHome(dateLocale);
   else if (activePage === "clipboard") renderClipboard();
   else if (activePage === "calendar") {
     const calendarSettings = button(t("calendarSettings"), "icon-button calendar-settings-trigger", {
@@ -1506,9 +1527,12 @@ function render() {
     actions.append(composeMail, mailSettings);
     section(t("mail"), undefined, actions);
     mailLocale = dateLocale;
+    const replyDraft = pendingMailReply;
+    pendingMailReply = undefined;
     mailController = renderMail(view, {
       dateLocale, t, icon, settingsButton: mailSettings, composeButton: composeMail, accounts: mailAccounts, send: sendMail,
-      followUp: followUpMail, followUpTask: followUpTodo, requestInWorker: inToolbarPopup,
+      replyDraft,
+      followUp: followUpMail, followUpTask: followUpTodo, askAssistant: askAboutMail, requestInWorker: inToolbarPopup,
       openMenu: (anchor, populate) => openWorkspaceMenu(anchor, undefined, t("mailActions"), populate),
       confirmDelete: (subject, remove) => {
         if (editor.open) return;
@@ -1526,6 +1550,213 @@ function render() {
   }
 }
 
+function refreshHome() {
+  if (!homeController?.root.isConnected) return;
+  homeController.update({
+    home: workspace.home, tabs: workspace.tabs, accountId: translatorAccountId, events: appointmentEvents(),
+    tasks: (workspace.todo ?? defaultTodo).items, spaces: workspace.spaces,
+    flashcards: workspace.flashcards, translationTarget: workspace.translator?.target ?? defaultTranslator.target,
+    mail: inboxMessages(mailAccounts)
+  });
+}
+
+function showHome(dateLocale) {
+  if (!homeController || homeLocale !== dateLocale) {
+    homeController?.dispose();
+    homeLocale = dateLocale;
+    homeController = renderHome({
+      node, glyph, button, t, locale: workspace.locale, dateLocale,
+      calendar: calendarSystemFor(workspace.locale, workspace.calendar?.system),
+      async onPreferences(patch) {
+        if (await mutate("home-preferences", patch)) await refreshWorkspace();
+      },
+      openModule: openHomeModule,
+      async openTask(id) {
+        if (await openHomeModule("todo")) todoController?.openTask(id);
+      },
+      addTask: focusQuickTask,
+      completeTask: completeTodo,
+      restoreSpace,
+      async openEvent(id) {
+        if (await openHomeModule("calendar")) calendarController?.openEvent(id);
+      },
+      openMail: openHomeMail,
+      capture: kind => captureAssistantSource(kind, currentWindowId),
+      chooseTabs: chooseAssistantTabs,
+      previewSource: previewHomeSource,
+      openSource: openHomeSource,
+      onAction: reviewAssistantAction,
+      onCopy: copyWorkspaceText,
+      onSignIn: async () => {
+        try { return await signInWorkspaceAccount(); }
+        catch (error) { reportError(error?.code ?? "accountFailed"); return false; }
+      },
+      reportError
+    });
+  }
+  view.append(homeController.root);
+  homeController.show();
+  refreshHome();
+}
+
+async function openHomeModule(id, replyDraft) {
+  if (!savedTabAvailable(id)) {
+    if (!await mutate("toggle-module", { id, enabled: true })) return false;
+    await refreshWorkspace();
+  }
+  if (id === "mail") pendingMailReply = replyDraft;
+  switchTo(id, false);
+  return true;
+}
+
+async function openHomeMail(message) {
+  if (!mailAccounts.some(account => account.id === message.accountId)) return reportError("todoMailUnavailable");
+  if (await openHomeModule("mail")) mailController?.showMessage(message, () => switchTo(home.id, false));
+}
+
+function addHomeSource(source) {
+  switchTo(home.id, false);
+  homeController?.attach(source);
+}
+
+async function receiveHomeSource() {
+  if (!inPanel || editor.open) return;
+  const windowId = currentWindowId ?? (await chrome.windows.getCurrent().catch(() => null))?.id;
+  const token = workspaceRoute.get("assistantSource") || undefined;
+  const source = await receiveAssistantSource(windowId, token);
+  if (!source || editor.open) return;
+  if (token) {
+    workspaceRoute.delete("assistantSource");
+    history.replaceState(null, "", `workspace.html?${workspaceRoute}`);
+  }
+  addHomeSource(source);
+}
+
+function askAboutMail(message, body) {
+  const text = (body.format === "html" ? htmlText(body.body ?? "") : body.body ?? "").trim();
+  if (!text) return reportError("mailEmptyBody");
+  addHomeSource({
+    kind: "mail", label: message.subject || t("mailNoSubject"), text, truncated: body.partial,
+    url: message.url, message,
+    reply: { replyAddress: body.replyAddress, messageId: body.messageId, references: body.references, threadId: body.threadId }
+  });
+}
+
+function openHomeSource(source) {
+  if (source.message) {
+    openHomeMail(source.message);
+    return;
+  }
+  const url = taskLink(source.url);
+  if (url) chrome.tabs.create({ url }).catch(() => reportError("todoSourceUnavailable"));
+  else previewHomeSource(source);
+}
+
+function previewHomeSource(source) {
+  if (editor.open) return;
+  const fields = openEditor(t("assistantPreviewSource", { name: source.label }));
+  const text = node("p", "assistant-source-excerpt", source.text);
+  text.dir = "auto";
+  fields.append(text);
+  if (source.truncated) fields.append(node("p", "setting-hint", t("assistantTruncated")));
+  editor.showModal();
+}
+
+function chooseAssistantTabs(limit, add) {
+  if (editor.open) return;
+  const spaces = workspace.spaces.filter(space => space.tabs.length).toSorted((a, b) => b.updatedAt - a.updatedAt);
+  const selected = new Map();
+  const fields = openEditor(t("assistantSourceTabs"), t("assistantAddTabs"), spaces.length ? () => {
+    if (!selected.size) return false;
+    add([...selected.values()]);
+    editor.addEventListener("close", () => homeController?.focusPrompt(), { once: true });
+    return true;
+  } : undefined);
+  if (!spaces.length) {
+    fields.append(node("p", "", t("homeNoSpaces")));
+    editor.showModal();
+    return;
+  }
+  fields.append(node("p", "setting-hint", t("assistantTabDetails")));
+  const picker = node("label", "field");
+  const choice = node("select");
+  choice.append(...spaces.map(space => new Option(space.name, space.id)));
+  picker.append(node("span", "", t("spaces")), choice);
+  const list = node("div", "assistant-tab-choices");
+  fields.append(picker, list);
+  const submit = editor.querySelector("button[type='submit']");
+  submit.disabled = true;
+
+  function renderChoices() {
+    const space = spaces.find(space => space.id === choice.value);
+    list.replaceChildren(...space.tabs.map(tab => {
+      const key = `${space.id}:${tab.id}`;
+      const title = tab.title.trim() || new URL(tab.url).hostname;
+      const row = node("label", "assistant-tab-choice");
+      const checkbox = node("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = selected.has(key);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked && selected.size >= limit) {
+          checkbox.checked = false;
+          return reportError("assistantAttachLimit");
+        }
+        if (checkbox.checked) selected.set(key, { kind: "tab", label: title, text: title, url: tab.url, spaceId: space.id });
+        else selected.delete(key);
+        submit.disabled = !selected.size;
+      });
+      row.append(checkbox, node("bdi", "", title));
+      return row;
+    }));
+  }
+  choice.addEventListener("change", renderChoices);
+  renderChoices();
+  editor.showModal();
+  choice.focus();
+}
+
+function mailTaskSource(message) {
+  return {
+    kind: "mail", accountId: message.accountId, messageId: message.id, folder: message.folder,
+    uidValidity: message.uidValidity, senderAddress: senderAddress(message), url: message.url
+  };
+}
+
+async function reviewAssistantAction(action, source, onSaved) {
+  if (editor.open) return;
+  const message = source?.message;
+  const url = taskLink(source?.url);
+  switch (action.kind) {
+    case "task":
+      editTodo({
+        title: action.title, notes: action.notes, dueDate: action.date, dueTime: action.time, reminderMinutes: action.reminder,
+        spaceId: source?.spaceId,
+        source: message ? mailTaskSource(message) : url ? { kind: "web", url } : undefined
+      }, "draft", { onSaved });
+      break;
+    case "event":
+      if (await openHomeModule("calendar")) calendarController?.openDraft({
+        title: action.title, date: action.date, start: action.start, end: action.end, notes: action.notes,
+        reminderMinutes: action.reminder, mailUrl: message?.url
+      }, onSaved);
+      break;
+    case "snippet":
+      editSnippet(undefined, { draftText: action.text, draftTitle: action.title, initialFolder: "all", onSaved });
+      break;
+    case "flashcard":
+      editFlashcard(undefined, undefined, {
+        draft: { term: action.front, answer: action.back, language: action.language, usage: action.notes }, onSaved
+      });
+      break;
+    case "reply":
+      if (!message || !mailAccounts.some(account => account.id === message.accountId)) return reportError("todoMailUnavailable");
+      await openHomeModule("mail", {
+        message, metadata: source.reply, body: action.body, returnTo: () => switchTo(home.id, false), onSent: onSaved
+      });
+      break;
+  }
+}
+
 function sendMail(action, data) {
   return chrome.runtime.sendMessage({ type: mailMessage, action, ...data });
 }
@@ -1538,6 +1769,7 @@ async function refreshMailSnapshot() {
   updateMailBadge(document.getElementById("tab-mail"));
   if (query && workspace.tabs.includes("mail")) render();
   else mailController?.update(mailAccounts);
+  refreshHome();
 }
 
 async function followUpMail(message) {
@@ -1708,10 +1940,7 @@ async function focusQuickTask() {
 async function followUpTodo(message, offset) {
   const saved = await mutate("save-task", {
     title: message.subject || t("mailNoSubject"), dueDate: localTaskDay(offset), showModule: true,
-    source: {
-      kind: "mail", accountId: message.accountId, messageId: message.id, folder: message.folder,
-      uidValidity: message.uidValidity, senderAddress: senderAddress(message), url: message.url
-    }
+    source: mailTaskSource(message)
   });
   if (saved) showToast(t(offset ? "todoAddedTomorrow" : "todoAddedToday"));
 }
@@ -1785,7 +2014,7 @@ function editTodoLabel(label) {
   name.focus();
 }
 
-function editTodo(task, mode) {
+function editTodo(task, mode, { onSaved } = {}) {
   if (editor.open) return;
   if (mode === "remove") {
     const fields = openEditor(t("remove"), t("remove"), () => mutate("remove-task", { id: task.id }));
@@ -1798,14 +2027,16 @@ function editTodo(task, mode) {
   const labelIds = new Set(task.labelIds ?? []);
   let dueEdited = false;
   const manualPlan = new Set();
-  const fields = openEditor(t("todoEdit"), t("save"), () => {
+  const isDraft = mode === "draft";
+  const fields = openEditor(t(isDraft ? "todoAdd" : "todoEdit"), t("save"), async () => {
     const usePlan = Boolean(planTime.value && (task.planDate || dueEdited || manualPlan.size));
     const planDate = usePlan ? plan.value : "";
     const start = usePlan ? planTime.value : "";
     const end = usePlan ? planEnd.value : "";
     const keepLegacy = reminder.value === "legacy";
-    return updateTodo("save-task", {
+    const saved = await updateTodo("save-task", {
       id: task.id, title: title.value, notes: notes.value, labelIds: [...labelIds],
+      ...(isDraft ? { source: task.source, showModule: true } : {}),
       ...(spaceSelect ? { spaceId: spaceSelect.value } : {}),
       dueDate: due.value, dueTime: dueTime.value, planDate, planTime: start, planEnd: end,
       planEndNextDay: Boolean(start && end && end < start),
@@ -1813,6 +2044,8 @@ function editTodo(task, mode) {
       reminderDate: keepLegacy ? task.reminderDate : "",
       reminderTime: keepLegacy ? task.reminderTime : ""
     });
+    if (saved) onSaved?.();
+    return saved;
   });
   const title = field(fields, { label: t("todoTitle"), value: task.title, required: true, maxLength: taskLimits.title });
   const notes = field(fields, { label: t("calendarNotes"), value: task.notes, maxLength: taskLimits.notes, multiline: true });
@@ -1999,12 +2232,17 @@ function inlineTranslatorEnabled() {
   return workspace.translator?.inlineEnabled === true;
 }
 
+async function signInWorkspaceAccount() {
+  const account = await signInGoogle({ requestFromPage: !inToolbarPopup && inPanel });
+  translatorAccountId = account?.id ?? null;
+  translatorController?.update({ accountId: translatorAccountId });
+  refreshHome();
+  return Boolean(translatorAccountId);
+}
+
 async function signInForTranslation() {
   try {
-    const account = await signInGoogle({ requestFromPage: !inToolbarPopup && inPanel });
-    translatorAccountId = account?.id ?? null;
-    translatorController?.update({ accountId: translatorAccountId });
-    return Boolean(translatorAccountId);
+    return await signInWorkspaceAccount();
   } catch {
     switchTo("settings", false);
     document.getElementById("ease-account")?.scrollIntoView({ block: "nearest" });
@@ -2115,11 +2353,12 @@ function field(container, { label, value = "", placeholder, multiline = false, m
   return input;
 }
 
-function editFlashcard(card, translation) {
+function editFlashcard(card, translation, { draft, onSaved } = {}) {
   if (editor.open) return;
   const studying = workspace.flashcards.language;
   const pair = translation ? [translation.source, translation.target] : [];
-  const initialLanguage = card?.language ?? (pair.includes(studying) ? studying : translation?.target ?? studying);
+  const draftLanguage = selectableLanguage(draft?.language);
+  const initialLanguage = card?.language ?? draftLanguage ?? (pair.includes(studying) ? studying : translation?.target ?? studying);
   const labelByField = {
     term: "flashcardTerm", answer: "flashcardAnswer", usage: "flashcardUsage",
     example: "flashcardExample", exampleTranslation: "flashcardExampleTranslation"
@@ -2128,9 +2367,12 @@ function editFlashcard(card, translation) {
   const fields = openEditor(t(card ? "flashcardEdit" : "flashcardAdd"), t("save"), async () => {
     const values = Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value]));
     const saved = await mutate("save-flashcard", {
-      ...values, id: card?.id, language: language.value, showModule: Boolean(translation)
+      ...values, id: card?.id, language: language.value, showModule: Boolean(translation || draft)
     });
-    if (saved) showToast(t("flashcardSaved"));
+    if (saved) {
+      showToast(t("flashcardSaved"));
+      onSaved?.();
+    }
     return saved;
   });
 
@@ -2147,7 +2389,7 @@ function editFlashcard(card, translation) {
   const notes = node("details", "snippet-advanced");
   const noteFields = node("div", "snippet-advanced-fields");
   notes.append(node("summary", "", t("translatorLearning")), noteFields);
-  let initial = translation ? flashcardTranslationFields(translation, initialLanguage) : card ?? {};
+  let initial = translation ? flashcardTranslationFields(translation, initialLanguage) : card ?? draft ?? {};
   for (const [key, label] of Object.entries(labelByField)) {
     const required = key === "term" || key === "answer";
     const input = field(required ? fields : noteFields, {
@@ -2204,8 +2446,8 @@ function confirmFlashcardDeletion(card) {
   editor.showModal();
 }
 
-function editSnippet(snippet, { draftText } = {}) {
-  const folder = folderFor(snippet ? snippet.folderId : activeFolder);
+function editSnippet(snippet, { draftText, draftTitle, initialFolder = activeFolder, onSaved } = {}) {
+  const folder = folderFor(snippet ? snippet.folderId : initialFolder);
   if (folderLocked(folder)) {
     editVaultCredential(folder);
     return;
@@ -2218,9 +2460,11 @@ function editSnippet(snippet, { draftText } = {}) {
     }
     const folderId = destination.value || null;
     const changeFolder = !snippet || folderId !== (snippet.folderId ?? null);
-    return mutate("save-snippet", {
+    const saved = await mutate("save-snippet", {
       id: snippet?.id, title: title.value, text: text.value, ...(changeFolder ? { folderId } : {})
     });
+    if (saved) onSaved?.();
+    return saved;
   }, folder?.id);
   protectedDialogSnippet = snippet?.id;
   const text = field(fields, { label: t("snippetText"), value: snippet?.text ?? draftText, placeholder: t("snippetTextPlaceholder"), required: true, maxLength: 20000, multiline: true });
@@ -2239,7 +2483,7 @@ function editSnippet(snippet, { draftText } = {}) {
   const advancedFields = node("div", "snippet-advanced-fields");
   advanced.append(node("summary", "", t("snippetAdvanced")), advancedFields);
   fields.append(advanced);
-  const title = field(advancedFields, { label: `${t("snippetTitle")} (${t("optional")})`, value: snippet?.title, placeholder: t("snippetTitlePlaceholder"), maxLength: 100 });
+  const title = field(advancedFields, { label: `${t("snippetTitle")} (${t("optional")})`, value: snippet?.title ?? draftTitle, placeholder: t("snippetTitlePlaceholder"), maxLength: 100 });
   const destination = node("select");
   const row = node("label", "field folder-select");
   const choices = [{ id: "", name: t("noFolder") }, ...workspace.folders];
@@ -2250,7 +2494,7 @@ function editSnippet(snippet, { draftText } = {}) {
     option.disabled = folderLocked(folder);
     destination.append(option);
   }
-  const selectedId = snippet ? snippet.folderId : activeFolder;
+  const selectedId = snippet ? snippet.folderId : initialFolder;
   destination.value = folderFor(selectedId)?.id ?? "";
   row.append(node("span", "", t("folder")), destination);
   advancedFields.append(row);
@@ -2755,11 +2999,12 @@ editor.addEventListener("close", () => {
     protectedDialogSnippet = undefined;
     editor.replaceChildren();
     receiveTranslationSelection();
+    if (workspaceInitialized && inPanel) receiveHomeSource();
   }
 });
 document.querySelector(".search-icon").innerHTML = icon("search");
 settingsButton.addEventListener("click", () => {
-  const lastTab = savedTabAvailable(lastWorkspaceTab) ? lastWorkspaceTab : clipboard.id;
+  const lastTab = savedTabAvailable(lastWorkspaceTab) ? lastWorkspaceTab : home.id;
   switchTo(activePage === "settings" && !query ? lastTab : "settings", false);
 });
 panelButton.addEventListener("click", async () => {
@@ -2891,6 +3136,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes[accountStorageKey]) {
     translatorAccountId = changes[accountStorageKey].newValue?.id ?? null;
     translatorController?.update({ accountId: translatorAccountId });
+    refreshHome();
     accountRefresh?.().catch(() => reportError("accountFailed"));
     workspaceSyncRefresh?.();
   }
@@ -2901,6 +3147,10 @@ function updateClipboardReadPermission(permissions) {
 chrome.permissions.onAdded?.addListener(updateClipboardReadPermission);
 chrome.permissions.onRemoved?.addListener(updateClipboardReadPermission);
 if (inPanel) chrome.tabs?.onActivated?.addListener(receiveTranslationSelection);
+if (inPanel) chrome.runtime.onMessage?.addListener((message, sender) => {
+  if (workspaceInitialized && sender.id === chrome.runtime.id && message?.type === assistantSourceReady
+    && message.windowId === currentWindowId) receiveHomeSource();
+});
 const initialTranslationSelection = await takeTranslatorSelection();
 if (initialTranslationSelection !== null) activePage = "translate";
 const [initialAccount, initialHistory, initialMarketAlerts, rememberedTab, savedCollapse] = await Promise.all([
@@ -2913,7 +3163,7 @@ for (const section of taskSections) if (savedCollapse[collapsedTaskKey(section)]
 translatorAccountId = initialAccount?.id ?? null;
 if (initialHistory) translationHistory = initialHistory;
 marketAlertState = initialMarketAlerts;
-lastWorkspaceTab = rememberedTab ?? clipboard.id;
+lastWorkspaceTab = rememberedTab ?? home.id;
 await refreshWorkspace(undefined, initialTranslationSelection === null ? lastWorkspaceTab : undefined);
 workspaceInitialized = true;
 refreshMailSnapshot();
@@ -2926,6 +3176,8 @@ if (initialTranslationSelection !== null) {
   await focusQuickTask();
 } else if (workspaceRoute.get("open") === "todo" && savedTabAvailable("todo")) {
   switchTo("todo", false);
+} else if (workspaceRoute.get("open") === home.id) {
+  switchTo(home.id, false);
 } else if (workspaceRoute.get("open") === "spaces") {
   const space = workspace.spaces.find(item => item.id === workspaceRoute.get("spaceId"));
   if (space && savedTabAvailable("spaces")) openSpaceDetail(space.id);
@@ -2956,3 +3208,4 @@ deviceUnlockAvailable().then((available) => {
 refreshCalendarDay();
 refreshCalendarEvents();
 receiveTranslationSelection();
+if (inPanel) receiveHomeSource();

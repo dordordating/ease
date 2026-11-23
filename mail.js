@@ -15,8 +15,8 @@ function element(tag, className, text) {
   return item;
 }
 
-export function renderMail(container, { dateLocale, t, icon, settingsButton, composeButton, accounts, send, followUp, followUpTask,
-  requestInWorker, openMenu, confirmDelete }) {
+export function renderMail(container, { dateLocale, t, icon, settingsButton, composeButton, accounts, send, followUp, followUpTask, askAssistant,
+  requestInWorker, openMenu, confirmDelete, replyDraft }) {
   const dates = new Intl.DateTimeFormat(dateLocale, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   const numbers = new Intl.NumberFormat(dateLocale);
   let accountId = "";
@@ -41,6 +41,8 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   let fileWork = false;
   let reply;
   let forwarded;
+  let composeReturn;
+  let draftSent;
 
   const module = element("section", "mail-module");
   const inbox = element("section", "mail-inbox");
@@ -96,7 +98,11 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   const fileActions = element("div", "mail-provider-buttons");
   fileActions.append(attach, originals);
   const enableSend = control("mailSendPermissionAction", null, upgradeSender);
-  const composeCancel = control("cancel", null, () => closeComposer());
+  const composeCancel = control("cancel", null, () => {
+    const back = composeReturn;
+    closeComposer();
+    back?.();
+  });
   composeActions.append(sendButton, enableSend, composeCancel);
   compose.append(element("h3", "", t("mailCompose")), composeAccount, recipients, composeCc.label, composeSubject.label, composeBody,
     fileInput, fileActions, fileList, composeActions);
@@ -309,7 +315,13 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     const forwardButton = control("mailForward", "forward", () => respondTo(message, result, true), true);
     replyButton.disabled = !result || busy;
     forwardButton.disabled = !result || busy;
-    actions.append(replyButton, forwardButton, messageMenu(message));
+    actions.append(replyButton, forwardButton);
+    if (askAssistant && result?.body) {
+      const ask = control("assistantAsk", "sparkles", () => askAssistant(message, result), true);
+      ask.disabled = busy;
+      actions.append(ask);
+    }
+    actions.append(messageMenu(message));
     const subject = element("h3", "", message.subject || t("mailNoSubject"));
     subject.dir = "auto";
     const sender = element("p", "mail-hint", message.folder === "sent"
@@ -450,9 +462,21 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
       forwarded: forward ? { message, attachments: result.attachments ?? [] } : undefined });
   }
 
+  function openAssistantReply({ message, metadata, body, returnTo, onSent }) {
+    const title = message.subject || t("mailNoSubject");
+    return openComposer({
+      id: message.accountId, to: metadata.replyAddress || mailAddress(message.sender),
+      subject: (/^Re:/iu.test(title) ? title : `Re: ${title}`).slice(0, 180), body,
+      reply: { messageId: metadata.messageId, references: metadata.references, threadId: metadata.threadId, accountId: message.accountId },
+      returnTo, onSent
+    });
+  }
+
   async function openComposer(seed) {
     if (!accounts.length || busy) return;
     opened = undefined;
+    composeReturn = seed?.returnTo;
+    draftSent = seed?.onSent;
     managing = false;
     closeImap();
     composing = true;
@@ -489,6 +513,8 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     files = [];
     reply = undefined;
     forwarded = undefined;
+    composeReturn = undefined;
+    draftSent = undefined;
     chrome.storage.session.remove(draftKey).catch(() => {});
     render();
   }
@@ -587,7 +613,9 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
       const answer = await send("send", { id, data });
       if (disposed) return;
       if (answer?.ok) {
+        const onSent = draftSent;
         closeComposer();
+        onSent?.();
         sentStatus = answer.value?.savedCopy === false ? "mailSentNoCopy" : "mailSent";
         error = sentStatus;
       }
@@ -828,7 +856,9 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   accountSelect.addEventListener("change", () => { accountId = accountSelect.value; if (folder === "sent") refreshFolder(); else renderInbox(); });
   settingsButton.addEventListener("click", toggleSettings);
   render();
-  if (!accounts.length) verifyProviders(); else act("refresh");
+  if (replyDraft) openAssistantReply(replyDraft);
+  else if (!accounts.length) verifyProviders();
+  else act("refresh");
 
   return {
     update(next) {

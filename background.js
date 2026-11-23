@@ -15,7 +15,9 @@ import { getAppleCalendarState, syncAppleCalendar } from "./apple-calendar.js";
 import { deleteFolder, hasFolder, moveSnippet, pinFolder, reorderFolder, saveFolder } from "./clipboard-store.js";
 import { registerClipboardHistoryHandlers, suppressClipboardHistoryText } from "./clipboard-history-background.js";
 import { translationLanguagePreferences } from "./translator-engine.js";
-import { easeTranslationMessage, handleEaseTranslationMessage, registerEaseSessionHandlers } from "./ease-api.js";
+import { assistantPort, easeTranslationMessage, handleAssistantPort, handleEaseTranslationMessage, registerEaseSessionHandlers } from "./ease-api.js";
+import { changeHome } from "./home-store.js";
+import { registerAssistantSourceHandlers } from "./home-sources.js";
 import { changeFlashcardPreferences, FlashcardError, removeFlashcard, reviewFlashcard, saveFlashcard } from "./flashcard-store.js";
 import { registerFlashcardReminderHandlers } from "./flashcard-reminders.js";
 import { registerTodoHandlers } from "./todo-background.js";
@@ -41,6 +43,7 @@ import {
 
 let pendingWrite = Promise.resolve();
 registerEaseSessionHandlers();
+registerAssistantSourceHandlers();
 registerGoogleProviderHandlers();
 registerTranslatorSelectionHandlers();
 registerTranslationHistoryHandlers();
@@ -321,6 +324,9 @@ async function updateWorkspace(workspace, action, data, transaction) {
     case "calendar-preferences":
       changeCalendarPreferences(workspace, data);
       break;
+    case "home-preferences":
+      workspace.home = changeHome(workspace.home, data);
+      break;
     case "translator-preferences": {
       const settings = { ...defaultTranslator, ...workspace.translator, ...translationLanguagePreferences(workspace.translator, data) };
       if (translatorEngines.includes(data.engine)) settings.engine = data.engine;
@@ -540,10 +546,18 @@ async function updateWorkspace(workspace, action, data, transaction) {
   }
 }
 
+function fromWorkspacePage(sender) {
+  const workspaceUrl = chrome.runtime.getURL("workspace.html");
+  return sender?.id === chrome.runtime.id && (sender.url === workspaceUrl || sender.url?.startsWith(`${workspaceUrl}?`));
+}
+
+chrome.runtime.onConnect?.addListener(port => {
+  if (port.name === assistantPort && fromWorkspacePage(port.sender)) handleAssistantPort(port);
+});
+
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (sender.id !== chrome.runtime.id) return;
-  const workspaceUrl = chrome.runtime.getURL("workspace.html");
-  const fromWorkspace = sender.url === workspaceUrl || sender.url?.startsWith(`${workspaceUrl}?`);
+  const fromWorkspace = fromWorkspacePage(sender);
   if (message?.type === easeTranslationMessage) {
     if (fromWorkspace) return handleEaseTranslationMessage(message, respond);
     return;

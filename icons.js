@@ -1,4 +1,8 @@
 const paths = {
+  home: '<path d="m3.5 10 7.2-6a2 2 0 0 1 2.6 0l7.2 6v8.7a2 2 0 0 1-2 2h-4.1v-6h-4.8v6H5.5a2 2 0 0 1-2-2Z"/>',
+  grip: '<path d="M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01" stroke-width="3"/>',
+  sliders: '<path d="M5 4v6m0 4v6m7-16v10m0 4v2m7-16v2m0 4v10M3 10h4m3 4h4m3-8h4"/>',
+  stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
   clipboard: '<rect x="7" y="4" width="10" height="4" rx="1.5"/><path d="M17 6h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2M8 13h8M8 17h5"/>',
   calendar: '<rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4m10-4v4M3 10h18m-13 5h2m4 0h2m-8 3h2"/>',
   "calendar-settings": '<path d="M13 20H6a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v4M7 2v4m10-4v4M3 9h18"/><path d="m17 13 .5 1.4 1 .6 1.5-.3 1 1.7-1 1.1v1l1 1.1-1 1.7-1.5-.3-1 .6-.5 1.4h-2l-.5-1.4-1-.6-1.5.3-1-1.7 1-1.1v-1l-1-1.1 1-1.7 1.5.3 1-.6.5-1.4Z"/><circle cx="16" cy="18" r="1.4"/>',

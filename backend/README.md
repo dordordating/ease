@@ -73,6 +73,12 @@ Ease derives FX crosses from daily EUR reference rates. CoinGecko quotes are bat
 
 Include `"notes_language":"fa"` to request learning notes in Persian. For an eligible short word or phrase, the response can include `learning.usage`, `learning.example`, `learning.example_translation`, `learning.example_language`, and `learning.source_language`. The example is in the target language by default. If the notes language is the target language, the example is in the source language. The translation and notes use the same provider request.
 
+## Home assistant
+
+`POST /v1/assistant` uses the same verified Ease session, concurrency slots, and daily limits as online translation. The default model is `google/gemini-3.1-flash-lite`. Set `OPENROUTER_MODEL_ASSISTANT` to override it with a model that supports zero-data-retention routing. Provider data collection is disabled. The request includes a prompt, interface locale, local Gregorian date and time, calendar preference, and up to four source excerpts. It can also include up to two brief previous exchanges and the user’s preferred learning and translation languages.
+
+Successful streams return `application/x-ndjson` with answer `delta` packets and a final `done` packet containing validated draft actions and source IDs. A terminal `error` packet indicates a quota, provider, or interruption problem. The extension reviews or applies actions through the corresponding modules. PostgreSQL records only aggregate usage for the request. Keep request-body logging disabled for this route.
+
 ## Encrypted workspace sync
 
 `GET /v1/workspace-sync` and `PUT /v1/workspace-sync` require the same verified Ease session. The endpoint accepts an encrypted envelope with schema version, salt, IV, and ciphertext. The browser derives the key from the sync passphrase, encrypts the workspace with AES-256-GCM, and handles all restore operations. PostgreSQL stores the ciphertext with an account ID and revision. A `PUT` using a stale revision returns `409`, allowing the browser to handle conflicts before replacing any copy.

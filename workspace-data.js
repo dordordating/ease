@@ -1,6 +1,7 @@
 import { defaultFlashcards } from "./flashcard-store.js";
 import { defaultMarkets } from "./markets-store.js";
 import { defaultTodo } from "./todo-store.js";
+import { defaultHome, normalizeHome } from "./home-store.js";
 
 export const storageKey = "easeWorkspace";
 
@@ -12,8 +13,7 @@ export const modules = [
   { id: "translate", icon: "translate", color: "#69d5fa", released: true },
   { id: "flashcards", icon: "flashcards", color: "#82b9ac", released: true },
   { id: "todo", icon: "todo", color: "#a0c98b", released: true },
-  { id: "spaces", icon: "spaces", color: "#a999f5", released: true },
-  { id: "assistant", icon: "sparkles", color: "#eca6e1" }
+  { id: "spaces", icon: "spaces", color: "#a999f5", released: true }
 ];
 
 const releasedModulesById = new Map(modules.filter(({ released }) => released).map((module) => [module.id, module]));
@@ -79,6 +79,7 @@ export const defaultWorkspace = {
   density: "compact",
   size: "medium",
   zoom: 100,
+  home: defaultHome,
   libraryLayout: "grid",
   tabs: ["clipboard", "calendar", "translate"],
   snippets: [],
@@ -97,5 +98,6 @@ export async function readWorkspace() {
   const result = await chrome.storage.local.get(storageKey);
   const workspace = { ...defaultWorkspace, ...result[storageKey] };
   workspace.zoom = normalizeWorkspaceZoom(workspace.zoom);
+  workspace.home = normalizeHome(workspace.home);
   return workspace;
 }

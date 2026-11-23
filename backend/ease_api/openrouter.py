@@ -10,7 +10,7 @@ from dataclasses import dataclass
 import httpx
 
 
-_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 _RESPONSE_LIMIT = 256 * 1024
 _TIMEOUT = httpx.Timeout(35, connect=5)
 _TOTAL_TIMEOUT = 40
@@ -334,7 +334,7 @@ async def translate_with_openrouter(
     try:
         async with asyncio.timeout(_TOTAL_TIMEOUT), http_client.stream(
             "POST",
-            _ENDPOINT,
+            OPENROUTER_ENDPOINT,
             headers={"Authorization": f"Bearer {api_key}", "Accept": "application/json"},
             json=body,
             timeout=_TIMEOUT,

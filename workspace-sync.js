@@ -4,6 +4,7 @@ import { getGoogleAccount, googleAccountStorageKey } from "./providers.js";
 import { vaultSessionStorageKey } from "./vault-session.js";
 import { defaultTodo, restoreTodo } from "./todo-store.js";
 import { restoreSpaces } from "./spaces-store.js";
+import { defaultHome, normalizeHome } from "./home-store.js";
 import {
   createWorkspaceSyncSalt, decryptWorkspaceSnapshot, deriveWorkspaceSyncKey, encryptWorkspaceSnapshot
 } from "./workspace-sync-crypto.js";
@@ -43,6 +44,8 @@ function portableWorkspace(workspace) {
   if (moduleOrder.some((id, index) => id !== defaultModuleOrder[index])) snapshot.moduleOrder = moduleOrder;
   snapshot.zoom = normalizeWorkspaceZoom(snapshot.zoom);
   if (snapshot.zoom === defaultWorkspace.zoom) delete snapshot.zoom;
+  snapshot.home = normalizeHome(snapshot.home);
+  if (serialized(snapshot.home) === serialized(defaultHome)) delete snapshot.home;
   const { labels, layout, ...tasks } = snapshot.todo;
   snapshot.todo = { ...tasks, ...(labels?.length ? { labels } : {}), ...(layout === "stacked" ? { layout } : {}) };
   if (!tasks.items.length && !tasks.dailyTime && !tasks.retentionDays && !labels?.length && layout !== "stacked") delete snapshot.todo;
@@ -108,7 +111,7 @@ function localWorkspace(snapshot, current) {
     return { ...folder, vault: { ...folder.vault, device: previous.device } };
   });
   const { inlineEnabled, inlineSites } = { ...defaultWorkspace.translator, ...current.translator };
-  return { ...snapshot, spaces: snapshot.spaces ?? [], todo: snapshot.todo ?? defaultTodo, folders,
+  return { ...snapshot, spaces: snapshot.spaces ?? [], todo: snapshot.todo ?? defaultTodo, home: normalizeHome(snapshot.home), folders,
     translator: { ...snapshot.translator, inlineEnabled, inlineSites } };
 }
 

@@ -10,7 +10,7 @@ Ease is a local-first browser workspace for reusable text and quick daily checks
 
 Ease uses Manifest V3 and requires Chrome 116 or newer. It has no build step or dependencies.
 
-The [Ease API](backend/README.md) provides Google account registration, online translation, encrypted sync, and market data. The backend guide covers PostgreSQL and deployment on Coolify.
+The [Ease API](backend/README.md) provides Google account registration, online translation, the Home assistant, encrypted sync, and market data. The backend guide covers PostgreSQL and deployment on Coolify.
 
 ### Update an existing installation
 
@@ -57,7 +57,10 @@ Open the new ZIP and copy the contents of its extension folder over the files in
 - In a space’s menu, choose **Open as a Chrome group** to open its unpinned tabs in one group in the current window. The group uses the space’s name and the closest Chrome color. Pinned tabs open separately. Reopening reuses the group created by Ease in that window.
 - In the Chrome address bar, type `ease`, press **Space** or **Tab**, then type part of a saved space’s name. Pick a suggestion with the arrow keys or press **Enter** to open the best match as a Chrome group in the current window. Pinned tabs open separately. If Chrome needs access, use **Open as a Chrome group** in the prompt inside Ease to grant it and open the group.
 - Use **Create linked task** in a space’s menu or pick a space when editing an existing task. The task’s space button opens its saved tabs. You can use spaces as a guest, and they’re included in encrypted workspace sync when enabled. Chrome requests optional access when you use actions that read other tabs or their groups.
-- Ease reopens the last enabled module on this browser. Date and time displays use the calendar selected in Calendar settings and the device’s local time zone. Date-only market reference rates keep the provider’s publication date.
+- Open **Home** for the assistant and dashboard. **Customize Home** lets you show, hide, and reorder cards for tasks, recently saved spaces, today’s agenda, flashcard reviews, and recent mail. It also lets you choose whether Ease opens on Home or the last tab. Existing workspaces retain their last-tab behavior until changed.
+- Sign in to **Ask Ease**. Press **Enter** to send and **Shift+Enter** for a new line. Click a rotating example to insert it, or attach selected text, a current page excerpt, an open email, or chosen saved tab titles. Review the visible source chips before sending. The right-click **Ask Ease** action and the sparkle icon in an open email prepare sources for you.
+- The assistant streams responses and can offer draft tasks, events, snippets, flashcards, and email replies. Use the cards to review and edit before saving or sending. The conversation stays in memory while the workspace is open. Home layout preferences are included in optional encrypted workspace sync.
+- Date and time displays use the calendar selected in Calendar settings and the device’s local time zone. Date-only market reference rates keep the provider’s publication date.
 - In **Translator settings**, enable **Ctrl + select** and grant Chrome access to eligible HTTPS websites once. Hold **Ctrl** while selecting text to translate it above the selection with the currently selected engine. The three AI engines use your Google-signed-in Ease session. You can also choose the source, target, result layout, and default clipboard folder in Translator.
 - Use **Settings → Language** to change the interface. English is the first-run default. Persian, Spanish, French, Brazilian Portuguese, Arabic, German, and Japanese are available. The Persian interface uses the bundled Vazir font.
 - In **Settings**, choose Light, Dark, or Automatic appearance, one of four accent colors, a control density, and a workspace size. The popup keeps a fixed height for its selected size. The accent color also updates the Ease logo and the toolbar icon. Use Chrome’s divider to resize the side panel itself.
