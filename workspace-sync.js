@@ -44,7 +44,11 @@ function portableWorkspace(workspace) {
   if (snapshot.zoom === defaultWorkspace.zoom) delete snapshot.zoom;
   const { labels, layout, ...tasks } = snapshot.todo;
   snapshot.todo = { ...tasks, ...(labels?.length ? { labels } : {}), ...(layout === "stacked" ? { layout } : {}) };
-  if (!tasks.items.length && !tasks.dailyTime && !labels?.length && layout !== "stacked") delete snapshot.todo;
+  if (!tasks.items.length && !tasks.dailyTime && !tasks.retentionDays && !labels?.length && layout !== "stacked") delete snapshot.todo;
+  if (snapshot.calendar.showTasks === true) {
+    const { showTasks, ...calendar } = snapshot.calendar;
+    snapshot.calendar = calendar;
+  }
   const { inlineEnabled, inlineSites, ...translator } = { ...defaultWorkspace.translator, ...snapshot.translator };
   snapshot.translator = translator;
   snapshot.folders = snapshot.folders.map((folder) => folder.vault ? { ...folder, vault: portableVault(folder.vault) } : folder);

@@ -1,6 +1,7 @@
-import { defaultTodo, localTaskDay, taskLimits, taskToday } from "./todo-store.js";
+import { defaultTodo, localTaskDay, taskLimits, taskRetentionOptions, taskToday } from "./todo-store.js";
 import { parseQuickTask } from "./todo-quick-add.js";
 import { calendarReminderLabel, calendarReminderOffsets } from "./calendar-timing.js";
+import { createTimePicker } from "./time-picker.js";
 
 const views = { today: "todoToday", inbox: "todoInbox", upcoming: "todoUpcoming" };
 const timeValue = value => new Date("2000-01-01T" + value + "Z");
@@ -169,21 +170,27 @@ export function renderTodo(container, {
     on.type = "checkbox";
     on.checked = Boolean(state.dailyTime);
     field.prepend(on);
-    const time = node("input", "translator-select");
-    time.type = "time";
-    time.required = true;
-    time.value = state.dailyTime || "09:00";
-    time.setAttribute("aria-label", t("todoMorningTime"));
+    const time = createTimePicker({ locale, t, label: t("todoMorningTime"), value: state.dailyTime || "09:00", required: true });
+    const retention = node("label", "field");
+    const duration = node("select", "calendar-select");
+    duration.add(new Option(t("todoRetentionForever"), ""));
+    for (const days of taskRetentionOptions) duration.add(new Option(t("todoRetentionDays", { count: formatNumber.format(days) }), String(days)));
+    duration.value = String(state.retentionDays ?? "");
+    retention.append(node("span", "", t("todoRetention")), duration, node("small", "todo-reminder-hint", t("todoRetentionHint")));
     const save = button(t("save"), null, { style: "primary-button" });
     save.type = "submit";
-    const toggleTime = () => { time.hidden = !on.checked; time.disabled = !on.checked; };
+    const toggleTime = () => { time.element.hidden = !on.checked; time.disabled = !on.checked; };
     toggleTime();
     on.addEventListener("change", toggleTime);
     settings.addEventListener("submit", async event => {
       event.preventDefault();
       save.disabled = true;
       try {
-        if (await change("todo-preferences", { dailyTime: on.checked ? time.value : "" })) {
+        const dailyTime = on.checked ? time.value : "";
+        const retentionDays = duration.value ? Number(duration.value) : null;
+        const patch = { retentionDays };
+        if (dailyTime !== state.dailyTime) patch.dailyTime = dailyTime;
+        if (await change("todo-preferences", patch)) {
           showingSettings = false;
           render();
           settingsButton.focus();
@@ -192,7 +199,7 @@ export function renderTodo(container, {
         save.disabled = false;
       }
     });
-    settings.append(field, time, save);
+    settings.append(field, time.element, retention, save);
     const keys = node("div", "todo-panel");
     keys.append(node("h3", "", t("todoShortcut")), ...shortcuts());
     const actions = node("div", "todo-toolbar");
@@ -226,9 +233,11 @@ export function renderTodo(container, {
   }
 
   function sourceButton(task, compact = false) {
-    const mail = task.source.kind === "mail";
-    return button(t(mail ? "todoOpenMail" : "todoOpenWeb"), () => openSource(task), {
-      glyph: mail ? "mail" : "link", compact
+    const [label, glyph] = {
+      mail: ["todoOpenMail", "mail"], web: ["todoOpenWeb", "link"], snippet: ["todoOpenSnippet", "clipboard"]
+    }[task.source.kind];
+    return button(t(label), () => openSource(task), {
+      glyph, compact
     });
   }
 

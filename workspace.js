@@ -5,6 +5,7 @@ import { renderTodo } from "./todo.js";
 import { collapsedTaskKey, defaultTodo, localTaskDay, taskCalendarEntries, taskLimits, taskSections } from "./todo-store.js";
 import { calendarReminderLabel, calendarReminderOffsets, calendarSuggestedEnd } from "./calendar-timing.js";
 import { createDatePicker } from "./date-picker.js";
+import { createTimePicker } from "./time-picker.js";
 import { quickTaskKey, takeQuickTask } from "./todo-background.js";
 import { renderMarkets } from "./markets.js";
 import { inboxMessages, renderMail } from "./mail.js";
@@ -32,7 +33,7 @@ import { icon } from "./icons.js";
 import { deviceUnlockAvailable, readDeviceUnlock, registerDeviceUnlock } from "./vault-device.js";
 import { vaultPinAttemptsStorageKey, vaultPolicyFor, vaultSessionStorageKey } from "./vault-session.js";
 import { isRtl, localeNames, translate } from "./locales.js";
-import { calendarSystemFor, defaultTranslator, defaultWorkspace, densities, folderIcons, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes, visibleModules } from "./workspace-data.js";
+import { calendarSystemFor, defaultCalendar, defaultTranslator, defaultWorkspace, densities, folderIcons, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes, visibleModules } from "./workspace-data.js";
 
 const view = document.querySelector("#workspace");
 const editor = document.querySelector("#editor");
@@ -126,7 +127,8 @@ const changeWorkspaceZoom = (zoom) => mutate("preferences", { zoom });
 const workspaceZoom = initWorkspaceZoom({ app, zoom: workspace.zoom, onZoom: changeWorkspaceZoom });
 
 function calendarEvents() {
-  return [...workspace.events, ...providerEvents, ...(workspace.tabs.includes("todo") ? taskCalendarEntries(workspace.todo?.items ?? []) : [])];
+  const showTasks = workspace.tabs.includes("todo") && workspace.calendar?.showTasks !== false;
+  return [...appointmentEvents(), ...(showTasks ? taskCalendarEntries(workspace.todo?.items ?? []) : [])];
 }
 
 const appointmentEvents = () => [...workspace.events, ...providerEvents];
@@ -551,6 +553,7 @@ function snippetList(title, snippets, showFolder = false, container = view) {
     );
     if (workspace.folders.length) menu.append(action("moveToFolder", "folder", () => moveSnippet(snippet)));
     menu.append(
+      action("todoAddSnippet", "todo", () => addSnippetTask(snippet.id)),
       action("shortcutAssign", "keyboard", () => editShortcut(snippet)),
       action("remove", "trash", () => removeSnippet(snippet))
     );
@@ -1247,7 +1250,7 @@ function render() {
     && !modules.some(({ id, released }) => released && id === activePage)) activePage = clipboard.id;
   renderTabs();
   if (!query && activePage === "calendar" && calendarController && calendarLocale === workspace.locale) {
-    calendarController.update({ preferences: workspace.calendar, events: calendarEvents(), holidays: workspace.holidays });
+    calendarController.update({ preferences: { ...defaultCalendar, ...workspace.calendar }, events: calendarEvents(), holidays: workspace.holidays });
     return;
   }
   if (!query && activePage === "translate" && translatorHistoryOpen && translatorHistoryController && translatorLocale === dateLocale) {
@@ -1553,8 +1556,22 @@ async function followUpTodo(message, offset) {
   if (saved) showToast(t(offset ? "todoAddedTomorrow" : "todoAddedToday"));
 }
 
+async function addSnippetTask(id) {
+  if (await mutate("add-snippet-task", { id })) showToast(t("todoSnippetAdded"));
+}
+
 async function openTodoSource(task) {
   const source = task.source;
+  if (source.kind === "snippet") {
+    const snippet = workspace.snippets.find(item => item.id === source.snippetId);
+    if (!snippet) return reportError("todoSnippetMissing");
+    switchTo("clipboard", false);
+    selectFolder(snippet.folderId ?? "all");
+    const trigger = document.getElementById(`snippet-${snippet.id}`);
+    trigger?.focus();
+    trigger?.scrollIntoView({ block: "nearest" });
+    return;
+  }
   if (source.kind === "mail") {
     if (!workspace.tabs.includes("mail")) {
       if (!await mutate("toggle-module", { id: "mail", enabled: true })) return;
@@ -1685,11 +1702,12 @@ function editTodo(task, mode) {
   }
 
   function timeField(row, key, label, value) {
-    const input = field(row, { label: t(label) });
-    input.type = "time";
-    input.value = value;
-    input.name = key;
-    return input;
+    const wrapper = node("div", "field");
+    wrapper.dataset.timeField = key;
+    const picker = createTimePicker({ locale: workspace.locale, t, label: t(label), value });
+    wrapper.append(node("span", "", t(label)), picker.element);
+    row.append(wrapper);
+    return picker;
   }
 
   const dueRow = timingGroup("todoDue", true);
@@ -1705,8 +1723,8 @@ function editTodo(task, mode) {
   const planTime = timeField(planRow, "planTime", "calendarStarts", task.planTime || (!task.planDate ? task.dueTime : ""));
   const planEnd = timeField(planRow, "planEnd", "calendarEnds", task.planDate ? task.planEnd : calendarSuggestedEnd(planTime.value).time);
   const overnight = node("small", "todo-overnight", t("calendarEndNextDay"));
-  planEnd.after(overnight);
-  planTime.parentElement.after(plan.panel);
+  planEnd.element.after(overnight);
+  planTime.element.parentElement.after(plan.panel);
 
   if (task.planDate) {
     manualPlan.add("date");
@@ -1754,13 +1772,13 @@ function editTodo(task, mode) {
     updateReminder();
   }
 
-  dueTime.addEventListener("input", copyDue);
-  planTime.addEventListener("input", () => {
+  dueTime.element.addEventListener("input", copyDue);
+  planTime.element.addEventListener("input", () => {
     manualPlan.add("start");
     if (!manualPlan.has("end")) planEnd.value = calendarSuggestedEnd(planTime.value).time;
     updateReminder();
   });
-  planEnd.addEventListener("input", () => {
+  planEnd.element.addEventListener("input", () => {
     manualPlan.add("end");
     updateReminder();
   });

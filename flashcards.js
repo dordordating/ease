@@ -1,5 +1,6 @@
 import { flashcardIntervalLimits, flashcardQueue, flashcardReminderPreferences, flashcardReviewIntervals } from "./flashcard-store.js";
 import { translatorLanguages } from "./translator-engine.js";
+import { createTimePicker } from "./time-picker.js";
 
 const directionLabels = {
   recognition: "flashcardsRecognition",
@@ -445,12 +446,10 @@ export function renderFlashcards(container, {
     const reminders = element("fieldset", "flashcards-intervals flashcards-reminder-settings");
     const reminder = flashcardReminderPreferences(state);
     let reminderEnabled = reminder.enabled;
-    const time = element("input", "flashcards-limit");
-    time.type = "time";
-    time.dir = "ltr";
-    time.value = reminder.time;
-    time.dataset.flashcardsWrite = "";
-    const timeField = field(t("flashcardsReminderTime"), time);
+    const time = createTimePicker({ locale, t, label: t("flashcardsReminderTime"), value: reminder.time });
+    for (const control of time.element.querySelectorAll("select")) control.dataset.flashcardsWrite = "";
+    const timeField = element("div", "field");
+    timeField.append(element("span", "", t("flashcardsReminderTime")), time.element);
     const reminderToggle = button(t("flashcardsReminderEnable"), "secondary-button translator-inline-switch", () => {
       reminderEnabled = !reminderEnabled;
       updateReminderFields();
@@ -470,6 +469,7 @@ export function renderFlashcards(container, {
       reminderToggle.setAttribute("aria-checked", String(reminderEnabled));
       timeField.hidden = !reminderEnabled;
       time.required = reminderEnabled;
+      time.disabled = !reminderEnabled || busy;
     }
     updateReminderFields();
 

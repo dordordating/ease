@@ -5428,9 +5428,7 @@ body[data-surface="panel"] .mail-reader > .mail-attachments {
   block-size: 14px;
 }
 
-.todo-item[data-done="true"] .todo-item-title,
-[data-task-done="true"] .calendar-event-title,
-.calendar-event-chip[data-task-done="true"] {
+.todo-item[data-done="true"] .todo-item-title {
   color: var(--muted);
   text-decoration: line-through;
 }
@@ -5455,13 +5453,13 @@ body[data-surface="panel"] .mail-reader > .mail-attachments {
   margin-block-start: 5px;
 }
 
-.todo-agenda button:not(.todo-check, .todo-item-open, .todo-pin) {
+.todo-agenda > button {
   display: flex;
   inline-size: 100%;
   text-align: start;
 }
 
-.todo-agenda button > small {
+.todo-agenda > button > small {
   margin-inline-start: auto;
 }
 
@@ -5503,11 +5501,6 @@ body[data-surface="panel"] .mail-reader > .mail-attachments {
   align-items: start;
   gap: 6px;
   padding: 4px 7px 7px;
-}
-
-.todo-edit-fields input {
-  min-inline-size: 0;
-  inline-size: 100%;
 }
 
 .calendar-todo-row {
@@ -5626,13 +5619,8 @@ body[data-surface="panel"] .mail-reader > .mail-attachments {
   border-color: transparent;
 }
 
-.todo-edit-fields :is(.date-picker-trigger, input[type="time"]) {
+.todo-edit-fields :is(.date-picker-trigger, .time-picker select) {
   min-block-size: 35px;
-}
-
-.todo-edit-fields input[type="time"] {
-  direction: ltr;
-  padding-block: 4px;
 }
 
 .todo-reminder-fields {
@@ -5737,4 +5725,41 @@ body[data-surface="panel"] .mail-reader > .mail-attachments {
 .date-picker-day[aria-pressed="true"] {
   background: var(--accent);
   color: var(--accent-ink);
+}
+
+.time-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 3px;
+  min-inline-size: 0;
+  color: var(--muted);
+}
+
+.time-picker > select {
+  inline-size: 100%;
+  min-inline-size: 0;
+  min-block-size: var(--control-height);
+  padding: 4px 3px;
+  border: 1px solid var(--stroke);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.time-picker > select:disabled {
+  color: var(--quiet);
+}
+
+.calendar-task-visibility {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-block-start: 8px;
+  font-size: 11.5px;
+}
+
+.calendar-task-visibility input {
+  accent-color: var(--accent);
 }

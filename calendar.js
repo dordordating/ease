@@ -2,6 +2,7 @@ import { calendarReminderLabel, calendarReminderOffsets, calendarReminderSchedul
 import { calendarMonthStart, dayKey, dayLength, localeWeekStart, localToday, weekOffsetFor } from './calendar-dates.js';
 import { calendarSystemFor, defaultCalendar } from './workspace-data.js';
 import { mailMessageLink } from './mail-api.js';
+import { createTimePicker } from './time-picker.js';
 
 function timeValue(time) {
   const [hours, minutes] = time.split(':').map(Number);
@@ -125,6 +126,10 @@ export function renderCalendar(container, {
           </select>
         </label>
       </div>
+      <label class="calendar-task-visibility">
+        <input type="checkbox" role="switch" data-calendar-show-tasks>
+        <span data-label="calendarShowTasks"></span>
+      </label>
       <p class="calendar-form-status" data-calendar-settings-status role="status" hidden></p>
       <div class="calendar-connections"></div>
     </section>
@@ -165,15 +170,13 @@ export function renderCalendar(container, {
             <input name="title" type="text" maxlength="160" dir="auto" required>
           </label>
           <div class="calendar-time-fields" id="calendar-time-fields">
-            <label class="calendar-field">
+            <div class="calendar-field" data-calendar-time="start">
               <span data-label="calendarStarts"></span>
-              <input name="start" type="time">
-            </label>
+            </div>
             <div class="calendar-end-fields" hidden>
-              <label class="calendar-field">
+              <div class="calendar-field" data-calendar-time="end">
                 <span data-label="calendarEnds"></span>
-                <input name="end" type="time">
-              </label>
+              </div>
               <button type="button" class="icon-button calendar-remove-end">${icon('close')}</button>
               <label class="calendar-end-next-day">
                 <input name="endNextDay" type="checkbox">
@@ -237,6 +240,7 @@ export function renderCalendar(container, {
   const weekSelect = container.querySelector('[data-calendar-week-start]');
   const eventDisplaySelect = container.querySelector('[data-calendar-event-display]');
   const settingsStatus = container.querySelector('[data-calendar-settings-status]');
+  const showTasks = container.querySelector('[data-calendar-show-tasks]');
   const grid = container.querySelector('.calendar-grid');
   const body = grid.tBodies[0];
   const weekList = container.querySelector('.calendar-week-list');
@@ -256,8 +260,10 @@ export function renderCalendar(container, {
   const endNextDayLabel = editor.querySelector('.calendar-end-next-day');
   const removeEnd = editor.querySelector('.calendar-remove-end');
   const addEnd = editor.querySelector('.calendar-add-end');
-  const startField = editor.elements.namedItem('start');
-  const endField = editor.elements.namedItem('end');
+  const startField = createTimePicker({ locale, t, label: t('calendarStarts') });
+  const endField = createTimePicker({ locale, t, label: t('calendarEnds') });
+  editor.querySelector('[data-calendar-time="start"]').append(startField.element);
+  editor.querySelector('[data-calendar-time="end"]').append(endField.element);
   const endNextDay = editor.elements.namedItem('endNextDay');
   const reminderField = editor.querySelector('.calendar-reminder-field');
   const reminder = editor.elements.namedItem('reminder');
@@ -339,6 +345,8 @@ export function renderCalendar(container, {
     systemSelect.disabled = savingSettings;
     weekSelect.disabled = savingSettings;
     eventDisplaySelect.disabled = savingSettings;
+    if (!savingSettings) showTasks.checked = preferences.showTasks !== false;
+    showTasks.disabled = savingSettings;
   }
 
   function updateHolidaySummary() {
@@ -353,7 +361,6 @@ export function renderCalendar(container, {
     button.type = 'button';
     button.className = className;
     button.dataset.event = event.id;
-    if (event.taskId) button.dataset.taskDone = String(event.completed);
     button.disabled = !editor.hidden;
     button.addEventListener('click', () => event.taskId ? onOpenTask?.(event.taskId) : openDetails(event, button));
     return button;
@@ -385,12 +392,11 @@ export function renderCalendar(container, {
     const toggle = document.createElement('button');
     toggle.type = 'button';
     toggle.className = 'icon-button todo-check';
-    toggle.dataset.done = String(event.completed);
-    const label = t(event.completed ? 'todoReopen' : 'todoComplete');
+    const label = t('todoComplete');
     toggle.setAttribute('aria-label', label);
     toggle.title = label;
-    if (event.completed) toggle.innerHTML = icon('check');
-    toggle.addEventListener('click', () => onCompleteTask?.(event.taskId, !event.completed));
+    toggle.disabled = !editor.hidden;
+    toggle.addEventListener('click', () => onCompleteTask?.(event.taskId, true));
     row.append(toggle, button);
     return row;
   }
@@ -752,6 +758,7 @@ export function renderCalendar(container, {
     endNextDayLabel.hidden = !hasStart;
     addEnd.hidden = !hasStart || showEnd;
     reminderField.hidden = !hasStart;
+    startField.disabled = savingEvent;
     endField.disabled = !showEnd || savingEvent;
     endNextDay.disabled = !showEnd || !hasStart || savingEvent;
     reminder.disabled = !hasStart || savingEvent;
@@ -885,7 +892,7 @@ export function renderCalendar(container, {
     }
   });
   editorTitle.addEventListener('input', () => editorTitle.setCustomValidity(''));
-  startField.addEventListener('input', () => {
+  startField.element.addEventListener('input', () => {
     endField.setCustomValidity('');
     if (startField.value && endMode === 'auto') fillDefaultEnd();
     if (!startField.value) {
@@ -896,7 +903,7 @@ export function renderCalendar(container, {
     showTimingFields();
     showReminderStatus();
   });
-  endField.addEventListener('input', () => {
+  endField.element.addEventListener('input', () => {
     endMode = 'manual';
     endField.setCustomValidity('');
     if (!endField.value) endNextDay.checked = false;
@@ -1021,6 +1028,7 @@ export function renderCalendar(container, {
   systemSelect.addEventListener('change', () => changePreferences({ system: systemSelect.value || null }));
   weekSelect.addEventListener('change', () => changePreferences({ firstDay: weekSelect.value === '' ? null : Number(weekSelect.value) }));
   eventDisplaySelect.addEventListener('change', () => changePreferences({ eventDisplay: eventDisplaySelect.value }));
+  showTasks.addEventListener('change', () => changePreferences({ showTasks: showTasks.checked }));
 
   function update({ preferences: nextPreferences, events, holidays: nextHolidays } = {}) {
     const focused = document.activeElement;

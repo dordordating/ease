@@ -1,5 +1,5 @@
 import { translate } from "./locales.js";
-import { defaultTodo, localTaskDay, taskAction, taskLink, taskReminderSchedule, taskTimestamp, taskToday } from "./todo-store.js";
+import { defaultTodo, localTaskDay, reconcileCompletedTasks, taskAction, taskLink, taskReminderSchedule, taskTimestamp, taskToday } from "./todo-store.js";
 import { readWorkspace, storageKey } from "./workspace-data.js";
 
 export const quickTaskKey = "easeQuickTask";
@@ -7,6 +7,7 @@ const menuId = "ease-add-task";
 const shortcutId = "quick-task";
 const reminderAlarm = "ease-todo-reminders";
 const clockAlarm = "ease-todo-clock";
+const historyAlarm = "ease-todo-history";
 const logKey = "easeTodoDelivered";
 const notificationId = "ease-todo-notification";
 const permission = { permissions: ["notifications"] };
@@ -92,6 +93,17 @@ export function registerTodoHandlers(queueWorkspace) {
     pendingReminder = pendingReminder.then(() => reconcile(alarm)).catch(() => {});
     return pendingReminder;
   };
+  const syncHistory = () => {
+    if (!chrome.alarms?.get) return;
+    return queueWorkspace(async () => {
+      const [workspace, alarm] = await Promise.all([readWorkspace(), chrome.alarms.get(historyAlarm)]);
+      const { todo, next } = reconcileCompletedTasks(workspace.todo);
+      if (todo !== workspace.todo) await chrome.storage.local.set({ [storageKey]: { ...workspace, todo } });
+      if (Number.isFinite(next)) {
+        if (alarm?.scheduledTime !== next) await chrome.alarms.create(historyAlarm, { when: next });
+      } else if (alarm) await chrome.alarms.clear(historyAlarm);
+    }).catch(() => {});
+  };
   const updateMenu = () => {
     if (!chrome.contextMenus?.update) return;
     pendingMenu = pendingMenu.then(async () => {
@@ -110,7 +122,7 @@ export function registerTodoHandlers(queueWorkspace) {
     }).catch(() => {});
   };
 
-  const initialize = () => { updateMenu(); sync(); };
+  const initialize = () => { updateMenu(); sync(); syncHistory(); };
   chrome.runtime.onInstalled?.addListener(initialize);
   chrome.runtime.onStartup?.addListener(initialize);
   chrome.storage.onChanged.addListener(({ [storageKey]: change }, area) => {
@@ -119,9 +131,12 @@ export function registerTodoHandlers(queueWorkspace) {
     const after = change.newValue;
     const visibilityChanged = before?.tabs?.includes("todo") !== after?.tabs?.includes("todo");
     if (visibilityChanged || before?.locale !== after?.locale) updateMenu();
-    if (visibilityChanged || JSON.stringify(before?.todo) !== JSON.stringify(after?.todo)) sync();
+    const changed = JSON.stringify(before?.todo) !== JSON.stringify(after?.todo);
+    if (visibilityChanged || changed) sync();
+    if (changed && (before?.todo?.retentionDays || after?.todo?.retentionDays)) syncHistory();
   });
   chrome.alarms?.onAlarm?.addListener(alarm => {
+    if (alarm.name === historyAlarm) return syncHistory();
     if (alarm.name === reminderAlarm || alarm.name === clockAlarm) return sync(alarm.name === reminderAlarm ? alarm : undefined);
   });
   const permissionChanged = ({ permissions }) => {
@@ -161,4 +176,5 @@ export function registerTodoHandlers(queueWorkspace) {
     })().catch(() => {});
   });
   sync();
+  syncHistory();
 }

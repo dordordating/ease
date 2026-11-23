@@ -4,6 +4,8 @@ export const defaultTodo = { items: [], dailyTime: "" };
 export const taskLimits = { title: 160, notes: 2000 };
 export const taskSections = ["today", "inbox", "upcoming"];
 export const collapsedTaskKey = section => `easeTodoCollapsed:${section}`;
+export const taskRetentionOptions = [7, 30, 90];
+const dayMilliseconds = 86_400_000;
 
 const iso = /^\d{4}-\d{2}-\d{2}$/u;
 const clock = /^(?:[01]\d|2[0-3]):[0-5]\d$/u;
@@ -48,6 +50,10 @@ export function taskLink(value) {
 
 function taskSource(source) {
   if (!source) return null;
+  if (source.kind === "snippet") {
+    const snippetId = bounded(source.snippetId, 128);
+    return snippetId ? { kind: "snippet", snippetId } : null;
+  }
   const url = taskLink(source.url);
   if (source.kind === "web") return url ? { kind: "web", url } : null;
   if (source.kind !== "mail" || !bounded(source.accountId, 540) || !bounded(source.messageId, 1024)) return null;
@@ -106,6 +112,7 @@ export function restoreTodo(value) {
   if (!Array.isArray(value?.items) || (value.dailyTime !== "" && !isTime(value.dailyTime))) return null;
   const labels = readLabels(value.labels);
   if (!labels || (value.layout !== undefined && !["tabs", "stacked"].includes(value.layout))) return null;
+  if (value.retentionDays !== undefined && !taskRetentionOptions.includes(value.retentionDays)) return null;
   const allowed = new Set(labels.map(label => label.id));
   const ids = new Set();
   const items = [];
@@ -119,10 +126,41 @@ export function restoreTodo(value) {
     ids.add(task.id);
     const labelIds = assignedLabels(task.labelIds, allowed);
     items.push({ id: task.id, ...fields, createdAt: task.createdAt, done: task.done, focusDay: task.focusDay || "", source,
+      ...(task.done && validCompletion(task.completedAt) ? { completedAt: task.completedAt } : {}),
       ...(labelIds.length ? { labelIds } : {}) });
   }
   return { dailyTime: value.dailyTime, items,
-    ...(labels.length ? { labels } : {}), ...(value.layout === "stacked" ? { layout: "stacked" } : {}) };
+    ...(labels.length ? { labels } : {}), ...(value.layout === "stacked" ? { layout: "stacked" } : {}),
+    ...(value.retentionDays ? { retentionDays: value.retentionDays } : {}) };
+}
+
+function validCompletion(value) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= 8.64e15;
+}
+
+export function reconcileCompletedTasks(todo, now = Date.now()) {
+  if (!taskRetentionOptions.includes(todo?.retentionDays)) return { todo, next: Infinity };
+  const retention = todo.retentionDays * dayMilliseconds;
+  let next = Infinity;
+  let changed = false;
+  const items = [];
+  for (const task of todo.items) {
+    if (!task.done) {
+      items.push(task);
+      continue;
+    }
+    const tracked = validCompletion(task.completedAt);
+    const completedAt = tracked ? task.completedAt : now;
+    const expiresAt = completedAt + retention;
+    if (expiresAt <= now) {
+      changed = true;
+      continue;
+    }
+    if (!tracked) changed = true;
+    next = Math.min(next, expiresAt);
+    items.push(tracked ? task : { ...task, completedAt });
+  }
+  return { todo: changed ? { ...todo, items } : todo, next };
 }
 
 function updateLabels(workspace, todo, action, data) {
@@ -159,7 +197,12 @@ export function taskAction(workspace, action, data) {
     }
     if (data.layout === "stacked") next.layout = "stacked";
     else if (data.layout === "tabs") delete next.layout;
-    workspace.todo = next;
+    if (Object.hasOwn(data, "retentionDays")) {
+      if (data.retentionDays === null) delete next.retentionDays;
+      else if (taskRetentionOptions.includes(data.retentionDays)) next.retentionDays = data.retentionDays;
+      else return "saveFailed";
+    }
+    workspace.todo = reconcileCompletedTasks(next).todo;
     return;
   }
   if (data.id && !existing) return "todoMissing";
@@ -196,9 +239,13 @@ export function taskAction(workspace, action, data) {
     case "remove-task":
       workspace.todo = { ...todo, items: items.filter(task => task !== existing) };
       return;
-    case "complete-task":
-      next = { ...existing, done: data.done === true };
+    case "complete-task": {
+      const done = data.done === true;
+      if (done === existing.done) return;
+      const { completedAt, ...task } = existing;
+      next = done ? { ...task, done: true, completedAt: Date.now() } : { ...task, done: false };
       break;
+    }
     case "reschedule-task": {
       if (!taskDateValid(data.date)) return "todoInvalidSchedule";
       next = { ...existing, dueDate: data.date };
@@ -234,7 +281,8 @@ export function taskReminderSchedule(task) {
 
 export function taskCalendarEntries(tasks) {
   return tasks.flatMap(task => {
-    const common = { taskId: task.id, completed: task.done, title: task.title, notes: task.notes, readOnly: true };
+    if (task.done) return [];
+    const common = { taskId: task.id, title: task.title, notes: task.notes, readOnly: true };
     const entries = [];
     if (task.dueDate && task.dueDate !== task.planDate) entries.push({
       ...common, id: `todo-due:${task.id}`, date: task.dueDate, start: task.dueTime, display: "due"

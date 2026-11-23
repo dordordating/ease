@@ -2,7 +2,7 @@ import {
   defaultTranslator, densities, modules, palettes, readWorkspace, reorderModule, shortcutSlots, sizes, storageKey,
   themes, translatorEngines, workspaceZoomLevels
 } from "./workspace-data.js";
-import { localeNames } from "./locales.js";
+import { localeNames, translate } from "./locales.js";
 import { setToolbarBrand } from "./brand.js";
 import { changeCalendarPreferences, saveCalendarEvent, setCalendarHoliday } from "./calendar-store.js";
 import { registerCalendarReminderHandlers } from "./calendar-reminders.js";
@@ -361,6 +361,16 @@ async function updateWorkspace(workspace, action, data, transaction) {
     case "reschedule-task":
     case "focus-task":
       return taskAction(workspace, action, data);
+    case "add-snippet-task": {
+      const snippet = workspace.snippets.find(item => item.id === data.id);
+      if (!snippet) return "todoSnippetMissing";
+      const key = snippetAccess(workspace, sessions, snippet);
+      const title = key ? "" : snippet.title || snippet.text.trim().split(/\r?\n/u, 1)[0];
+      return taskAction(workspace, "save-task", {
+        title: title || translate(workspace.locale, "todoClipboardTask"), showModule: true,
+        source: { kind: "snippet", snippetId: snippet.id }
+      });
+    }
     case "calendar-holiday":
       setCalendarHoliday(workspace, data);
       break;

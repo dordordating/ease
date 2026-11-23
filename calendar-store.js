@@ -23,6 +23,7 @@ export function changeCalendarPreferences(workspace, patch) {
   if ([null, "gregory", "persian", "islamic-civil"].includes(patch.system)) preferences.system = patch.system;
   if (["week", "month"].includes(patch.view)) preferences.view = patch.view;
   if (["dots", "count", "titles", "cards"].includes(patch.eventDisplay)) preferences.eventDisplay = patch.eventDisplay;
+  if (typeof patch.showTasks === "boolean") preferences.showTasks = patch.showTasks;
   if (patch.firstDay === null || (Number.isInteger(patch.firstDay) && patch.firstDay >= 0 && patch.firstDay <= 6)) {
     preferences.firstDay = patch.firstDay;
   }
