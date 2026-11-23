@@ -12,6 +12,7 @@ export const modules = [
   { id: "translate", icon: "translate", color: "#69d5fa", released: true },
   { id: "flashcards", icon: "flashcards", color: "#82b9ac", released: true },
   { id: "todo", icon: "todo", color: "#a0c98b", released: true },
+  { id: "spaces", icon: "spaces", color: "#a999f5", released: true },
   { id: "assistant", icon: "sparkles", color: "#eca6e1" }
 ];
 
@@ -87,6 +88,7 @@ export const defaultWorkspace = {
   flashcards: defaultFlashcards,
   markets: defaultMarkets,
   todo: defaultTodo,
+  spaces: [],
   events: [],
   holidays: []
 };

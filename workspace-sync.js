@@ -3,6 +3,7 @@ import { localeNames } from "./locales.js";
 import { getGoogleAccount, googleAccountStorageKey } from "./providers.js";
 import { vaultSessionStorageKey } from "./vault-session.js";
 import { defaultTodo, restoreTodo } from "./todo-store.js";
+import { restoreSpaces } from "./spaces-store.js";
 import {
   createWorkspaceSyncSalt, decryptWorkspaceSnapshot, deriveWorkspaceSyncKey, encryptWorkspaceSnapshot
 } from "./workspace-sync-crypto.js";
@@ -45,6 +46,7 @@ function portableWorkspace(workspace) {
   const { labels, layout, ...tasks } = snapshot.todo;
   snapshot.todo = { ...tasks, ...(labels?.length ? { labels } : {}), ...(layout === "stacked" ? { layout } : {}) };
   if (!tasks.items.length && !tasks.dailyTime && !tasks.retentionDays && !labels?.length && layout !== "stacked") delete snapshot.todo;
+  if (!snapshot.spaces.length) delete snapshot.spaces;
   if (snapshot.calendar.showTasks === true) {
     const { showTasks, ...calendar } = snapshot.calendar;
     snapshot.calendar = calendar;
@@ -93,8 +95,9 @@ function readSnapshot(value) {
   if (value.events.some((event) => !object(event) || typeof event.id !== "string" || typeof event.date !== "string")
     || value.holidays.some((day) => typeof day !== "string")) invalid();
   const todo = restoreTodo(value.todo);
-  if (!todo) invalid();
-  return portableWorkspace({ ...value, todo });
+  const spaces = restoreSpaces(value.spaces);
+  if (!todo || !spaces) invalid();
+  return portableWorkspace({ ...value, todo, spaces });
 }
 
 function localWorkspace(snapshot, current) {
@@ -105,7 +108,8 @@ function localWorkspace(snapshot, current) {
     return { ...folder, vault: { ...folder.vault, device: previous.device } };
   });
   const { inlineEnabled, inlineSites } = { ...defaultWorkspace.translator, ...current.translator };
-  return { ...snapshot, todo: snapshot.todo ?? defaultTodo, folders, translator: { ...snapshot.translator, inlineEnabled, inlineSites } };
+  return { ...snapshot, spaces: snapshot.spaces ?? [], todo: snapshot.todo ?? defaultTodo, folders,
+    translator: { ...snapshot.translator, inlineEnabled, inlineSites } };
 }
 
 async function keyStorage(mode, access) {

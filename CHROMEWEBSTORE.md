@@ -30,6 +30,8 @@ Use the final release manifest as the source of truth when entering these answer
 | Optional `notifications` | Requested when the user sets a calendar reminder, a price alert, or a flashcard reminder. Shows the event, the price that triggered an alert, or the number of flashcards ready to review. |
 | `contextMenus` | Adds **Translate with Ease** to the context menu when the user selects text. |
 | `activeTab` | Temporarily allows the translation shortcut to access the active tab where the user invoked it. |
+| Optional `tabs` | Reads URLs and titles from the current window when the user saves tabs. It also compares open URLs with saved URLs when the user reopens a tab space. |
+| Optional `tabGroups` | Reads and restores Chrome tab groups when the user saves or reopens a tab space. |
 | `scripting` | Reads only the current text selection when the user invokes the translation shortcut. |
 | Ease API HTTPS origin | Sends text for translation and verifies Google sessions when the user chooses an online translation tier. |
 | Optional `https://openidconnect.googleapis.com/*` | Requested when the user selects Google sign-in or connects Google Calendar. Fetches the profile or verifies the account identity for the calendar connection. |
@@ -50,14 +52,15 @@ Use this inventory to match the final ZIP to the Dashboard’s data categories, 
 | Translation input and results | Chrome processes on-device translations locally. For an online tier, Ease sends the translation text, language pair, and learning-notes language to its API and OpenRouter. The Ease database stores usage counts. Selected text can be held briefly in `chrome.storage.session` to open the translator. Users can save translations to snippets, flashcards, or local translation history. |
 | Translation history | An optional Translator setting, off by default. When enabled, this browser profile stores up to 100 successful translations, which users can search, copy, or remove. |
 | Flashcards and study progress | Saved in this browser profile. A card can include a phrase, a translation, a usage note, and an example. Review ratings determine the next study time. Pronunciation uses an available on-device speech voice. |
-| Encrypted workspace snapshot | If enabled in Settings, Ease encrypts workspace settings, snippets and folders, flashcards, and local calendar data on the device. Its server stores the encrypted bytes, revision, and account ID so another device can fetch them. The sync passphrase stays on the device. |
+| Tab spaces | When the user saves a space, Ease stores selected tab URLs and titles, pin state, and group details locally. Saved spaces can be included in optional encrypted workspace sync. |
+| Encrypted workspace snapshot | If enabled in Settings, Ease encrypts workspace settings, snippets and folders, flashcards, tasks, saved tab spaces, and local calendar data on the device. Its server stores the encrypted bytes, revision, and account ID so another device can fetch them. The sync passphrase stays on the device. |
 | Market watchlist and price alerts | Workspace preferences saved in the browser. With encrypted workspace sync, preferences travel in the encrypted workspace snapshot. Ease requests quotes from a shared cache and evaluates alert rules in this browser profile. |
 | Workspace settings and locally created calendar events | Saved in `chrome.storage.local`, including event dates, times, titles, locations, and notes. This data remains in the browser profile. |
 | Google account identifier, name, and verified email address | Fetched from Google after sign-in and stored in `chrome.storage.local`. For online translation, Ease API uses a Google access token to verify the account, records the verified profile and account timestamps, and returns a short-lived Ease token held in Chrome’s in-memory session storage. The token stays available while the service worker sleeps and is cleared on account changes. |
 | Connected calendar event data | Retrieved directly from Google or iCloud and cached in the browser. Includes event identifiers, dates, times, titles, locations, and notes that the provider supplies. The calendar connection stores its latest refresh time. |
 | Published iCloud calendar URL | User provides the URL and grants access to its origin. The URL is saved in `chrome.storage.local` and used to request the calendar from iCloud. Treat it as sensitive because a published feed can be read by someone who has its link. |
 
-Google identity can fall under personally identifiable information. OAuth tokens and a published feed link merit review under authentication information. Snippets, translation selections, and event fields can contain personal communications and locations supplied by the user or their calendar. The translation shortcut reads the selection under Chrome’s temporary active-tab permission. Ease does not request device geolocation or browsing history.
+Google identity can fall under personally identifiable information. OAuth tokens and a published feed link merit review under authentication information. Snippets, translation selections, and event fields can contain personal communications and locations supplied by the user or their calendar. The translation shortcut reads the selection under Chrome’s temporary active-tab permission. Tab spaces reads open-tab details with the user’s permission when saving or comparing tabs.
 
 ## Public privacy policy draft
 
@@ -65,7 +68,9 @@ Google identity can fall under personally identifiable information. OAuth tokens
 - **Privacy contact** — [Monitored email or contact page]
 - **Effective date** — [Publication date]
 
-Ease is a Chrome workspace for reusable text, translation, and calendars. You can use the workspace without an account. Snippets, workspace settings, and local calendar events are stored in the browser profile on the device. The Ease service provides online translation for signed-in users.
+Ease is a Chrome workspace for reusable text, translation, calendars, and saved tab spaces. You can use the workspace without an account. Snippets, workspace settings, and local calendar events are stored in the browser profile on the device. The Ease service provides online translation for signed-in users.
+
+If you grant Chrome tab access and choose to save a tab space, Ease reads the current window’s tab URLs, titles, pin states, and group details. You can remove a saved tab or delete the space in Ease. Saved spaces are kept in the browser profile and included in encrypted workspace sync if you enable it.
 
 When you choose to copy a saved snippet, Ease writes the text to your system clipboard. Copying a template uses the temporary values you enter to fill its fields. If you separately enable Clipboard history and grant Chrome permission, Ease checks the current system clipboard while Chrome is running. Ease keeps up to 100 recent text and link entries in this browser profile. This history stays on the device even when encrypted workspace sync is on. You can pause recording, remove a single entry, or clear the full history.
 

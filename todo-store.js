@@ -1,4 +1,5 @@
 import { calendarReminderOffsets, calendarReminderSchedule } from "./calendar-timing.js";
+import { spaceIdValid } from "./spaces-store.js";
 
 export const defaultTodo = { items: [], dailyTime: "" };
 export const taskLimits = { title: 160, notes: 2000 };
@@ -128,6 +129,7 @@ export function restoreTodo(value) {
     const labelIds = assignedLabels(task.labelIds, allowed);
     items.push({ id: task.id, ...fields, createdAt: task.createdAt, done: task.done, focusDay: task.focusDay || "", source,
       ...(task.done && validCompletion(task.completedAt) ? { completedAt: task.completedAt } : {}),
+      ...(spaceIdValid(task.spaceId) ? { spaceId: task.spaceId } : {}),
       ...(labelIds.length ? { labelIds } : {}) });
   }
   return { dailyTime: value.dailyTime, items,
@@ -223,6 +225,11 @@ export function taskAction(workspace, action, data) {
     const task = record ? { ...record, ...(duplicate ? { dueDate: fields.dueDate, dueTime: fields.dueTime } : fields) }
       : { id: crypto.randomUUID(), ...fields, createdAt: Date.now(), done: false, focusDay: "", source };
     if (!duplicate) {
+      if (Object.hasOwn(data, "spaceId")) {
+        if (!data.spaceId) delete task.spaceId;
+        else if (workspace.spaces?.some(space => space.id === data.spaceId)) task.spaceId = data.spaceId;
+        else return "spaceMissing";
+      }
       for (const key of ["reminderMinutes", "planEndNextDay"]) {
         if (!Object.hasOwn(fields, key)) delete task[key];
       }

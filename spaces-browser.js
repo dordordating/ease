@@ -1,0 +1,245 @@
+import { appendSpaceBundle, chromeGroupColors, spaceIdValid, spaceLimits, spaceUrl, updateSpaces } from "./spaces-store.js";
+import { readWorkspace, storageKey } from "./workspace-data.js";
+
+export const spacesMessage = "ease-tab-spaces";
+const savedWindowKey = id => `easeSpaceWindow:${id}`;
+const tabsAccess = { permissions: ["tabs"] };
+const groupsAccess = { permissions: ["tabGroups"] };
+
+export async function forgetSpaceWindow(id) {
+  await chrome.storage.session.remove(savedWindowKey(id)).catch(() => {});
+}
+
+class SpaceError extends Error {
+  constructor(code) {
+    super(code);
+    this.code = code;
+  }
+}
+
+function normalWindow(window) {
+  return Number.isInteger(window?.id) && window.id >= 0 && !window.incognito && window.type === "normal";
+}
+
+async function browserWindow(windowId) {
+  const window = Number.isInteger(windowId) && windowId >= 0
+    ? await chrome.windows.get(windowId)
+    : await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+  if (!normalWindow(window)) throw new SpaceError("spaceWindowUnavailable");
+  return window;
+}
+
+async function captureBundle(windowId, activeOnly) {
+  const window = await browserWindow(windowId);
+  const listed = await chrome.tabs.query({ windowId: window.id, ...(activeOnly ? { active: true } : {}) });
+  const candidates = listed.sort((a, b) => a.index - b.index).flatMap(tab => {
+    const url = !tab.incognito && (spaceUrl(tab.pendingUrl) || spaceUrl(tab.url));
+    return url ? [{ tab, url }] : [];
+  });
+  if (!candidates.length) throw new SpaceError(activeOnly ? "spaceNoActiveTab" : "spaceNoTabs");
+  if (candidates.length > spaceLimits.tabs) throw new SpaceError("spaceTabLimit");
+
+  const groups = [];
+  const groupIds = new Map();
+  if (!activeOnly && candidates.some(({ tab }) => tab.groupId >= 0 && !tab.pinned) && chrome.tabGroups?.query) {
+    const savedGroups = await chrome.tabGroups.query({ windowId: window.id }).catch(() => []);
+    for (const group of savedGroups) {
+      if (!candidates.some(({ tab }) => !tab.pinned && tab.groupId === group.id)) continue;
+      const id = crypto.randomUUID();
+      groupIds.set(group.id, id);
+      groups.push({
+        id, title: (group.title ?? "").trim().slice(0, spaceLimits.name),
+        color: chromeGroupColors.includes(group.color) ? group.color : "grey", collapsed: group.collapsed === true
+      });
+    }
+  }
+  let activeTabId;
+  const tabs = candidates.map(({ tab, url }) => {
+    const id = crypto.randomUUID();
+    if (tab.active) activeTabId = id;
+    return { id, url, title: (tab.title ?? "").trim().slice(0, 200), pinned: tab.pinned === true, groupId: groupIds.get(tab.groupId) ?? "" };
+  });
+  return { bundle: { tabs, groups, activeTabId: activeTabId ?? tabs[0].id }, skipped: listed.length - tabs.length };
+}
+
+async function saveCapture(message, windowId, queueWorkspace) {
+  const captured = await captureBundle(windowId, message.mode === "active");
+  return queueWorkspace(async () => {
+    const workspace = await readWorkspace();
+    const spaces = workspace.spaces ?? [];
+    let space;
+    if (message.mode === "create") {
+      const error = updateSpaces(workspace, "save-space", {
+        name: message.name, notes: message.notes, color: message.color
+      });
+      if (error) throw new SpaceError(error);
+      [space] = workspace.spaces;
+    } else {
+      space = spaces.find(item => item.id === message.id);
+      if (!space) throw new SpaceError("spaceMissing");
+      if (message.mode === "replace" && message.expectedUpdatedAt !== space.updatedAt) throw new SpaceError("spaceChanged");
+    }
+
+    const replacing = message.mode === "create" || message.mode === "replace";
+    const { bundle, added } = replacing ? { bundle: captured.bundle, added: captured.bundle.tabs.length }
+      : appendSpaceBundle(space, captured.bundle);
+    if (!added) throw new SpaceError("spaceAlreadySaved");
+    if (bundle.tabs.length > spaceLimits.tabs) throw new SpaceError("spaceTabLimit");
+    Object.assign(space, bundle, { updatedAt: Date.now() });
+    await chrome.storage.local.set({ [storageKey]: workspace });
+    return { id: space.id, count: added, skipped: captured.skipped };
+  });
+}
+
+async function restoreGroups(space, windowId, created, active, canGroup, matchedGroups) {
+  let degraded = false;
+  for (const group of space.groups) {
+    const tabIds = space.tabs.filter(tab => tab.groupId === group.id && created.has(tab.id)).map(tab => created.get(tab.id));
+    if (!tabIds.length) continue;
+    if (!canGroup) {
+      degraded = true;
+      continue;
+    }
+    try {
+      const existing = matchedGroups.get(group.id);
+      if (existing !== undefined) await chrome.tabs.group({ tabIds, groupId: existing });
+      else {
+        const groupId = await chrome.tabs.group({ tabIds, createProperties: { windowId } });
+        await chrome.tabGroups.update(groupId, {
+          title: group.title, color: group.color, collapsed: group.collapsed && !tabIds.includes(active)
+        });
+      }
+    } catch {
+      degraded = true;
+    }
+  }
+  return degraded;
+}
+
+async function openSpace(space, { mode, windowId, canReadTabs, canGroup }) {
+  if (!space.tabs.length) throw new SpaceError("spaceEmpty");
+  const key = savedWindowKey(space.id);
+  let target;
+  let createdWindow = false;
+  let starter;
+  const tabs = [...space.tabs.filter(tab => tab.pinned), ...space.tabs.filter(tab => !tab.pinned)];
+  if (mode === "here") target = await browserWindow(windowId);
+  else {
+    const entry = (await chrome.storage.session.get(key).catch(() => ({})))[key];
+    if (entry) {
+      target = await chrome.windows.get(entry.windowId).catch(() => undefined);
+      if (!normalWindow(target)) target = undefined;
+      if (target && !canReadTabs && entry.updatedAt === space.updatedAt) {
+        await chrome.windows.update(target.id, { focused: true });
+        return { focused: true, count: 0 };
+      }
+      if (!canReadTabs) target = undefined;
+    }
+    if (!target) {
+      target = await chrome.windows.create({ url: tabs[0].url, focused: true, type: "normal" });
+      if (!normalWindow(target)) throw new SpaceError("spaceOpenFailed");
+      starter = target.tabs?.[0] ?? (await chrome.tabs.query({ windowId: target.id }))[0];
+      if (!Number.isInteger(starter?.id)) throw new SpaceError("spaceOpenFailed");
+      createdWindow = true;
+    }
+  }
+
+  const matched = new Map();
+  const created = new Map();
+  const matchedGroups = new Map();
+  let missed = 0;
+  let degraded = false;
+  if (createdWindow) {
+    const first = tabs[0];
+    matched.set(first.id, starter.id);
+    created.set(first.id, starter.id);
+    if (first.pinned) {
+      try { await chrome.tabs.update(starter.id, { pinned: true }); }
+      catch { degraded = true; }
+    }
+  } else {
+    const available = new Map();
+    for (const tab of await chrome.tabs.query({ windowId: target.id })) {
+      const url = spaceUrl(tab.pendingUrl) || spaceUrl(tab.url);
+      if (!url || !Number.isInteger(tab.id) || tab.incognito) continue;
+      if (!available.has(url)) available.set(url, []);
+      available.get(url).push(tab);
+    }
+    for (const tab of tabs) {
+      const sibling = available.get(tab.url)?.shift();
+      if (!sibling) continue;
+      matched.set(tab.id, sibling.id);
+      if (mode === "window" && tab.groupId && sibling.groupId >= 0 && !matchedGroups.has(tab.groupId)) {
+        matchedGroups.set(tab.groupId, sibling.groupId);
+      }
+    }
+  }
+
+  for (const tab of tabs) {
+    if (matched.has(tab.id)) continue;
+    try {
+      const opened = await chrome.tabs.create({ windowId: target.id, url: tab.url, pinned: tab.pinned, active: false });
+      if (!Number.isInteger(opened?.id)) throw new Error("Tab unavailable");
+      matched.set(tab.id, opened.id);
+      created.set(tab.id, opened.id);
+    } catch {
+      missed += 1;
+    }
+  }
+
+  if (!matched.size) throw new SpaceError("spaceOpenFailed");
+  const active = matched.get(space.activeTabId);
+  if (active !== undefined && (createdWindow || mode === "here" || created.size > 0)) {
+    await chrome.tabs.update(active, { active: true }).catch(() => { degraded = true; });
+  }
+  if (created.size) {
+    const groupsFailed = await restoreGroups(space, target.id, created, active, canGroup, matchedGroups);
+    degraded ||= groupsFailed;
+  }
+  if (mode === "window") {
+    if (!createdWindow) await chrome.windows.update(target.id, { focused: true }).catch(() => { degraded = true; });
+    await chrome.storage.session.set({ [key]: { windowId: target.id, updatedAt: space.updatedAt } }).catch(() => {});
+  }
+  return { count: created.size, missed, degraded, focused: mode === "window" && !created.size };
+}
+
+export function registerSpaceHandlers(queueWorkspace) {
+  let opening = Promise.resolve();
+  chrome.runtime.onMessage.addListener((message, sender, respond) => {
+    const workspaceUrl = chrome.runtime.getURL("workspace.html");
+    if (message?.type !== spacesMessage || sender.id !== chrome.runtime.id || sender.tab?.incognito
+      || !(sender.url === workspaceUrl || sender.url?.startsWith(workspaceUrl + "?"))) return;
+
+    const capture = message.action === "capture" && ["create", "append", "active", "replace"].includes(message.mode);
+    const restore = message.action === "open" && ["here", "window"].includes(message.mode);
+    if ((!capture && !restore) || (message.mode === "create" ? typeof message.name !== "string" || !message.name.trim()
+      : !spaceIdValid(message.id))) {
+      respond({ error: "saveFailed" });
+      return;
+    }
+
+    const grants = [];
+    if (capture || message.mode === "here") grants.push("tabs");
+    if ((capture && message.mode !== "active") || (restore && message.groups === true)) grants.push("tabGroups");
+    // Invoke the prompt on this message hop so it can outlive the toolbar popup.
+    const allowed = grants.length ? chrome.permissions.request({ permissions: grants }).catch(() => false) : Promise.resolve(true);
+    const windowId = Number.isInteger(message.windowId) && message.windowId >= 0 ? message.windowId : sender.tab?.windowId;
+    const result = allowed.then(async granted => {
+      if (!granted && (capture || message.mode === "here")) throw new SpaceError("spaceTabPermission");
+      if (capture) return saveCapture(message, windowId, queueWorkspace);
+      const open = opening.then(async () => {
+        const workspace = await readWorkspace();
+        const space = workspace.spaces?.find(space => space.id === message.id);
+        if (!space) throw new SpaceError("spaceMissing");
+        const [canReadTabs, canGroup] = await Promise.all([
+          chrome.permissions.contains(tabsAccess), chrome.permissions.contains(groupsAccess)
+        ]);
+        return openSpace(space, { mode: message.mode, windowId, canReadTabs, canGroup });
+      });
+      opening = open.catch(() => {});
+      return open;
+    });
+    result.then(respond, error => respond({ error: error instanceof SpaceError ? error.code : capture ? "spaceSaveFailed" : "spaceOpenFailed" }));
+    return true;
+  });
+}

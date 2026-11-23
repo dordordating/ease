@@ -2,6 +2,9 @@ import { renderCalendar } from "./calendar.js";
 import { renderTranslator } from "./translator.js";
 import { renderFlashcards } from "./flashcards.js";
 import { renderTodo } from "./todo.js";
+import { renderSpaces } from "./spaces.js";
+import { spacesMessage } from "./spaces-browser.js";
+import { spaceColors, spaceLimits } from "./spaces-store.js";
 import { collapsedTaskKey, defaultTodo, localTaskDay, taskCalendarEntries, taskLimits, taskSections } from "./todo-store.js";
 import { calendarReminderLabel, calendarReminderOffsets, calendarSuggestedEnd } from "./calendar-timing.js";
 import { createDatePicker } from "./date-picker.js";
@@ -89,6 +92,8 @@ let flashcardController;
 let flashcardLocale;
 let todoController;
 let todoLocale;
+let spacesController;
+let spacesLocale;
 const collapsedTodo = new Set();
 let marketsController;
 let marketsLocale;
@@ -115,8 +120,8 @@ let supportsDeviceUnlock = false;
 
 document.body.dataset.surface = inPanel ? "panel" : "popup";
 panelButton.hidden = inPanel;
+chrome.windows.getCurrent().then((window) => { currentWindowId = window.id; }).catch(() => {});
 if (!inPanel) {
-  chrome.windows.getCurrent().then((window) => { currentWindowId = window.id; }).catch(() => {});
   chrome.runtime.getContexts({ contextTypes: ["POPUP"], documentUrls: [location.href] })
     .then((contexts) => { inToolbarPopup = contexts.length > 0; }).catch(() => {});
 }
@@ -810,7 +815,7 @@ function openWorkspaceMenu(anchor, point, label, populate) {
       }
     });
     item.setAttribute("role", "menuitem");
-    if (["deleteFolder", "clipboardHistoryClear", "mailDelete"].includes(key)) item.dataset.action = "delete";
+    if (["deleteFolder", "clipboardHistoryClear", "mailDelete", "spaceDelete"].includes(key)) item.dataset.action = "delete";
     group.append(item);
   }
 
@@ -1102,8 +1107,17 @@ const moduleSearchSources = {
     entries: workspace.tabs.includes("todo") ? (workspace.todo?.items ?? []).map(task => ({
       id: `task-result-${task.id}`, title: task.title, detail: task.notes || (task.done ? t("todoCompleted") : undefined),
       keywords: [task.title, task.notes, task.dueDate, task.planDate,
+        workspace.spaces?.find(space => space.id === task.spaceId)?.name,
         ...(workspace.todo?.labels ?? []).filter(label => task.labelIds?.includes(label.id)).map(label => label.name)],
       open: () => openTodoTask(task.id)
+    })) : []
+  }),
+  spaces: () => ({
+    label: "spaces",
+    entries: workspace.tabs.includes("spaces") ? workspace.spaces.map(space => ({
+      id: `space-result-${space.id}`, title: space.name, detail: space.notes,
+      keywords: [space.name, space.notes, ...space.groups.map(group => group.title), ...space.tabs.flatMap(tab => [tab.title, tab.url])],
+      open: () => openSpaceDetail(space.id)
     })) : []
   }),
   markets: marketSearchSource,
@@ -1273,6 +1287,10 @@ function render() {
     todoController.update(workspace.todo ?? defaultTodo, appointmentEvents());
     return;
   }
+  if (!query && activePage === "spaces" && spacesController && spacesLocale === dateLocale) {
+    spacesController.update(workspace.spaces);
+    return;
+  }
   if (!query && activePage === "markets" && marketsController && marketsLocale === dateLocale) {
     marketsController.update({ state: workspace.markets, alertState: marketAlertState });
     return;
@@ -1297,6 +1315,7 @@ function render() {
   flashcardController = undefined;
   todoController?.dispose();
   todoController = undefined;
+  spacesController = undefined;
   marketsController?.dispose();
   marketsController = undefined;
   mailController?.dispose();
@@ -1426,6 +1445,8 @@ function render() {
       t, icon, locale: workspace.locale, dateLocale, settingsButton: settings,
       state: workspace.todo ?? defaultTodo, events: appointmentEvents(),
       change: updateTodo, complete: completeTodo, openSource: openTodoSource, edit: editTodo, editLabel: editTodoLabel,
+      spaceFor: id => workspace.spaces.find(space => space.id === id),
+      openSpace: space => restoreSpace(space, "window"),
       collapsed: collapsedTodo,
       onCollapse(section, closing) {
         const previous = collapsedTodo.has(section);
@@ -1450,6 +1471,18 @@ function render() {
       }
     });
     if (workspace.tabs.includes("calendar")) refreshCalendarEvents();
+  } else if (activePage === "spaces") {
+    section(t("spaces"));
+    const body = node("section", "spaces-module");
+    view.append(body);
+    spacesLocale = dateLocale;
+    spacesController = renderSpaces(body, {
+      node, button, glyph, t, locale: workspace.locale, dateLocale, spaces: workspace.spaces,
+      open: restoreSpace, capture: changeSpaceCapture, edit: editSpace, addLinks: editSpaceLinks, task: createSpaceTask,
+      remove: confirmSpaceDeletion, removeTab: (space, tab) => mutate("space-remove-tab", { id: space.id, tabId: tab.id }),
+      favorite: space => mutate("space-favorite", { id: space.id, favorite: !space.favorite }),
+      openMenu: (anchor, populate) => openWorkspaceMenu(anchor, undefined, t("spaces"), populate)
+    });
   } else if (activePage === "markets") {
     section(t("markets"));
     const body = node("div");
@@ -1537,6 +1570,114 @@ async function completeTodo(id, done) {
 function openTodoTask(id) {
   switchTo("todo", false);
   todoController?.openTask(id);
+}
+
+function openSpaceDetail(id) {
+  switchTo("spaces", false);
+  spacesController?.show(id);
+}
+
+async function sendSpaceAction(action, options) {
+  try {
+    const reply = await chrome.runtime.sendMessage({ type: spacesMessage, action, windowId: currentWindowId, ...options });
+    if (reply && !reply.error) return reply;
+    reportError(reply?.error ?? (action === "open" ? "spaceOpenFailed" : "spaceSaveFailed"));
+  } catch {
+    reportError(action === "open" ? "spaceOpenFailed" : "spaceSaveFailed");
+  }
+  return null;
+}
+
+async function restoreSpace(space, mode) {
+  const result = await sendSpaceAction("open", { id: space.id, mode, groups: space.groups.length > 0 });
+  if (!result) return;
+  if (result.missed || result.degraded) return reportError("spacePartialRestore");
+  const count = new Intl.NumberFormat(workspace.locale).format(result.count);
+  showToast(t(result.focused ? "spaceWindowFocused" : result.count ? "spaceOpenedCount" : "spaceAlreadyOpen", { count }));
+}
+
+async function captureSpace(mode, data) {
+  const result = await sendSpaceAction("capture", { mode, ...data });
+  if (!result) return false;
+  const numbers = new Intl.NumberFormat(workspace.locale);
+  showToast(t(result.skipped ? "spaceCapturedSome" : "spaceCaptured", {
+    count: numbers.format(result.count), skipped: numbers.format(result.skipped)
+  }));
+  if (mode === "create") {
+    await refreshWorkspace();
+    openSpaceDetail(result.id);
+  }
+  return true;
+}
+
+function changeSpaceCapture(mode, space) {
+  const data = { id: space.id, expectedUpdatedAt: space.updatedAt };
+  if (mode !== "replace") return captureSpace(mode, data);
+  if (editor.open) return;
+  const fields = openEditor(t("spaceReplaceTabs"), t("save"), () => captureSpace(mode, data));
+  fields.append(node("p", "", t("spaceReplaceConfirm", { name: space.name })));
+  editor.showModal();
+}
+
+function editSpace(space, mode) {
+  if (editor.open) return;
+  const newId = space ? undefined : crypto.randomUUID();
+  const fields = openEditor(t(mode === "capture" ? "spaceSaveWindow" : space ? "spaceEdit" : "spaceNew"), t("save"), async () => {
+    const data = { id: space?.id, newId, name: name.value.trim(), notes: notes.value, color: color.value };
+    if (!data.name) {
+      reportError("spaceNameRequired");
+      return false;
+    }
+    if (mode === "capture") return captureSpace("create", data);
+    const saved = await mutate("save-space", data);
+    if (saved && !space) {
+      await refreshWorkspace();
+      openSpaceDetail(newId);
+    }
+    return saved;
+  });
+  const name = field(fields, { label: t("spaceName"), value: space?.name, maxLength: spaceLimits.name, required: true });
+  const notes = field(fields, { label: t("calendarNotes"), value: space?.notes, maxLength: spaceLimits.notes, multiline: true });
+  notes.rows = 2;
+  const selection = node("label", "field");
+  const color = node("select", "translator-select");
+  for (const key of spaceColors) color.add(new Option(t(key), key));
+  color.value = space?.color ?? workspace.palette;
+  selection.append(node("span", "", t("spaceColor")), color);
+  fields.append(selection);
+  if (mode === "capture") fields.append(node("p", "field-hint", t("spaceCaptureHint")));
+  editor.showModal();
+  name.focus();
+}
+
+function editSpaceLinks(space) {
+  if (editor.open) return;
+  const fields = openEditor(t("spaceAddLinks"), t("save"), () => mutate("space-add-links", { id: space.id, links: links.value }));
+  const links = field(fields, { label: t("spaceLinksField"), required: true, multiline: true });
+  links.placeholder = "https://";
+  links.dir = "ltr";
+  editor.showModal();
+  links.focus();
+}
+
+function createSpaceTask(space) {
+  if (editor.open) return;
+  const fields = openEditor(t("spaceCreateTask"), t("save"), async () => {
+    const saved = await mutate("save-task", { title: title.value, spaceId: space.id, showModule: true });
+    if (saved) showToast(t("spaceTaskAdded"));
+    return saved;
+  });
+  const title = field(fields, { label: t("todoTitle"), value: space.name, required: true, maxLength: taskLimits.title });
+  editor.showModal();
+  title.select();
+}
+
+function confirmSpaceDeletion(space) {
+  if (editor.open) return;
+  const fields = openEditor(t("spaceDelete"), t("remove"), () => mutate("remove-space", { id: space.id }));
+  fields.append(node("p", "", t("spaceDeleteConfirm", { name: space.name })));
+  editor.showModal();
+  editor.querySelector(".dialog-footer .secondary-button").focus();
 }
 
 async function focusQuickTask() {
@@ -1649,6 +1790,7 @@ function editTodo(task, mode) {
     const keepLegacy = reminder.value === "legacy";
     return updateTodo("save-task", {
       id: task.id, title: title.value, notes: notes.value, labelIds: [...labelIds],
+      ...(spaceSelect ? { spaceId: spaceSelect.value } : {}),
       dueDate: due.value, dueTime: dueTime.value, planDate, planTime: start, planEnd: end,
       planEndNextDay: Boolean(start && end && end < start),
       reminderMinutes: !reminder.disabled && !keepLegacy && reminder.value !== "" ? Number(reminder.value) : null,
@@ -1658,6 +1800,16 @@ function editTodo(task, mode) {
   });
   const title = field(fields, { label: t("todoTitle"), value: task.title, required: true, maxLength: taskLimits.title });
   const notes = field(fields, { label: t("calendarNotes"), value: task.notes, maxLength: taskLimits.notes, multiline: true });
+  let spaceSelect;
+  if (workspace.spaces.length) {
+    const selection = node("label", "field");
+    spaceSelect = node("select", "translator-select");
+    spaceSelect.append(new Option(t("spaceNoLink"), ""));
+    for (const space of workspace.spaces) spaceSelect.add(new Option(space.name, space.id));
+    spaceSelect.value = workspace.spaces.some(space => space.id === task.spaceId) ? task.spaceId : "";
+    selection.append(node("span", "", t("spaceTaskLink")), spaceSelect);
+    fields.append(selection);
+  }
 
   if (workspace.todo?.labels?.length) {
     const labels = node("fieldset", "choice-group todo-assign-labels");

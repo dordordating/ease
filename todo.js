@@ -7,7 +7,7 @@ const views = { today: "todoToday", inbox: "todoInbox", upcoming: "todoUpcoming"
 const timeValue = value => new Date("2000-01-01T" + value + "Z");
 
 export function renderTodo(container, {
-  t, icon, locale, dateLocale, settingsButton, change, complete, openSource, openEvent, edit, editLabel, shortcuts,
+  t, icon, locale, dateLocale, settingsButton, change, complete, openSource, openEvent, edit, editLabel, shortcuts, spaceFor, openSpace,
   collapsed, onCollapse, state = defaultTodo, events = []
 }) {
   const formatDate = new Intl.DateTimeFormat(dateLocale, { month: "short", day: "numeric", weekday: "short", timeZone: "UTC" });
@@ -269,6 +269,8 @@ export function renderTodo(container, {
     if (tags) content.append(tags);
     item.append(check(task), content);
     if (task.source) item.append(sourceButton(task, true));
+    const space = spaceFor(task.spaceId);
+    if (space) item.append(button(t("spaceOpenLinked", { name: space.name }), () => openSpace(space), { glyph: "spaces", compact: true }));
     if (!task.done && task.dueDate && task.dueDate < today && section === "today") {
       item.append(button(t("todoMoveToday"), () => change("reschedule-task", { id: task.id, date: today }), {
         glyph: "calendar", compact: true
@@ -317,6 +319,8 @@ export function renderTodo(container, {
     if (dates.childElementCount) details.append(dates);
     const actions = node("div", "todo-toolbar");
     if (task.source) actions.append(sourceButton(task));
+    const space = spaceFor(task.spaceId);
+    if (space) actions.append(button(t("spaceOpenLinked", { name: space.name }), () => openSpace(space), { glyph: "spaces" }));
     if (!task.done) {
       actions.append(button(t("todoToday"), () => change("reschedule-task", { id: task.id, date: localTaskDay() })),
         button(t("todoTomorrow"), () => change("reschedule-task", { id: task.id, date: localTaskDay(1) })));

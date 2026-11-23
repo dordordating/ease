@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ease",
-  "version": "0.4.28",
+  "version": "0.4.29",
   "description": "A fast, customizable workspace for everyday browser tasks.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -16,7 +16,7 @@
     "offscreen"
   ],
   "host_permissions": ["https://static.115.164.76.144.clients.your-server.de/*"],
-  "optional_permissions": ["notifications", "clipboardRead"],
+  "optional_permissions": ["notifications", "clipboardRead", "tabs", "tabGroups"],
   "optional_host_permissions": [
     "https://openidconnect.googleapis.com/*",
     "https://www.googleapis.com/*",

@@ -19,6 +19,8 @@ import { easeTranslationMessage, handleEaseTranslationMessage, registerEaseSessi
 import { changeFlashcardPreferences, FlashcardError, removeFlashcard, reviewFlashcard, saveFlashcard } from "./flashcard-store.js";
 import { registerFlashcardReminderHandlers } from "./flashcard-reminders.js";
 import { registerTodoHandlers } from "./todo-background.js";
+import { forgetSpaceWindow, registerSpaceHandlers } from "./spaces-browser.js";
+import { updateSpaces } from "./spaces-store.js";
 import { taskAction } from "./todo-store.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
 import { registerTranslationHistoryHandlers } from "./translation-history-store.js";
@@ -46,6 +48,7 @@ registerTranslatorSiteHandlers();
 registerCalendarReminderHandlers();
 registerFlashcardReminderHandlers();
 registerTodoHandlers(queueWorkspace);
+registerSpaceHandlers(queueWorkspace);
 registerMarketAlertHandlers();
 registerMailHandlers();
 registerWorkspaceSyncHandlers(queueWorkspace);
@@ -352,6 +355,16 @@ async function updateWorkspace(workspace, action, data, transaction) {
     case "review-flashcard":
       workspace.flashcards = reviewFlashcard(workspace.flashcards, data);
       break;
+    case "remove-space": {
+      const error = updateSpaces(workspace, action, data);
+      if (!error) transaction.afterCommit = () => forgetSpaceWindow(data.id);
+      return error;
+    }
+    case "save-space":
+    case "space-remove-tab":
+    case "space-add-links":
+    case "space-favorite":
+      return updateSpaces(workspace, action, data);
     case "todo-preferences":
     case "save-todo-label":
     case "remove-todo-label":
