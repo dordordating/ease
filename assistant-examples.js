@@ -1,9 +1,10 @@
 import { assistantExamples } from "./home-locales.js";
 
+const delay = { typing: 64, read: 4200, erase: 24, pause: 310 };
+
 export function renderAssistantExamples({ node, button, t, locale, onSelect }) {
   const catalog = assistantExamples(locale);
   const graphemes = new Intl.Segmenter(locale, { granularity: "grapheme" });
-  const motion = matchMedia("(prefers-reduced-motion: reduce)");
   const root = node("div", "assistant-examples");
   const example = button("", "assistant-example", { iconOnly: true, onClick: () => onSelect(current.prompt) });
   const fit = node("span", "assistant-example-fit");
@@ -22,6 +23,7 @@ export function renderAssistantExamples({ node, button, t, locale, onSelect }) {
   let phase = "typing";
   let timer;
   let visible = false;
+  let animated = true;
 
   function draw() {
     text.textContent = characters.slice(0, position).join("");
@@ -40,15 +42,13 @@ export function renderAssistantExamples({ node, button, t, locale, onSelect }) {
   function schedule() {
     clearTimeout(timer);
     const playing = visible && !document.hidden;
-    root.dataset.typing = String(playing && !motion.matches);
+    root.dataset.typing = String(playing && animated);
     if (!playing) return;
-    if (motion.matches) {
+    if (!animated) {
       position = characters.length;
       phase = "read";
       draw();
-      if (!example.matches(":focus-visible")) timer = setTimeout(showNext, 6500);
     } else if (!example.matches(":focus-visible") || phase === "typing") {
-      const delay = { typing: 64, read: 4200, erase: 24, pause: 310 };
       timer = setTimeout(advance, delay[phase]);
     }
   }
@@ -79,10 +79,20 @@ export function renderAssistantExamples({ node, button, t, locale, onSelect }) {
 
   return {
     root,
+    setAnimated(enabled) {
+      if (enabled === animated) return;
+      animated = enabled;
+      if (!current) return;
+      if (animated) {
+        position = 0;
+        phase = "typing";
+        draw();
+      }
+      schedule();
+    },
     show() {
       visible = true;
       document.addEventListener("visibilitychange", schedule);
-      motion.addEventListener("change", schedule);
       if (current) schedule();
       else showNext();
     },
@@ -91,7 +101,6 @@ export function renderAssistantExamples({ node, button, t, locale, onSelect }) {
       clearTimeout(timer);
       root.dataset.typing = "false";
       document.removeEventListener("visibilitychange", schedule);
-      motion.removeEventListener("change", schedule);
     }
   };
 }

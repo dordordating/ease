@@ -337,8 +337,9 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
   content: "";
 }
 
-.assistant-example-text::after {
-  animation: assistant-caret .95s step-end infinite;
+.assistant-examples[data-typing="true"] .assistant-example-text::after {
+  /* The Home animation switch controls the caret even in reduced-motion mode. */
+  animation: assistant-caret .95s step-end infinite !important;
 }
 
 @keyframes assistant-caret {
@@ -432,7 +433,7 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .assistant-shimmer span, .assistant-example-text::after, .assistant-form[data-running="true"] { animation: none; }
+  .assistant-shimmer span, .assistant-form[data-running="true"] { animation: none; }
   .assistant-form { transition: none; }
 }
 
@@ -850,6 +851,12 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
 .home-widget-toggle > span:not(.home-widget-icon) {
   font-size: 11px;
   font-weight: 650;
+}
+
+.home-example-motion {
+  padding: 5px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 8px;
 }
 
 .home-widget-switch {

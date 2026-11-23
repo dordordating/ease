@@ -443,6 +443,7 @@ export function renderHomeAssistant({
       input.focus();
     },
     addSource: source => addSources([source]),
+    updateExampleAnimation: enabled => examples.setAnimated(enabled),
     updateLabels(next) { taskLabels = next; },
     updateLanguages(next) { languages = next; },
     updateAccount(next) {

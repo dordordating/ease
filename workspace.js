@@ -283,8 +283,8 @@ function updateCalendarTab(button, today = new Date()) {
   if (kind !== "normal") mark.append(node("span", "calendar-date-accent"));
   button.replaceChildren(mark);
   updateModuleBadge(button, eventCount, countFormat);
-  button.setAttribute("aria-label", label.join(" · "));
-  button.title = [label.join(" · "), button.draggable ? t("moduleOrderHint") : ""].filter(Boolean).join("\n");
+  button.title = label.join(" · ");
+  button.setAttribute("aria-label", button.title);
 }
 
 function refreshCalendarDay() {

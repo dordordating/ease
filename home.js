@@ -64,6 +64,13 @@ export function renderHome(options) {
   }
   startup.addEventListener("change", event => change({ start: event.target.value }));
   launch.append(startup);
+  const motionRow = node("label", "home-widget-toggle home-example-motion");
+  const motion = node("input", "home-widget-switch");
+  motion.type = "checkbox";
+  motion.id = "home-example-motion";
+  motion.setAttribute("role", "switch");
+  motion.addEventListener("change", () => change({ animateExamples: motion.checked }));
+  motionRow.append(glyph("sparkles", "home-widget-icon"), node("span", "", t("homeAnimateExamples")), motion);
   const roster = node("div", "home-widget-roster");
   const saving = node("p", "home-layout-status", t("homeSaving"));
   saving.setAttribute("role", "status");
@@ -72,7 +79,7 @@ export function renderHome(options) {
   widgetTitle.id = "home-widgets-title";
   roster.setAttribute("role", "list");
   roster.setAttribute("aria-labelledby", widgetTitle.id);
-  settings.append(launch, widgetTitle, roster, saving);
+  settings.append(launch, motionRow, widgetTitle, roster, saving);
   settings.hidden = true;
   layout.setAttribute("aria-expanded", "false");
   history.root.hidden = true;
@@ -149,6 +156,7 @@ export function renderHome(options) {
   function renderSettings() {
     const focused = settings.contains(document.activeElement) ? document.activeElement.id : null;
     startup.querySelector(`[value="${prefs.start}"]`).checked = true;
+    motion.checked = prefs.animateExamples !== false;
     roster.replaceChildren(...prefs.order.map((id, index) => {
       const { label, icon } = widgetDetails[id];
       const row = node("div", "home-widget-option");
@@ -343,6 +351,7 @@ export function renderHome(options) {
       const key = JSON.stringify(prefs);
       if (prefsKey !== key) {
         prefsKey = key;
+        assistant.updateExampleAnimation(prefs.animateExamples !== false);
         if (!settings.hidden) renderSettings();
       }
       this.updateAccount(next.accountId);

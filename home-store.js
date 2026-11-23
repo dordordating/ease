@@ -12,12 +12,17 @@ export function normalizeHome(value) {
   const picks = list => Array.isArray(list) ? list.filter(id => homeWidgets.includes(id)) : [];
   const order = [...new Set([...picks(value?.order), ...homeWidgets])];
   const enabled = Array.isArray(value?.widgets) ? picks(value.widgets) : defaultHome.widgets;
-  return { start: value?.start === "home" ? "home" : "last", order, widgets: order.filter(id => enabled.includes(id)) };
+  return {
+    start: value?.start === "home" ? "home" : "last", order, widgets: order.filter(id => enabled.includes(id)),
+    ...(value?.animateExamples === false && { animateExamples: false })
+  };
 }
 
 export function changeHome(home, patch) {
   const next = normalizeHome(home);
   if (["home", "last"].includes(patch.start)) next.start = patch.start;
+  if (patch.animateExamples === false) next.animateExamples = false;
+  else if (patch.animateExamples === true) delete next.animateExamples;
   if (homeWidgets.includes(patch.id) && typeof patch.enabled === "boolean") {
     const enabled = new Set(next.widgets);
     if (patch.enabled) enabled.add(patch.id);
