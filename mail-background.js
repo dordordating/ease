@@ -286,7 +286,7 @@ async function loadMore(id, folder) {
   return snapshot();
 }
 
-async function accountAction(id, action, data, folder) {
+async function accountAction(id, action, data, folder, taskId) {
   const record = await find(id);
   if (!record) throw new MailError("mailReconnect");
   if (action === "send" && !mailCapabilities(record).send) {
@@ -303,7 +303,18 @@ async function accountAction(id, action, data, folder) {
   const key = folder === "sent" ? "sentMessages" : "messages";
   const older = folder === "sent" ? "sentOlder" : "inboxOlder";
   const messageId = action === "attachment" ? data?.id : data;
-  const message = mergeMessages(account[key], account[older]).find(item => item.id === messageId);
+  let message = mergeMessages(account[key], account[older]).find(item => item.id === messageId);
+  if (taskId) {
+    const { todo } = await readWorkspace();
+    const source = todo?.items.find(task => task.id === taskId)?.source;
+    if (source?.kind !== "mail" || source.accountId !== id || source.messageId !== messageId || source.folder !== folder) {
+      throw new MailError("mailReadFailed");
+    }
+    if (account.provider === "imap" && (message?.uidValidity || "") !== source.uidValidity) message = undefined;
+    if (!message && (account.provider !== "imap" || source.uidValidity)) {
+      message = { id: messageId, senderAddress: source.senderAddress, uidValidity: source.uidValidity || undefined };
+    }
+  }
   if (!message || (folder === "inbox" && blockedMailSender(message, account.blockedSenders))) throw new MailError("mailReadFailed");
   if (action === "attachment") return downloadMailAttachment(account, message, data.attachment, account.accessToken, folder);
   if (action === "trash") {
@@ -410,7 +421,7 @@ export function registerMailHandlers() {
     } else if (["block-sender", "unblock-sender"].includes(message.action) && typeof message.id === "string" && message.id.length <= 540) {
       result = queue(() => updateBlockedSenders(message.id, message));
     } else if (["message", "send", "attachment", "trash"].includes(message.action) && typeof message.id === "string" && message.id.length <= 540) {
-      result = queue(() => accountAction(message.id, message.action, message.data, message.folder === "sent" ? "sent" : "inbox"));
+      result = queue(() => accountAction(message.id, message.action, message.data, message.folder === "sent" ? "sent" : "inbox", message.taskId));
     } else if (message.action === "disconnect" && typeof message.id === "string" && message.id.length <= 540) {
       result = queue(async () => {
         await remove(message.id);

@@ -1,8 +1,12 @@
 import { renderCalendar } from "./calendar.js";
 import { renderTranslator } from "./translator.js";
 import { renderFlashcards } from "./flashcards.js";
+import { renderTodo } from "./todo.js";
+import { defaultTodo, localTaskDay, taskCalendarEntries, taskLimits } from "./todo-store.js";
+import { quickTaskKey, takeQuickTask } from "./todo-background.js";
 import { renderMarkets } from "./markets.js";
 import { inboxMessages, renderMail } from "./mail.js";
+import { mailMessageLink, senderAddress } from "./mail-api.js";
 import { mailMessage, mailUpdateKey } from "./mail-background.js";
 import { marketAlertStateKey, readMarketAlertState } from "./markets-alerts.js";
 import { marketLabel, workspaceMarketInstruments } from "./markets-store.js";
@@ -80,6 +84,8 @@ let translatorHistoryController;
 let translationHistory = { enabled: false, entries: [] };
 let flashcardController;
 let flashcardLocale;
+let todoController;
+let todoLocale;
 let marketsController;
 let marketsLocale;
 let marketAlertState = {};
@@ -117,8 +123,10 @@ const changeWorkspaceZoom = (zoom) => mutate("preferences", { zoom });
 const workspaceZoom = initWorkspaceZoom({ app, zoom: workspace.zoom, onZoom: changeWorkspaceZoom });
 
 function calendarEvents() {
-  return [...workspace.events, ...providerEvents];
+  return [...workspace.events, ...providerEvents, ...(workspace.tabs.includes("todo") ? taskCalendarEntries(workspace.todo?.items ?? []) : [])];
 }
+
+const appointmentEvents = () => [...workspace.events, ...providerEvents];
 
 async function refreshCalendarEvents() {
   const version = ++refreshVersion;
@@ -126,6 +134,7 @@ async function refreshCalendarEvents() {
   if (version !== refreshVersion) return;
   providerEvents = events;
   calendarController?.update({ events: calendarEvents() });
+  todoController?.update(workspace.todo ?? defaultTodo, appointmentEvents());
   if (query) render();
   refreshCalendarDay();
 }
@@ -267,6 +276,7 @@ function refreshCalendarDay() {
   const tab = document.getElementById("tab-calendar");
   const now = new Date();
   if (tab) updateCalendarTab(tab, now);
+  todoController?.update(workspace.todo ?? defaultTodo, appointmentEvents());
   const nextDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
   clearTimeout(calendarDayTimer);
   calendarDayTimer = setTimeout(refreshCalendarDay, nextDay.getTime() - now.getTime());
@@ -967,7 +977,8 @@ function displayPreference(key, label, values, symbols = {}) {
 async function readWorkspaceShortcuts() {
   const values = [
     ["_execute_action", document.getElementById("activation-shortcut")],
-    ["translate-selection", document.getElementById("translation-shortcut")]
+    ["translate-selection", document.getElementById("translation-shortcut")],
+    ["quick-task", document.getElementById("todo-shortcut")]
   ].filter(([, element]) => element);
   if (!values.length) return;
   let commands = [];
@@ -1048,7 +1059,7 @@ function calendarSearchSource() {
     dateStyle: "medium",
     timeZone: "UTC"
   });
-  const events = calendarEvents().sort((left, right) => left.date.localeCompare(right.date)
+  const events = appointmentEvents().sort((left, right) => left.date.localeCompare(right.date)
     || (left.start || left.end || "").localeCompare(right.start || right.end || ""));
   return {
     label: "calendarEvents",
@@ -1077,6 +1088,14 @@ const moduleSearchSources = {
     render: (entries) => snippetList(t("snippets"), entries.map(({ snippet }) => snippet), true)
   }),
   calendar: calendarSearchSource,
+  todo: () => ({
+    label: "todo",
+    entries: workspace.tabs.includes("todo") ? (workspace.todo?.items ?? []).map(task => ({
+      id: `task-result-${task.id}`, title: task.title, detail: task.notes || (task.done ? t("todoCompleted") : undefined),
+      keywords: [task.title, task.notes, task.dueDate, task.planDate],
+      open: () => openTodoTask(task.id)
+    })) : []
+  }),
   markets: marketSearchSource,
   mail: () => ({
     label: "mail",
@@ -1240,6 +1259,10 @@ function render() {
     flashcardController.update({ state: workspace.flashcards });
     return;
   }
+  if (!query && activePage === "todo" && todoController && todoLocale === dateLocale) {
+    todoController.update(workspace.todo ?? defaultTodo, appointmentEvents());
+    return;
+  }
   if (!query && activePage === "markets" && marketsController && marketsLocale === dateLocale) {
     marketsController.update({ state: workspace.markets, alertState: marketAlertState });
     return;
@@ -1262,6 +1285,8 @@ function render() {
   translatorHistoryController = undefined;
   flashcardController?.dispose();
   flashcardController = undefined;
+  todoController?.dispose();
+  todoController = undefined;
   marketsController?.dispose();
   marketsController = undefined;
   mailController?.dispose();
@@ -1304,6 +1329,8 @@ function render() {
       onHoliday: (date, enabled) => mutate("calendar-holiday", { date, enabled }),
       onSaveEvent: (event) => mutate("save-event", event),
       onDeleteEvent: (id) => mutate("delete-event", { id }),
+      onOpenTask: openTodoTask,
+      onCompleteTask: completeTodo,
       renderConnections: (container) => {
         calendarConnectionsRefresh = renderCalendarConnections(container, {
           locale: workspace.locale, dateLocale: workspaceDateLocale(), t, reportError, eventsChanged: refreshCalendarEvents, inToolbarPopup
@@ -1378,6 +1405,29 @@ function render() {
       onDelete: confirmFlashcardDeletion,
       onReview: (review) => mutate("review-flashcard", review)
     });
+  } else if (activePage === "todo") {
+    const settings = button(t("todoSettings"), "icon-button", { symbol: "todo-settings", iconOnly: true });
+    settings.id = "todo-settings-button";
+    section(t("todo"), undefined, settings);
+    const body = node("section", "todo-module");
+    view.append(body);
+    todoLocale = dateLocale;
+    todoController = renderTodo(body, {
+      t, icon, locale: workspace.locale, dateLocale, settingsButton: settings,
+      state: workspace.todo ?? defaultTodo, events: appointmentEvents(),
+      change: updateTodo, complete: completeTodo, openSource: openTodoSource, edit: editTodo,
+      openEvent(id) {
+        switchTo("calendar", false);
+        calendarController?.openEvent(id);
+      },
+      shortcuts() {
+        const value = node("kbd", "keycap", t("shortcutNotSet"));
+        value.id = "todo-shortcut";
+        queueMicrotask(readWorkspaceShortcuts);
+        return [value, button(t("manageActivationShortcut"), "secondary-button", { symbol: "keyboard", onClick: openChromeShortcuts })];
+      }
+    });
+    if (workspace.tabs.includes("calendar")) refreshCalendarEvents();
   } else if (activePage === "markets") {
     section(t("markets"));
     const body = node("div");
@@ -1403,7 +1453,7 @@ function render() {
     mailLocale = dateLocale;
     mailController = renderMail(view, {
       dateLocale, t, icon, settingsButton: mailSettings, composeButton: composeMail, accounts: mailAccounts, send: sendMail,
-      followUp: followUpMail, requestInWorker: inToolbarPopup,
+      followUp: followUpMail, followUpTask: followUpTodo, requestInWorker: inToolbarPopup,
       openMenu: (anchor, populate) => openWorkspaceMenu(anchor, undefined, t("mailActions"), populate),
       confirmDelete: (subject, remove) => {
         if (editor.open) return;
@@ -1439,6 +1489,127 @@ async function followUpMail(message) {
   if (!workspace.tabs.includes("calendar") && !await mutate("toggle-module", { id: "calendar", enabled: true })) return;
   switchTo("calendar", false);
   calendarController?.openFollowUp({ title: message.subject || t("mailNoSubject"), url: message.url });
+}
+
+async function updateTodo(action, data) {
+  const needsNotifications = (action === "todo-preferences" && data.dailyTime)
+    || (action === "save-task" && data.reminderTime);
+  if (needsNotifications && !inToolbarPopup) {
+    const allowed = await chrome.permissions.request({ permissions: ["notifications"] }).catch(() => false);
+    if (!allowed) {
+      reportError("todoNotificationDenied");
+      return false;
+    }
+  }
+  return mutate(action, { ...data, requestPermission: Boolean(needsNotifications && inToolbarPopup) });
+}
+
+async function completeTodo(id, done) {
+  if (!await mutate("complete-task", { id, done })) return;
+  showToast(t(done ? "todoMarkedDone" : "todoReopened"), () => {
+    toast.hidden = true;
+    mutate("complete-task", { id, done: !done });
+  });
+}
+
+function openTodoTask(id) {
+  switchTo("todo", false);
+  todoController?.openTask(id);
+}
+
+async function focusQuickTask() {
+  if (!workspace.tabs.includes("todo")) {
+    if (!await mutate("toggle-module", { id: "todo", enabled: true })) return;
+    await refreshWorkspace();
+  }
+  switchTo("todo", false);
+  todoController?.quickAdd();
+}
+
+async function followUpTodo(message, offset) {
+  const saved = await mutate("save-task", {
+    title: message.subject || t("mailNoSubject"), dueDate: localTaskDay(offset), showModule: true,
+    source: {
+      kind: "mail", accountId: message.accountId, messageId: message.id, folder: message.folder,
+      uidValidity: message.uidValidity, senderAddress: senderAddress(message), url: message.url
+    }
+  });
+  if (saved) showToast(t(offset ? "todoAddedTomorrow" : "todoAddedToday"));
+}
+
+async function openTodoSource(task) {
+  const source = task.source;
+  if (source.kind === "mail") {
+    if (!workspace.tabs.includes("mail")) {
+      if (!await mutate("toggle-module", { id: "mail", enabled: true })) return;
+      await refreshWorkspace();
+    }
+    await refreshMailSnapshot();
+    const account = mailAccounts.find(item => item.id === source.accountId);
+    if (account) {
+      switchTo("mail", false);
+      const cached = inboxMessages([account], source.folder).find(item => item.id === source.messageId
+        && (item.uidValidity || "") === source.uidValidity);
+      mailController?.showMessage({
+        ...(cached ?? {
+          id: source.messageId, accountId: account.id, provider: account.provider, email: account.email, folder: source.folder,
+          subject: task.title, sender: source.senderAddress, unread: false, url: mailMessageLink(account.provider, source.url)
+        }), taskId: task.id
+      });
+      return;
+    }
+    const link = mailMessageLink(null, source.url);
+    if (link) await chrome.tabs.create({ url: link }).catch(() => reportError("mailReadFailed"));
+    else reportError("todoMailUnavailable");
+  } else {
+    await chrome.tabs.create({ url: source.url }).catch(() => reportError("todoSourceUnavailable"));
+  }
+}
+
+function editTodo(task, mode) {
+  if (editor.open) return;
+  if (mode === "remove") {
+    const fields = openEditor(t("remove"), t("remove"), () => mutate("remove-task", { id: task.id }));
+    fields.append(node("p", "", t("todoConfirmDelete", { title: task.title })));
+    editor.showModal();
+    return;
+  }
+  const inputs = {};
+  const fields = openEditor(t("todoEdit"), t("save"), () => updateTodo("save-task", {
+    id: task.id, ...Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value]))
+  }));
+  inputs.title = field(fields, { label: t("todoTitle"), value: task.title, required: true, maxLength: taskLimits.title });
+  inputs.notes = field(fields, { label: t("calendarNotes"), value: task.notes, maxLength: taskLimits.notes, multiline: true });
+  const dateFormat = new Intl.DateTimeFormat(workspaceDateLocale(), { dateStyle: "medium", timeZone: "UTC" });
+  function addDateTimeGroup(label, keys) {
+    const group = node("details", "snippet-advanced todo-edit-group");
+    group.open = keys.some(([key]) => task[key]) || label === "todoDue";
+    group.append(node("summary", "", t(label)));
+    const row = node("div", "todo-edit-fields");
+    group.append(row);
+    for (const [key, type, label] of keys) {
+      const input = field(row, { label: t(label) });
+      input.type = type;
+      input.value = task[key] || "";
+      inputs[key] = input;
+      if (type === "date") {
+        const selected = node("small", "todo-edit-date");
+        const refresh = () => {
+          selected.hidden = !input.value;
+          selected.textContent = input.value ? dateFormat.format(new Date(input.value + "T00:00:00Z")) : "";
+        };
+        input.after(selected);
+        input.addEventListener("input", refresh);
+        refresh();
+      }
+    }
+    fields.append(group);
+  }
+  addDateTimeGroup("todoDue", [["dueDate", "date", "calendarEventDate"], ["dueTime", "time", "todoTime"]]);
+  addDateTimeGroup("todoPlan", [["planDate", "date", "calendarEventDate"], ["planTime", "time", "calendarStarts"], ["planEnd", "time", "calendarEnds"]]);
+  addDateTimeGroup("todoReminder", [["reminderDate", "date", "calendarEventDate"], ["reminderTime", "time", "todoTime"]]);
+  editor.showModal();
+  inputs.title.focus();
 }
 
 async function createMarketAlert(data) {
@@ -2342,6 +2513,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "session" && changes[mailUpdateKey]) refreshMailSnapshot();
   if (area === "session" && changes[vaultSessionStorageKey]) refreshWorkspace();
   if (area === "session" && changes[translatorSelectionKey]?.newValue) receiveTranslationSelection();
+  if (area === "session" && !inPanel && workspaceInitialized && !editor.open && document.hasFocus()
+    && Object.keys(changes).some(key => key.startsWith(quickTaskKey) && changes[key].newValue)) {
+    takeQuickTask().then(received => { if (received) focusQuickTask(); });
+  }
   if (area !== "local") return;
   if (changes[clipboardHistoryKey]) refreshClipboardHistory();
   if (changes[marketAlertStateKey]) {
@@ -2390,6 +2565,11 @@ sendWorkspaceSync("wake").catch(() => {});
 if (initialTranslationSelection !== null) {
   rememberWorkspaceTab("translate");
   showTranslationSelection(initialTranslationSelection);
+} else if (workspaceRoute.get("quickTask") === "1" || (!inPanel && await takeQuickTask())) {
+  if (workspaceRoute.has("quickTask")) history.replaceState(null, "", "workspace.html?surface=panel");
+  await focusQuickTask();
+} else if (workspaceRoute.get("open") === "todo" && savedTabAvailable("todo")) {
+  switchTo("todo", false);
 } else if (workspaceRoute.get("open") === "account") {
   switchTo("settings", false);
   document.getElementById("ease-account")?.scrollIntoView({ block: "nearest" });

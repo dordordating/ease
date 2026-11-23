@@ -1,5 +1,6 @@
 import { defaultFlashcards } from "./flashcard-store.js";
 import { defaultMarkets } from "./markets-store.js";
+import { defaultTodo } from "./todo-store.js";
 
 export const storageKey = "easeWorkspace";
 
@@ -10,6 +11,7 @@ export const modules = [
   { id: "mail", icon: "mail", color: "#ffae85", released: true },
   { id: "translate", icon: "translate", color: "#69d5fa", released: true },
   { id: "flashcards", icon: "flashcards", color: "#82b9ac", released: true },
+  { id: "todo", icon: "todo", color: "#a0c98b", released: true },
   { id: "assistant", icon: "sparkles", color: "#eca6e1" }
 ];
 
@@ -84,6 +86,7 @@ export const defaultWorkspace = {
   translator: defaultTranslator,
   flashcards: defaultFlashcards,
   markets: defaultMarkets,
+  todo: defaultTodo,
   events: [],
   holidays: []
 };

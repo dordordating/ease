@@ -18,6 +18,8 @@ import { translationLanguagePreferences } from "./translator-engine.js";
 import { easeTranslationMessage, handleEaseTranslationMessage, registerEaseSessionHandlers } from "./ease-api.js";
 import { changeFlashcardPreferences, FlashcardError, removeFlashcard, reviewFlashcard, saveFlashcard } from "./flashcard-store.js";
 import { registerFlashcardReminderHandlers } from "./flashcard-reminders.js";
+import { registerTodoHandlers } from "./todo-background.js";
+import { taskAction } from "./todo-store.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
 import { registerTranslationHistoryHandlers } from "./translation-history-store.js";
 import { registerWorkspaceSyncHandlers } from "./workspace-sync.js";
@@ -43,6 +45,7 @@ registerClipboardHistoryHandlers();
 registerTranslatorSiteHandlers();
 registerCalendarReminderHandlers();
 registerFlashcardReminderHandlers();
+registerTodoHandlers(queueWorkspace);
 registerMarketAlertHandlers();
 registerMailHandlers();
 registerWorkspaceSyncHandlers(queueWorkspace);
@@ -349,6 +352,13 @@ async function updateWorkspace(workspace, action, data, transaction) {
     case "review-flashcard":
       workspace.flashcards = reviewFlashcard(workspace.flashcards, data);
       break;
+    case "todo-preferences":
+    case "save-task":
+    case "remove-task":
+    case "complete-task":
+    case "reschedule-task":
+    case "focus-task":
+      return taskAction(workspace, action, data);
     case "calendar-holiday":
       setCalendarHoliday(workspace, data);
       break;
@@ -523,11 +533,14 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     && message.data?.requestPermission === true;
   const requestFlashcardNotifications = message.type === "ease-workspace-update" && message.action === "flashcard-preferences"
     && message.data?.reviewReminder?.enabled === true;
+  const requestTodoNotifications = message.type === "ease-workspace-update"
+    && (message.action === "todo-preferences" || message.action === "save-task") && message.data?.requestPermission === true;
   // Start permission UI on the first message hop so a toolbar popup can close without losing the action.
   let permission = null;
   if (requestInline) permission = requestInlineTranslatorPermission();
-  if (requestMarketNotifications || requestFlashcardNotifications) {
-    const denied = requestFlashcardNotifications ? "flashcardsReminderDenied" : "marketsNotificationDenied";
+  if (requestMarketNotifications || requestFlashcardNotifications || requestTodoNotifications) {
+    const denied = requestTodoNotifications ? "todoNotificationDenied"
+      : requestFlashcardNotifications ? "flashcardsReminderDenied" : "marketsNotificationDenied";
     permission = chrome.permissions.request({ permissions: ["notifications"] })
       .then((granted) => granted ? null : denied, () => denied);
   }

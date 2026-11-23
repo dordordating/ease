@@ -15,7 +15,7 @@ function element(tag, className, text) {
   return item;
 }
 
-export function renderMail(container, { dateLocale, t, icon, settingsButton, composeButton, accounts, send, followUp,
+export function renderMail(container, { dateLocale, t, icon, settingsButton, composeButton, accounts, send, followUp, followUpTask,
   requestInWorker, openMenu, confirmDelete }) {
   const dates = new Intl.DateTimeFormat(dateLocale, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   const numbers = new Intl.NumberFormat(dateLocale);
@@ -287,7 +287,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     error = undefined;
     render();
     try {
-      const answer = await send("message", { id: message.accountId, data: message.id, folder });
+      const answer = await send("message", { id: message.accountId, data: message.id, folder, taskId: message.taskId });
       if (answer?.ok) choice.result = answer.value;
       else choice.error = answer?.error ?? "mailReadFailed";
     } catch { choice.error = "mailReadFailed"; }
@@ -365,6 +365,10 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
         const url = imapPresets[account?.imap?.preset]?.web;
         if (url) action("mailOpenWebmail", "link", () => chrome.tabs.create({ url }).catch(() => {}));
       }
+      if (followUpTask) {
+        action("todoFollowTomorrow", "todo", () => followUpTask(message, 1));
+        action("todoFollowToday", "todo", () => followUpTask(message, 0));
+      }
       action("mailFollowUp", "calendar", () => followUp(message));
       if (message.folder === "inbox" && senderAddress(message)) {
         const block = mode => act("block-sender", { id: message.accountId, data: message.id, mode });
@@ -386,7 +390,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
       if (!await act("upgrade", { id: account.id, provider: account.provider, send: account.capabilities.send, mark: true })) return;
     }
     confirmDelete(message.subject || t("mailNoSubject"), async () => {
-      const success = await act("trash", { id: message.accountId, data: message.id, folder: message.folder });
+      const success = await act("trash", { id: message.accountId, data: message.id, folder: message.folder, taskId: message.taskId });
       if (success) {
         if (opened?.message === message) opened = undefined;
         error = "mailDeleted";
@@ -405,7 +409,8 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   }
 
   async function fetchAttachment(message, item) {
-    const answer = await send("attachment", { id: message.accountId, folder: message.folder, data: { id: message.id, attachment: item.id } });
+    const answer = await send("attachment", { id: message.accountId, folder: message.folder, taskId: message.taskId,
+      data: { id: message.id, attachment: item.id } });
     if (!answer?.ok) throw Object.assign(new Error("Attachment request failed"), { code: answer?.error ?? "mailAttachmentFailed" });
     return answer.value;
   }

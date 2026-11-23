@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ease",
-  "version": "0.4.24",
+  "version": "0.4.25",
   "description": "A fast, customizable workspace for everyday browser tasks.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -65,6 +65,10 @@
         "mac": "Alt+Shift+T"
       },
       "description": "Translate selected text with Ease"
+    },
+    "quick-task": {
+      "suggested_key": { "default": "Alt+Shift+Y" },
+      "description": "Add a task with Ease"
     }
   },
   "oauth2": {

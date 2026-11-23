@@ -31,6 +31,8 @@ export function renderCalendar(container, {
   onHoliday,
   onSaveEvent,
   onDeleteEvent,
+  onOpenTask,
+  onCompleteTask,
   renderConnections,
 }) {
   const localeInfo = new Intl.Locale(locale);
@@ -363,8 +365,9 @@ export function renderCalendar(container, {
     button.type = 'button';
     button.className = className;
     button.dataset.event = event.id;
+    if (event.taskId) button.dataset.taskDone = String(event.completed);
     button.disabled = !editor.hidden;
-    button.addEventListener('click', () => openDetails(event, button));
+    button.addEventListener('click', () => event.taskId ? onOpenTask?.(event.taskId) : openDetails(event, button));
     return button;
   }
 
@@ -383,10 +386,25 @@ export function renderCalendar(container, {
       ? 'calendar-event-card'
       : 'calendar-event calendar-event-content');
     appendText(button, 'span', 'calendar-event-title', eventTitle(event));
-    appendText(button, 'span', 'calendar-event-time', eventTime(event));
+    const timing = event.taskId && event.display === 'due'
+      ? [t('todoDue'), event.start && eventTime(event)].filter(Boolean).join(' · ') : eventTime(event);
+    appendText(button, 'span', 'calendar-event-time', timing);
     if (event.notes?.trim()) appendText(button, 'span', 'calendar-event-notes', event.notes);
-    if (event.readOnly) appendText(button, 'span', 'calendar-event-provider', eventSource(event));
-    return button;
+    if (!event.taskId && event.readOnly) appendText(button, 'span', 'calendar-event-provider', eventSource(event));
+    if (!event.taskId) return button;
+    const row = document.createElement('div');
+    row.className = 'calendar-todo-row';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'icon-button todo-check';
+    toggle.dataset.done = String(event.completed);
+    const label = t(event.completed ? 'todoReopen' : 'todoComplete');
+    toggle.setAttribute('aria-label', label);
+    toggle.title = label;
+    if (event.completed) toggle.innerHTML = icon('check');
+    toggle.addEventListener('click', () => onCompleteTask?.(event.taskId, !event.completed));
+    row.append(toggle, button);
+    return row;
   }
 
   function titleMarkers(dayEvents, limit) {

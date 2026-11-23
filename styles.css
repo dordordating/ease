@@ -5267,3 +5267,256 @@ body[data-surface="panel"] .mail-reader > .mail-attachments {
 .mail-file > button {
   flex-shrink: 0;
 }
+
+.todo-module,
+.todo-display,
+.todo-panel {
+  display: grid;
+  gap: 7px;
+  min-inline-size: 0;
+}
+
+.todo-quick {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+  padding: 4px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: var(--radius);
+  background: var(--subtle);
+}
+
+.todo-quick > input {
+  min-inline-size: 0;
+  padding-inline-start: 6px;
+  border: 0;
+  background: transparent;
+}
+
+.todo-icon {
+  inline-size: 28px;
+  block-size: 28px;
+  flex: none;
+}
+
+.todo-icon svg,
+.todo-interpret svg {
+  inline-size: 14px;
+  block-size: 14px;
+}
+
+.todo-icon.todo-add {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.todo-interpret {
+  grid-column: 1 / -1;
+  justify-self: start;
+  flex-direction: row-reverse;
+  color: var(--accent);
+}
+
+.todo-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--subtle);
+}
+
+.todo-tabs button {
+  justify-content: center;
+  min-inline-size: 0;
+  min-block-size: 26px;
+  border-color: transparent;
+  background: transparent;
+  white-space: normal;
+}
+
+.todo-tabs [aria-pressed="true"] {
+  border-color: var(--stroke-subtle);
+  background: var(--surface);
+  color: var(--accent);
+}
+
+.todo-list {
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: var(--radius);
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 5px;
+}
+
+.todo-item + .todo-item {
+  border-block-start: 1px solid var(--stroke-subtle);
+}
+
+.todo-item-open {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 6px;
+  min-inline-size: 0;
+  padding: 5px;
+  border-radius: 6px;
+  background: transparent;
+  text-align: start;
+}
+
+.todo-item-open:hover {
+  background: var(--hover);
+}
+
+.todo-item-title,
+.todo-detail-title {
+  overflow-wrap: anywhere;
+}
+
+.todo-item-title {
+  flex-basis: 100%;
+  font-size: 12px;
+}
+
+.todo-item-date,
+.todo-edit-date {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.todo-item-date[data-overdue="true"] {
+  color: var(--danger);
+}
+
+.todo-check {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  inline-size: 22px;
+  block-size: 22px;
+  border: 1px solid var(--stroke);
+  border-radius: 6px;
+}
+
+.todo-check:hover,
+.todo-pin[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.todo-check[data-done="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.todo-check svg {
+  inline-size: 14px;
+  block-size: 14px;
+}
+
+.todo-item[data-done="true"] .todo-item-title,
+[data-task-done="true"] .calendar-event-title,
+.calendar-event-chip[data-task-done="true"] {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.todo-empty,
+.todo-panel,
+.todo-agenda {
+  padding: 7px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: var(--radius);
+  background: var(--subtle);
+}
+
+.todo-agenda > summary,
+.todo-panel > h3 {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.todo-agenda > :not(summary) {
+  margin-block-start: 5px;
+}
+
+.todo-agenda button:not(.todo-check, .todo-item-open, .todo-pin) {
+  display: flex;
+  inline-size: 100%;
+  text-align: start;
+}
+
+.todo-agenda button > small {
+  margin-inline-start: auto;
+}
+
+.todo-empty,
+.todo-details {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.todo-toolbar,
+.todo-field {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.todo-details {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 4px 9px;
+  margin: 0;
+}
+
+.todo-details dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.todo-notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.todo-edit-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  margin-block-start: 4px;
+}
+
+.todo-edit-fields input {
+  min-inline-size: 0;
+  inline-size: 100%;
+}
+
+.calendar-todo-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-inline-size: 0;
+}
+
+.calendar-todo-row .calendar-event-card {
+  flex: 1;
+  border-inline-start-color: var(--accent);
+}

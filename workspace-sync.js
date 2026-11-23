@@ -2,6 +2,7 @@ import { readSyncedWorkspace, writeSyncedWorkspace } from "./ease-api.js";
 import { localeNames } from "./locales.js";
 import { getGoogleAccount, googleAccountStorageKey } from "./providers.js";
 import { vaultSessionStorageKey } from "./vault-session.js";
+import { defaultTodo, restoreTodo } from "./todo-store.js";
 import {
   createWorkspaceSyncSalt, decryptWorkspaceSnapshot, deriveWorkspaceSyncKey, encryptWorkspaceSnapshot
 } from "./workspace-sync-crypto.js";
@@ -41,6 +42,7 @@ function portableWorkspace(workspace) {
   if (moduleOrder.some((id, index) => id !== defaultModuleOrder[index])) snapshot.moduleOrder = moduleOrder;
   snapshot.zoom = normalizeWorkspaceZoom(snapshot.zoom);
   if (snapshot.zoom === defaultWorkspace.zoom) delete snapshot.zoom;
+  if (!snapshot.todo.items.length && !snapshot.todo.dailyTime) delete snapshot.todo;
   const { inlineEnabled, inlineSites, ...translator } = { ...defaultWorkspace.translator, ...snapshot.translator };
   snapshot.translator = translator;
   snapshot.folders = snapshot.folders.map((folder) => folder.vault ? { ...folder, vault: portableVault(folder.vault) } : folder);
@@ -84,7 +86,9 @@ function readSnapshot(value) {
     || (!snippet.sealed && typeof snippet.text !== "string"))) invalid();
   if (value.events.some((event) => !object(event) || typeof event.id !== "string" || typeof event.date !== "string")
     || value.holidays.some((day) => typeof day !== "string")) invalid();
-  return portableWorkspace(value);
+  const todo = restoreTodo(value.todo);
+  if (!todo) invalid();
+  return portableWorkspace({ ...value, todo });
 }
 
 function localWorkspace(snapshot, current) {
@@ -95,7 +99,7 @@ function localWorkspace(snapshot, current) {
     return { ...folder, vault: { ...folder.vault, device: previous.device } };
   });
   const { inlineEnabled, inlineSites } = { ...defaultWorkspace.translator, ...current.translator };
-  return { ...snapshot, folders, translator: { ...snapshot.translator, inlineEnabled, inlineSites } };
+  return { ...snapshot, todo: snapshot.todo ?? defaultTodo, folders, translator: { ...snapshot.translator, inlineEnabled, inlineSites } };
 }
 
 async function keyStorage(mode, access) {
