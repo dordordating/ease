@@ -31,6 +31,7 @@ import { taskAction } from "./todo-store.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
 import { registerTranslationHistoryHandlers } from "./translation-history-store.js";
 import { registerWorkspaceSyncHandlers } from "./workspace-sync.js";
+import { activateWorkspaceAccount } from "./workspace-accounts.js";
 import {
   configureInlineTranslator, injectInlineTranslatorOnOpenTabs, registerTranslatorSiteHandlers,
   requestInlineTranslatorPermission
@@ -47,7 +48,7 @@ import {
 let pendingWrite = Promise.resolve();
 registerEaseSessionHandlers();
 registerAssistantSourceHandlers();
-registerGoogleProviderHandlers();
+registerGoogleProviderHandlers(account => queueWorkspace(() => activateWorkspaceAccount(account)));
 registerTranslatorSelectionHandlers();
 registerTranslationHistoryHandlers();
 registerClipboardHistoryHandlers();
@@ -62,7 +63,10 @@ registerMailHandlers();
 registerWorkspaceSyncHandlers(queueWorkspace);
 
 function queueWorkspace(operation) {
-  const result = pendingWrite.then(operation);
+  const result = pendingWrite.then(async () => {
+    await activateWorkspaceAccount();
+    return operation();
+  });
   pendingWrite = result.catch(() => {});
   return result;
 }

@@ -1062,18 +1062,22 @@ function renderSettings() {
   shortcut.append(node("h3", "", t("activationShortcut")), shortcutDetails);
   list.append(shortcut);
   const storage = node("div", "setting-row storage-note");
+  storage.id = "workspace-local-storage";
+  storage.hidden = Boolean(translatorAccountId);
   const copy = node("div");
   copy.append(node("strong", "", t("storageTitle")), node("p", "", t("storageHint")));
   storage.append(glyph("device", "module-glyph"), copy);
   list.append(storage);
   view.append(list);
   accountRefresh = renderAccount(list, t, reportError, { inToolbarPopup });
-  workspaceSyncRefresh = renderWorkspaceSync(list, { locale: workspace.locale, dateLocale: workspaceDateLocale(), t, send: sendWorkspaceSync });
+  workspaceSyncRefresh = renderWorkspaceSync(list.querySelector("#ease-account"), {
+    locale: workspace.locale, dateLocale: workspaceDateLocale(), t, send: sendWorkspaceSync
+  });
   readWorkspaceShortcuts();
 }
 
-function sendWorkspaceSync(action, passphrase) {
-  return chrome.runtime.sendMessage({ type: workspaceSyncMessage, action, ...(passphrase === undefined ? {} : { passphrase }) });
+function sendWorkspaceSync(action, accountId) {
+  return chrome.runtime.sendMessage({ type: workspaceSyncMessage, action, ...(accountId && { accountId }) });
 }
 
 function calendarSearchSource() {
@@ -3272,6 +3276,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
     translatorAccountId = changes[accountStorageKey].newValue?.id ?? null;
     translatorController?.update({ accountId: translatorAccountId });
     homeController?.updateAccount(translatorAccountId);
+    const storage = document.getElementById("workspace-local-storage");
+    if (storage) storage.hidden = Boolean(translatorAccountId);
     if (query) render();
     accountRefresh?.().catch(() => reportError("accountFailed"));
     workspaceSyncRefresh?.();

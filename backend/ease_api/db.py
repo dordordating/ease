@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
 
-from psycopg import Error
+from psycopg import Error, sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
@@ -207,36 +207,57 @@ class Database:
         async with self._open_pool().connection() as connection:
             await connection.execute("DELETE FROM ease_assistant_requests WHERE expires_at <= CURRENT_TIMESTAMP")
 
-    async def get_workspace_sync(self, user_id: UUID) -> WorkspaceSnapshot | None:
+    async def get_workspace_sync(self, user_id: UUID, *, automatic: bool = False) -> WorkspaceSnapshot | None:
+        table = sql.Identifier("ease_account_workspace_sync" if automatic else "ease_workspace_sync")
         async with self._open_pool().connection() as connection:
-            cursor = await connection.execute("""
+            cursor = await connection.execute(sql.SQL("""
                 SELECT revision, salt, iv, ciphertext
-                FROM ease_workspace_sync
+                FROM {}
                 WHERE user_id = %s
-            """, (user_id,))
+            """).format(table), (user_id,))
             row = await cursor.fetchone()
             return WorkspaceSnapshot(**row) if row else None
 
+    async def legacy_workspace_revision(self, user_id: UUID) -> int:
+        async with self._open_pool().connection() as connection:
+            cursor = await connection.execute("SELECT revision FROM ease_workspace_sync WHERE user_id = %s", (user_id,))
+            row = await cursor.fetchone()
+            return row["revision"] if row else 0
+
     async def put_workspace_sync(
-        self, user_id: UUID, revision: int, salt: bytes, iv: bytes, ciphertext: bytes
+        self, user_id: UUID, revision: int, salt: bytes, iv: bytes, ciphertext: bytes, *,
+        automatic: bool = False, legacy_revision: int = 0,
     ) -> int | None:
         if revision >= MAX_WORKSPACE_SYNC_REVISION:
             return None
+        table = sql.Identifier("ease_account_workspace_sync" if automatic else "ease_workspace_sync")
         async with self._open_pool().connection() as connection:
+            if not automatic or revision == 0:
+                # Serialize the first account sync with writes from an older extension.
+                await connection.execute("SELECT id FROM ease_users WHERE id = %s FOR UPDATE", (user_id,))
+                if automatic:
+                    legacy = await connection.execute("SELECT revision FROM ease_workspace_sync WHERE user_id = %s", (user_id,))
+                    previous = await legacy.fetchone()
+                    if legacy_revision != (previous["revision"] if previous else 0):
+                        return None
+                else:
+                    current = await connection.execute("SELECT 1 FROM ease_account_workspace_sync WHERE user_id = %s", (user_id,))
+                    if await current.fetchone():
+                        return None
             if revision == 0:
-                cursor = await connection.execute("""
-                    INSERT INTO ease_workspace_sync (user_id, revision, salt, iv, ciphertext)
+                cursor = await connection.execute(sql.SQL("""
+                    INSERT INTO {} (user_id, revision, salt, iv, ciphertext)
                     VALUES (%s, 1, %b, %b, %b)
                     ON CONFLICT (user_id) DO NOTHING
                     RETURNING revision
-                """, (user_id, salt, iv, ciphertext))
+                """).format(table), (user_id, salt, iv, ciphertext))
             else:
-                cursor = await connection.execute("""
-                    UPDATE ease_workspace_sync
+                cursor = await connection.execute(sql.SQL("""
+                    UPDATE {}
                     SET revision = revision + 1, salt = %b, iv = %b, ciphertext = %b
                     WHERE user_id = %s AND revision = %s
                     RETURNING revision
-                """, (salt, iv, ciphertext, user_id, revision))
+                """).format(table), (salt, iv, ciphertext, user_id, revision))
             row = await cursor.fetchone()
             return row["revision"] if row else None
 

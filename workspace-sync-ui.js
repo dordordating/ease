@@ -6,39 +6,21 @@ function element(tag, className, text) {
 }
 
 export function renderWorkspaceSync(parent, { locale, dateLocale = locale, t, send }) {
-  const box = element("section", "account-card");
-  const details = element("div", "account-details");
-  const title = element("h3", "", t("syncTitle"));
+  const box = element("div", "account-details");
   const status = element("p");
   status.setAttribute("role", "status");
   const error = element("p", "account-error-message");
-  error.hidden = true;
   error.setAttribute("role", "alert");
-  const form = element("form", "dialog-fields");
-  const label = element("label", "field");
-  const passphrase = element("input");
-  passphrase.type = "password";
-  passphrase.required = true;
-  passphrase.minLength = 10;
-  passphrase.maxLength = 256;
-  passphrase.autocomplete = "current-password";
-  passphrase.setAttribute("aria-describedby", "workspace-sync-passphrase-hint");
-  const hint = element("p", "field-hint", t("syncPassphraseHint"));
-  hint.id = "workspace-sync-passphrase-hint";
-  label.append(element("span", "", t("syncPassphrase")), passphrase);
-  const submit = element("button", "primary-button", t("syncEnable"));
-  form.append(label, hint, submit);
   const actions = element("div", "connection-actions");
-  const buttons = {};
-  for (const [action, key] of Object.entries({ sync: "syncNow", cloud: "syncUseCloud", local: "syncUseLocal", disable: "syncDisable" })) {
-    const button = element("button", action === "cloud" || action === "sync" ? "primary-button" : "secondary-button", t(key));
+  const buttons = ["cloud", "local"].map(action => {
+    const label = t(action === "cloud" ? "syncUseCloud" : "syncUseLocal");
+    const button = element("button", action === "cloud" ? "primary-button" : "secondary-button", label);
     button.type = "button";
     button.addEventListener("click", () => perform(action));
-    actions.append(button);
-    buttons[action] = button;
-  }
-  details.append(element("p", "", t("syncDescription")), status, error, form, actions);
-  box.append(title, details);
+    return button;
+  });
+  actions.append(...buttons);
+  box.append(status, error, actions);
   parent.append(box);
   const formatter = new Intl.DateTimeFormat(dateLocale, { dateStyle: "short", timeStyle: "short" });
   let current = { kind: "guest" };
@@ -48,20 +30,15 @@ export function renderWorkspaceSync(parent, { locale, dateLocale = locale, t, se
 
   function draw() {
     const { kind, lastSyncedAt, firstConflict } = current;
-    const labels = { guest: "syncSignInRequired", locked: "syncLocked", conflict: firstConflict ? "syncCloudExists" : "syncConflict" };
-    status.textContent = busy ? t("syncWorking") : labels[kind] ? t(labels[kind]) : kind === "active"
-      ? (lastSyncedAt ? t("syncLastSynced", { date: formatter.format(lastSyncedAt) }) : t("syncEnabled")) : "";
+    box.hidden = kind === "guest";
+    const issue = actionError || current.error;
+    status.textContent = busy ? t("syncWorking") : kind === "conflict" ? t(firstConflict ? "syncCloudExists" : "syncConflict")
+      : issue ? "" : lastSyncedAt ? t("syncLastSynced", { date: formatter.format(lastSyncedAt) }) : t("syncWorking");
     status.hidden = !status.textContent;
-    const message = actionError || current.error;
-    error.hidden = !message;
-    error.textContent = message ? t(message) : "";
-    form.hidden = kind !== "disabled" && kind !== "locked";
-    submit.textContent = t(kind === "locked" ? "syncUnlock" : "syncEnable");
-    buttons.sync.hidden = kind !== "active";
-    buttons.cloud.hidden = buttons.local.hidden = kind !== "conflict";
-    buttons.disable.hidden = !["active", "conflict", "locked"].includes(kind);
-    actions.hidden = Object.values(buttons).every((button) => button.hidden);
-    for (const control of [passphrase, submit, ...Object.values(buttons)]) control.disabled = busy;
+    error.hidden = !issue;
+    error.textContent = issue ? t(issue) : "";
+    actions.hidden = kind !== "conflict" || issue === "syncLegacyPending";
+    for (const button of buttons) button.disabled = busy;
   }
 
   async function refresh() {
@@ -71,25 +48,24 @@ export function renderWorkspaceSync(parent, { locale, dateLocale = locale, t, se
       if (!box.isConnected || id !== version) return;
       if (response?.status) {
         const next = response.status;
-        if (next.kind === "guest" || next.lastSyncedAt > (current.lastSyncedAt ?? 0)) actionError = undefined;
+        if (next.accountId !== current.accountId || next.lastSyncedAt > (current.lastSyncedAt ?? 0)) actionError = undefined;
         current = next;
       } else actionError = response?.error ?? "syncUnavailable";
-      draw();
     } catch {
-      if (id !== version) return;
+      if (id !== version || !box.isConnected) return;
       actionError = "syncUnavailable";
-      draw();
     }
+    draw();
   }
 
-  async function perform(action, value) {
+  async function perform(action) {
     if (busy) return;
-    version++;
+    version += 1;
     busy = true;
     actionError = undefined;
     draw();
     try {
-      const response = await send(action, value);
+      const response = await send(action, current.accountId);
       if (response?.status) current = response.status;
       else actionError = response?.error ?? "syncUnavailable";
     } catch {
@@ -103,12 +79,6 @@ export function renderWorkspaceSync(parent, { locale, dateLocale = locale, t, se
     }
   }
 
-  form.addEventListener("submit", (event) => {
-    event.preventDefault();
-    const value = passphrase.value;
-    passphrase.value = "";
-    perform("enable", value);
-  });
   draw();
   refresh();
   return refresh;

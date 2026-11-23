@@ -325,15 +325,15 @@ export async function getSilentGoogleProfileToken(accountId) {
   });
 }
 
-async function fetchAccount() {
+async function fetchAccount(commitAccount) {
   return authorized(profileScopes, true, async (token) => {
     const account = await verifiedGoogleAccount(token);
-    await chrome.storage.local.set({ [googleAccountStorageKey]: account });
+    await commitAccount(account);
     return account;
   });
 }
 
-async function workerAction(action) {
+async function workerAction(action, commitAccount) {
   const hosts = googleActionHosts.get(action);
   if (hosts) {
     if (!googleConfigured()) throw missingConfiguration(action);
@@ -341,9 +341,10 @@ async function workerAction(action) {
   }
   switch (action) {
     case "sign-in":
-      return fetchAccount();
+      return fetchAccount(commitAccount);
     case "sign-out":
-      await chrome.storage.local.remove([googleAccountStorageKey, googleCalendarStorageKey]);
+      await commitAccount(null);
+      await chrome.storage.local.remove(googleCalendarStorageKey);
       await chrome.identity.clearAllCachedAuthTokens();
       return;
     case "connect-calendar":
@@ -374,7 +375,7 @@ export function refreshConnectedGoogleCalendar() {
   });
 }
 
-export function registerGoogleProviderHandlers() {
+export function registerGoogleProviderHandlers(commitAccount) {
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id || message?.type !== googleProviderMessage) return;
     const { action } = message;
@@ -386,7 +387,7 @@ export function registerGoogleProviderHandlers() {
       try {
         const permissionError = await permission;
         if (permissionError) throw new GoogleProviderError(permissionError);
-        const value = await workerAction(action);
+        const value = await workerAction(action, commitAccount);
         await rememberGoogleIssue(action, null);
         return { ok: true, value };
       } catch (error) {

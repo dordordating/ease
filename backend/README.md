@@ -11,6 +11,7 @@ Ease API uses FastAPI and PostgreSQL. It checks Google credentials, keeps one ac
    | --- | --- |
    | `POSTGRES_PASSWORD` | A generated database password. `openssl rand -hex 32` generates a suitable value. |
    | `SESSION_SECRET` | A separate generated secret of at least 32 characters. |
+   | `WORKSPACE_SYNC_SECRET` | A dedicated generated secret of at least 32 characters. Keep it with the database backup so restored workspaces can be opened. Local deployments fall back to `SESSION_SECRET`. |
    | `OPENROUTER_API_KEY` | An OpenRouter key dedicated to Ease. Set an initial credit limit on the key in OpenRouter. |
    | `GOOGLE_CLIENT_IDS` | The public Chrome extension OAuth client ID from `manifest.json`. For multiple registered builds, use a comma-separated list. |
    | `CORS_ORIGINS` | Optional until the extension is connected. Use `chrome-extension://` followed by the stable ID shown under `chrome://extensions`. For multiple builds, list each full origin separated by a comma. |
@@ -98,9 +99,11 @@ ORDER BY created_at DESC
 LIMIT 20;
 ```
 
-## Encrypted workspace sync
+## Automatic workspace sync
 
-`GET /v1/workspace-sync` and `PUT /v1/workspace-sync` require the same verified Ease session. The endpoint accepts an encrypted envelope with schema version, salt, IV, and ciphertext. The browser derives the key from the sync passphrase, encrypts the workspace with AES-256-GCM, and handles all restore operations. PostgreSQL stores the ciphertext with an account ID and revision. A `PUT` using a stale revision returns `409`, allowing the browser to handle conflicts before replacing any copy.
+`GET /v2/workspace-sync` and `PUT /v2/workspace-sync` require a verified Ease session. The server derives an account-specific key and salt using the workspace secret and the verified account ID. Only the authenticated account receives its credentials. The browser stores a revisioned AES-256-GCM snapshot in PostgreSQL through the API. A stale revision returns `409`.
+
+Previous passphrase snapshots are available through `GET /v1/workspace-sync` for migration. A device with the previous key or a verified local copy transfers it to the new account sync on first use. The first v2 write checks the previous snapshot’s revision and retains that backup. Once v2 exists for an account, v1 writes return `409`. Update each device to the current extension release.
 
 Use a Google access token with the `openid`, `email`, and `profile` scopes to start a session. The Ease token expires after 30 minutes by default. For `429` responses, the `Retry-After` header gives the seconds until the quota resets.
 

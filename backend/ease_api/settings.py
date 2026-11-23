@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 
     google_client_ids: str
     session_secret: SecretStr = Field(min_length=32)
+    workspace_sync_secret: SecretStr | None = Field(default=None, min_length=32)
     openrouter_api_key: SecretStr = Field(min_length=1)
     coingecko_demo_api_key: SecretStr | None = None
     cors_origins: str = ""

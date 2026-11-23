@@ -5,6 +5,7 @@ from base64 import b64decode, urlsafe_b64encode
 from contextlib import aclosing, asynccontextmanager, suppress
 from dataclasses import asdict
 from datetime import UTC, datetime, time, timedelta
+from hmac import digest as hmac_digest
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -70,6 +71,16 @@ class WorkspaceWrite(BaseModel):
     envelope: WorkspaceEnvelope
 
 
+class AccountWorkspaceWrite(WorkspaceWrite):
+    legacy_revision: int = Field(default=0, ge=0, le=MAX_WORKSPACE_SYNC_REVISION)
+
+
+def workspace_account_credentials(secret: bytes, user_id: UUID) -> tuple[bytes, bytes]:
+    key = hmac_digest(secret, b"ease/workspace/account/key/v2\0" + user_id.bytes, "sha256")
+    salt = hmac_digest(secret, b"ease/workspace/account/salt/v2\0" + user_id.bytes, "sha256")[:16]
+    return key, salt
+
+
 def encode_base64url(value: bytes) -> str:
     return urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
 
@@ -85,7 +96,7 @@ def decode_base64url(value: str, minimum: int, maximum: int) -> bytes:
     return b64decode(value + "=" * padding, altchars=b"-_", validate=True)
 
 
-async def read_workspace_write(request: Request) -> WorkspaceWrite:
+async def read_workspace_write(request: Request, model: type[WorkspaceWrite] = WorkspaceWrite) -> WorkspaceWrite:
     declared_length = request.headers.get("content-length")
     if declared_length is not None:
         try:
@@ -106,7 +117,7 @@ async def read_workspace_write(request: Request) -> WorkspaceWrite:
         raise HTTPException(408, "workspace_sync_timeout") from None
     except ClientDisconnect:
         raise HTTPException(400, "request_incomplete") from None
-    return WorkspaceWrite.model_validate_json(data)
+    return model.model_validate_json(data)
 
 
 @asynccontextmanager
@@ -227,6 +238,7 @@ async def persist_assistant_history(operation):
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings()
     session_secret = settings.session_secret.get_secret_value()
+    workspace_secret = (settings.workspace_sync_secret.get_secret_value() if settings.workspace_sync_secret else session_secret).encode()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -348,36 +360,48 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"tiers": [{"id": tier, "model": model} for tier, model in settings.models.items()]}
 
     @app.get("/v1/workspace-sync")
+    @app.get("/v2/workspace-sync")
     async def get_workspace_sync(request: Request, user: Annotated[User, Depends(require_user)]):
+        automatic = request.url.path == "/v2/workspace-sync"
         async with workspace_sync_slot(request):
-            snapshot = await request.app.state.database.get_workspace_sync(user.id)
-            if snapshot is None:
-                return JSONResponse({"revision": 0, "envelope": None})
-            return JSONResponse({
-                "revision": snapshot.revision,
-                "envelope": {
+            database = request.app.state.database
+            snapshot = await database.get_workspace_sync(user.id, automatic=automatic)
+            result = {"revision": 0, "envelope": None}
+            if snapshot:
+                result = {"revision": snapshot.revision, "envelope": {
                     "schema": 1,
                     "salt": encode_base64url(snapshot.salt),
                     "iv": encode_base64url(snapshot.iv),
                     "ciphertext": encode_base64url(snapshot.ciphertext),
-                },
-            })
+                }}
+            if automatic:
+                key, salt = workspace_account_credentials(workspace_secret, user.id)
+                if snapshot and snapshot.salt != salt:
+                    raise HTTPException(503, "workspace_sync_key_unavailable")
+                result.update(key=encode_base64url(key), salt=encode_base64url(salt),
+                              legacy_revision=0 if snapshot else await database.legacy_workspace_revision(user.id))
+            return JSONResponse(result)
 
     @app.put("/v1/workspace-sync")
+    @app.put("/v2/workspace-sync")
     async def put_workspace_sync(request: Request, user: Annotated[User, Depends(require_user)]):
         # Keep the large body out of FastAPI's argument parsing so authentication
         # and the concurrency limit run before the request is read.
+        automatic = request.url.path == "/v2/workspace-sync"
         async with workspace_sync_slot(request):
             try:
-                payload = await read_workspace_write(request)
+                payload = await read_workspace_write(request, AccountWorkspaceWrite if automatic else WorkspaceWrite)
                 envelope = payload.envelope
                 salt = decode_base64url(envelope.salt, 16, 16)
                 iv = decode_base64url(envelope.iv, 12, 12)
                 ciphertext = decode_base64url(envelope.ciphertext, 16, max_workspace_ciphertext)
             except (ValidationError, ValueError):
                 raise HTTPException(422, "invalid_request") from None
+            if automatic and salt != workspace_account_credentials(workspace_secret, user.id)[1]:
+                raise HTTPException(422, "invalid_request")
             revision = await request.app.state.database.put_workspace_sync(
-                user.id, payload.revision, salt, iv, ciphertext
+                user.id, payload.revision, salt, iv, ciphertext, automatic=automatic,
+                legacy_revision=payload.legacy_revision if isinstance(payload, AccountWorkspaceWrite) else 0,
             )
             if revision is None:
                 raise HTTPException(409, "workspace_sync_conflict")

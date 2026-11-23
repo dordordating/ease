@@ -77,6 +77,16 @@ export function createWorkspaceSyncSalt() {
   return encodeBytes(crypto.getRandomValues(new Uint8Array(saltLength)));
 }
 
+export async function importWorkspaceAccountKey(value) {
+  validateEncoding(value, 32);
+  const bytes = decodeBytes(value);
+  try {
+    return await crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]);
+  } finally {
+    bytes.fill(0);
+  }
+}
+
 export async function deriveWorkspaceSyncKey(passphrase, salt) {
   if (typeof passphrase !== "string" || !passphrase.length || !passphrase.isWellFormed()) {
     throw new WorkspaceSyncError("syncWrongPassphrase");

@@ -547,7 +547,7 @@ function verifySyncedWorkspace(result, request) {
   return { revision: result.revision, envelope };
 }
 
-async function requestWorkspaceSync(accountId, method, body, signal) {
+async function requestWorkspaceSync(accountId, method, body, signal, legacy = false) {
   signal?.throwIfAborted();
   registerEaseSessionHandlers();
   const controller = new AbortController();
@@ -558,7 +558,7 @@ async function requestWorkspaceSync(accountId, method, body, signal) {
     if (account.id !== accountId) throw new EaseTranslationError("syncSignInRequired");
     requestSignal.throwIfAborted();
 
-    const url = "/v1/workspace-sync";
+    const url = legacy ? "/v1/workspace-sync" : "/v2/workspace-sync";
     let session = await sessionFor(account);
     await requireAccount(account);
     let response = await apiRequest(url, { method, body, token: session.token, signal: requestSignal });
@@ -582,7 +582,15 @@ async function requestWorkspaceSync(accountId, method, body, signal) {
     if (response.status === 413) throw new EaseTranslationError("syncTooLarge");
     if (response.status === 422) throw new EaseTranslationError("syncInvalidData");
     if (!response.ok) throw new EaseTranslationError("syncUnavailable");
-    return verifySyncedWorkspace(result, body);
+    const snapshot = verifySyncedWorkspace(result, body);
+    if (legacy || method === "PUT") return snapshot;
+    const { key, salt, legacy_revision: legacyRevision } = result;
+    if (typeof key !== "string" || !/^[A-Za-z0-9_-]{43}$/u.test(key)
+      || typeof salt !== "string" || !/^[A-Za-z0-9_-]{22}$/u.test(salt) || !validRevision(legacyRevision)
+      || (snapshot.envelope && (snapshot.envelope.salt !== salt || legacyRevision !== 0))) {
+      throw new EaseTranslationError("syncInvalidData");
+    }
+    return { ...snapshot, key, salt, legacyRevision };
   } catch (error) {
     signal?.throwIfAborted();
     controller.signal.throwIfAborted();
@@ -597,8 +605,14 @@ export function readSyncedWorkspace(accountId, signal) {
   return requestWorkspaceSync(accountId, "GET", undefined, signal);
 }
 
-export async function writeSyncedWorkspace(accountId, revision, envelope, signal) {
+export function readLegacyWorkspace(accountId, signal) {
+  return requestWorkspaceSync(accountId, "GET", undefined, signal, true);
+}
+
+export async function writeSyncedWorkspace(accountId, revision, envelope, { legacyRevision = 0, signal } = {}) {
   signal?.throwIfAborted();
   if (!validRevision(revision) || revision === Number.MAX_SAFE_INTEGER) throw new EaseTranslationError("syncInvalidData");
-  return requestWorkspaceSync(accountId, "PUT", { revision, envelope: validateWorkspaceSyncEnvelope(envelope) }, signal);
+  return requestWorkspaceSync(accountId, "PUT", {
+    revision, envelope: validateWorkspaceSyncEnvelope(envelope), ...(legacyRevision && { legacy_revision: legacyRevision })
+  }, signal);
 }

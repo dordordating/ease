@@ -1,12 +1,13 @@
-import { readSyncedWorkspace, writeSyncedWorkspace } from "./ease-api.js";
+import { readLegacyWorkspace, readSyncedWorkspace, writeSyncedWorkspace } from "./ease-api.js";
 import { localeNames } from "./locales.js";
 import { getGoogleAccount, googleAccountStorageKey } from "./providers.js";
 import { vaultSessionStorageKey } from "./vault-session.js";
 import { defaultTodo, restoreTodo } from "./todo-store.js";
 import { restoreSpaces } from "./spaces-store.js";
 import { defaultHome, normalizeHome } from "./home-store.js";
+import { importedGuestWorkspace, legacyWorkspaceSyncStorageKey, workspaceStore } from "./workspace-accounts.js";
 import {
-  createWorkspaceSyncSalt, decryptWorkspaceSnapshot, deriveWorkspaceSyncKey, encryptWorkspaceSnapshot
+  decryptWorkspaceSnapshot, encryptWorkspaceSnapshot, importWorkspaceAccountKey
 } from "./workspace-sync-crypto.js";
 import {
   defaultModuleOrder, defaultWorkspace, densities, normalizeModuleOrder, normalizeWorkspaceZoom, palettes, readWorkspace,
@@ -14,11 +15,11 @@ import {
 } from "./workspace-data.js";
 
 export const workspaceSyncMessage = "ease-workspace-sync";
-export const workspaceSyncStorageKey = "easeWorkspaceSync";
+export const workspaceSyncStorageKey = "easeAccountWorkspaceSync";
 const wakeAlarm = "ease-workspace-sync-poll";
 const safeErrors = new Set([
-  "syncSignInRequired", "syncWrongPassphrase", "syncUnavailable", "syncTooLarge", "syncInvalidData",
-  "syncConflict", "syncConflictChanged", "syncPasswordLength", "syncLocked"
+  "syncSignInRequired", "syncUnavailable", "syncTooLarge", "syncInvalidData",
+  "syncConflict", "syncConflictChanged", "syncLegacyPending"
 ]);
 
 class SyncError extends Error {
@@ -115,61 +116,71 @@ function localWorkspace(snapshot, current) {
     translator: { ...snapshot.translator, inlineEnabled, inlineSites } };
 }
 
-async function keyStorage(mode, access) {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open("ease-workspace-keys", 1);
-    request.onupgradeneeded = () => request.result.createObjectStore("keys");
-    request.onerror = () => reject(new SyncError("syncUnavailable"));
-    request.onsuccess = () => {
-      const database = request.result;
-      try {
-        const transaction = database.transaction("keys", mode);
-        const operation = access(transaction.objectStore("keys"));
-        transaction.oncomplete = () => { database.close(); resolve(operation.result); };
-        transaction.onabort = () => { database.close(); reject(new SyncError("syncUnavailable")); };
-      } catch {
-        database.close();
-        reject(new SyncError("syncUnavailable"));
-      }
-    };
-  });
+async function requireAccount(accountId) {
+  if ((await getGoogleAccount())?.id !== accountId) throw new SyncError("syncSignInRequired");
 }
 
-const readKey = (accountId) => keyStorage("readonly", (keys) => keys.get(accountId));
-const deleteKey = (accountId) => keyStorage("readwrite", (keys) => keys.delete(accountId));
-const rememberKey = (accountId, entry) => keyStorage("readwrite", (keys) => keys.put(entry, accountId));
-
-async function readMetadata() {
+async function allMetadata() {
   return (await chrome.storage.local.get(workspaceSyncStorageKey))[workspaceSyncStorageKey] ?? {};
 }
 
-const writeMetadata = (metadata) => chrome.storage.local.set({ [workspaceSyncStorageKey]: metadata });
+async function readMetadata(accountId) {
+  return (await allMetadata())[accountId] ?? {};
+}
 
-async function requireAccount(accountId) {
-  if ((await getGoogleAccount())?.id !== accountId) throw new SyncError("syncSignInRequired");
+async function writeMetadata(accountId, metadata) {
+  await requireAccount(accountId);
+  const stored = await allMetadata();
+  if (serialized(stored[accountId] ?? {}) !== serialized(metadata)) {
+    await requireAccount(accountId);
+    await chrome.storage.local.set({ [workspaceSyncStorageKey]: { ...stored, [accountId]: metadata } });
+  }
 }
 
 async function status() {
   const accountId = (await getGoogleAccount())?.id;
   if (!accountId) return { kind: "guest" };
-  const metadata = await readMetadata();
-  if (!metadata.enabled || metadata.accountId !== accountId) return { kind: "disabled" };
-  const saved = await readKey(accountId);
+  const metadata = await readMetadata(accountId);
   return {
-    kind: !saved || saved.salt !== metadata.salt ? "locked" : metadata.conflict ? "conflict" : "active",
+    accountId,
+    kind: metadata.conflict ? "conflict" : metadata.lastSyncedAt ? "active" : "pending",
     lastSyncedAt: metadata.lastSyncedAt,
     error: metadata.error,
     firstConflict: Boolean(metadata.conflict?.first)
   };
 }
 
-async function completed(accountId, salt, revision, digest) {
-  await requireAccount(accountId);
-  await writeMetadata({ accountId, enabled: true, salt, revision, digest, lastSyncedAt: Date.now() });
+function completed(accountId, revision, digest) {
+  return writeMetadata(accountId, { revision, digest, lastSyncedAt: Date.now() });
 }
 
-function saveConflict(metadata, revision, digest) {
-  return writeMetadata({ ...metadata, error: undefined, conflict: { revision, digest, first: !metadata.digest } });
+function saveConflict(accountId, metadata, remote, digest) {
+  return writeMetadata(accountId, {
+    ...metadata, error: undefined,
+    conflict: { revision: remote.revision, legacyRevision: remote.legacyRevision, digest, first: !metadata.digest }
+  });
+}
+
+async function legacyMetadata(accountId) {
+  const previous = (await chrome.storage.local.get(legacyWorkspaceSyncStorageKey))[legacyWorkspaceSyncStorageKey];
+  return previous?.accountId === accountId ? previous : {};
+}
+
+async function legacyWorkspace(accountId, remote, snapshot, digest, pristine, metadata) {
+  const saved = await workspaceStore("ease-workspace-keys", "keys", "readonly", store => store.get(accountId));
+  if (saved) {
+    const legacy = await readLegacyWorkspace(accountId);
+    if (legacy.revision !== remote.legacyRevision) throw new SyncError("syncConflict");
+    if (legacy.envelope?.salt === saved.salt) {
+      const cloud = readSnapshot(await decryptWorkspaceSnapshot(legacy.envelope, saved.key, accountId));
+      return { cloud, baseline: metadata.digest };
+    }
+  }
+  // The old browser may still hold its local copy after its legacy key was cleared.
+  if (metadata.revision === remote.legacyRevision && metadata.digest && (!pristine || metadata.digest === digest)) {
+    return { cloud: snapshot, baseline: metadata.digest };
+  }
+  throw new SyncError("syncLegacyPending");
 }
 
 export function registerWorkspaceSyncHandlers(queueWorkspace) {
@@ -183,37 +194,50 @@ export function registerWorkspaceSyncHandlers(queueWorkspace) {
     return result;
   }
 
-  async function synchronize(accountId, metadata, saved, remote, choice) {
-    await requireAccount(accountId);
-    if (remote.envelope && remote.envelope.salt !== saved.salt) {
-      await deleteKey(accountId);
-      throw new SyncError("syncLocked");
-    }
-    const snapshot = portableWorkspace(await readWorkspace());
+  function capture(accountId) {
+    return queueWorkspace(async () => {
+      await requireAccount(accountId);
+      return portableWorkspace(await readWorkspace());
+    });
+  }
+
+  async function synchronize(accountId, metadata, remote, choice) {
+    const snapshot = await capture(accountId);
     const digest = await fingerprint(snapshot);
-    if (choice && (metadata.conflict?.revision !== remote.revision || metadata.conflict.digest !== digest)) {
-      await saveConflict(metadata, remote.revision, digest);
+    const conflict = metadata.conflict;
+    if (choice && (conflict?.revision !== remote.revision || conflict?.legacyRevision !== remote.legacyRevision
+      || conflict?.digest !== digest)) {
+      await saveConflict(accountId, metadata, remote, digest);
       throw new SyncError("syncConflictChanged");
     }
 
-    async function upload() {
-      const envelope = await encryptWorkspaceSnapshot(snapshot, saved.key, saved.salt, accountId);
-      const uploaded = await writeSyncedWorkspace(accountId, remote.revision, envelope);
-      await completed(accountId, saved.salt, uploaded.revision, digest);
+    const key = await importWorkspaceAccountKey(remote.key);
+    async function upload(value = snapshot, hash = digest) {
+      const envelope = await encryptWorkspaceSnapshot(value, key, remote.salt, accountId);
+      const uploaded = await writeSyncedWorkspace(accountId, remote.revision, envelope, { legacyRevision: remote.legacyRevision });
+      await completed(accountId, uploaded.revision, hash);
     }
 
-    if (!remote.envelope) return upload();
-    if (remote.revision === metadata.revision && metadata.digest && !choice) {
+    if (!remote.envelope && !remote.legacyRevision) return upload();
+    if (!choice && remote.revision && remote.revision === metadata.revision && metadata.digest) {
       if (digest !== metadata.digest) return upload();
-      return completed(accountId, saved.salt, remote.revision, digest);
+      if (metadata.error || metadata.conflict) await completed(accountId, remote.revision, digest);
+      return;
     }
 
-    const cloud = readSnapshot(await decryptWorkspaceSnapshot(remote.envelope, saved.key, accountId));
-    const cloudDigest = await fingerprint(cloud);
-    if (cloudDigest === digest) return completed(accountId, saved.salt, remote.revision, digest);
-    if (choice === "local" || (!choice && cloudDigest === metadata.digest)) return upload();
     const pristine = !metadata.digest && digest === await fingerprint(portableWorkspace(defaultWorkspace));
-    if (choice === "cloud" || (!choice && (digest === metadata.digest || pristine))) {
+    const previous = metadata.digest ? {} : await legacyMetadata(accountId);
+    const { cloud, baseline } = remote.envelope
+      ? { cloud: readSnapshot(await decryptWorkspaceSnapshot(remote.envelope, key, accountId)), baseline: metadata.digest ?? previous.digest }
+      : await legacyWorkspace(accountId, remote, snapshot, digest, pristine, previous);
+    const cloudDigest = await fingerprint(cloud);
+    if (cloudDigest === digest) {
+      return remote.revision ? completed(accountId, remote.revision, digest) : upload();
+    }
+    if (choice === "local" || (!choice && cloudDigest === baseline)) return upload();
+    const guestCopy = !choice && !metadata.digest ? await importedGuestWorkspace(accountId) : undefined;
+    const guestSeed = guestCopy && digest === await fingerprint(portableWorkspace({ ...defaultWorkspace, ...guestCopy }));
+    if (choice === "cloud" || (!choice && (digest === baseline || pristine || guestSeed))) {
       const applied = await queueWorkspace(async () => {
         await requireAccount(accountId);
         const current = await readWorkspace();
@@ -223,56 +247,25 @@ export function registerWorkspaceSyncHandlers(queueWorkspace) {
         await chrome.storage.local.set({ [storageKey]: localWorkspace(cloud, current) });
         return true;
       });
-      if (applied) return completed(accountId, saved.salt, remote.revision, cloudDigest);
-      const latest = await fingerprint(portableWorkspace(await readWorkspace()));
-      await saveConflict(metadata, remote.revision, latest);
-      return;
+      if (applied) return remote.revision ? completed(accountId, remote.revision, cloudDigest) : upload(cloud, cloudDigest);
     }
-    await saveConflict(metadata, remote.revision, digest);
+    await saveConflict(accountId, metadata, remote, await fingerprint(await capture(accountId)));
   }
 
-  async function attempt(accountId, metadata, saved, remote, choice) {
+  async function act(action, accountId) {
+    accountId ??= (await getGoogleAccount())?.id;
+    if (!accountId) throw new SyncError("syncSignInRequired");
+    await requireAccount(accountId);
+    const metadata = await readMetadata(accountId);
+    const choice = action === "sync" ? undefined : action;
+    if (choice && (!["cloud", "local"].includes(choice) || !metadata.conflict)) throw new SyncError("syncConflictChanged");
+    const read = () => readSyncedWorkspace(accountId);
     try {
-      await synchronize(accountId, metadata, saved, remote, choice);
+      await synchronize(accountId, metadata, await read(), choice);
     } catch (error) {
       if (error?.code !== "syncConflict") throw error;
-      const latest = await readSyncedWorkspace(accountId);
-      await synchronize(accountId, metadata, saved, latest, choice);
+      await synchronize(accountId, metadata, await read(), choice);
     }
-  }
-
-  async function act(action, passphrase) {
-    if (action === "status") return status();
-    const accountId = (await getGoogleAccount())?.id;
-    if (!accountId) throw new SyncError("syncSignInRequired");
-    const stored = await readMetadata();
-    const metadata = stored.accountId === accountId ? stored : {};
-    if (action === "disable") {
-      await deleteKey(accountId);
-      if (stored.accountId === accountId) await writeMetadata({ ...metadata, enabled: false, error: undefined });
-      return status();
-    }
-    if (action === "enable") {
-      if (typeof passphrase !== "string" || Array.from(passphrase).length < 10 || passphrase.length > 256) {
-        throw new SyncError("syncPasswordLength");
-      }
-      const remote = await readSyncedWorkspace(accountId);
-      const salt = remote.envelope?.salt ?? metadata.salt ?? createWorkspaceSyncSalt();
-      const key = await deriveWorkspaceSyncKey(passphrase, salt);
-      if (remote.envelope) await decryptWorkspaceSnapshot(remote.envelope, key, accountId);
-      await requireAccount(accountId);
-      const saved = { key, salt };
-      await rememberKey(accountId, saved);
-      const updated = { ...metadata, accountId, salt, enabled: true, error: undefined };
-      await writeMetadata(updated);
-      await attempt(accountId, updated, saved, remote);
-      return status();
-    }
-    if (!["sync", "cloud", "local"].includes(action) || !metadata.enabled) throw new SyncError("syncLocked");
-    const saved = await readKey(accountId);
-    if (!saved || saved.salt !== metadata.salt) throw new SyncError("syncLocked");
-    const choice = action === "sync" ? undefined : action;
-    await attempt(accountId, metadata, saved, await readSyncedWorkspace(accountId), choice);
     return status();
   }
 
@@ -285,33 +278,32 @@ export function registerWorkspaceSyncHandlers(queueWorkspace) {
       }
       automaticPending = true;
       queue(async () => {
-        const owner = (await getGoogleAccount())?.id;
-        if (!owner) return;
-        const metadata = await readMetadata();
-        if (!metadata.enabled || metadata.accountId !== owner || metadata.conflict || !await readKey(owner)) return;
+        const accountId = (await getGoogleAccount())?.id;
+        if (!accountId) return;
         try {
-          await act("sync");
+          await act("sync", accountId);
         } catch (error) {
-          const current = await readMetadata();
-          if ((await getGoogleAccount())?.id !== owner || current.accountId !== owner) return;
+          if ((await getGoogleAccount())?.id !== accountId) return;
+          const metadata = await readMetadata(accountId);
           const code = safeErrors.has(error?.code) ? error.code : "syncUnavailable";
-          if (current.error !== code) await writeMetadata({ ...current, error: code });
+          if (metadata.error !== code) await writeMetadata(accountId, { ...metadata, error: code });
         }
       }).catch(() => {}).finally(() => { automaticPending = false; });
     }, delay);
   }
 
-  const start = () => chrome.alarms?.create(wakeAlarm, { periodInMinutes: 1 }).catch(() => {});
+  function start() {
+    chrome.alarms?.create(wakeAlarm, { periodInMinutes: 1 }).catch(() => {});
+    schedule(0);
+  }
   chrome.runtime.onInstalled?.addListener(start);
   chrome.runtime.onStartup?.addListener(start);
-  chrome.alarms?.onAlarm.addListener((alarm) => { if (alarm.name === wakeAlarm) schedule(0); });
+  chrome.alarms?.onAlarm.addListener(alarm => { if (alarm.name === wakeAlarm) schedule(0); });
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
-    if (changes[storageKey]) schedule();
     const account = changes[googleAccountStorageKey];
-    if (account?.oldValue?.id && account.oldValue.id !== account.newValue?.id) {
-      queue(() => deleteKey(account.oldValue.id)).catch(() => {});
-    }
+    if (account && account.oldValue?.id !== account.newValue?.id) schedule(0);
+    else if (changes[storageKey]) schedule();
   });
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (message?.type !== workspaceSyncMessage || sender.id !== chrome.runtime.id) return;
@@ -319,12 +311,11 @@ export function registerWorkspaceSyncHandlers(queueWorkspace) {
     if (sender.url !== url && !sender.url?.startsWith(`${url}?`)) return;
     if (message.action === "wake") {
       start();
-      schedule();
       respond({ ok: true });
       return false;
     }
-    const result = message.action === "status" ? status() : queue(() => act(message.action, message.passphrase));
-    result.then((value) => respond({ status: value }), (error) => {
+    const result = message.action === "status" ? status() : queue(() => act(message.action, message.accountId));
+    result.then(value => respond({ status: value }), error => {
       respond({ error: safeErrors.has(error?.code) ? error.code : "syncUnavailable" });
     });
     return true;

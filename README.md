@@ -10,7 +10,7 @@ Ease is a local-first browser workspace for reusable text and quick daily checks
 
 Ease uses Manifest V3 and requires Chrome 116 or newer. It has no build step or dependencies.
 
-The [Ease API](backend/README.md) provides Google account registration, online translation, the Home assistant, encrypted sync, and market data. The backend guide covers PostgreSQL and deployment on Coolify.
+The [Ease API](backend/README.md) provides Google account registration, online translation, the Home assistant, account sync, and market data. The backend guide covers PostgreSQL and deployment on Coolify.
 
 ### Update an existing installation
 
@@ -57,11 +57,11 @@ Open the new ZIP and copy the contents of its extension folder over the files in
 - Pick a space’s color from the swatches in its editor. Ease flags a duplicate name or an identical list of saved URLs, including when those tabs are reordered before capture.
 - In a space’s menu, choose **Open as a Chrome group** to open its unpinned tabs in one group in the current window. The group uses the space’s name and the closest Chrome color. Pinned tabs open separately. Reopening reuses the group created by Ease in that window.
 - In the Chrome address bar, type `ease`, press **Space** or **Tab**, then type part of a saved space’s name. Pick a suggestion with the arrow keys or press **Enter** to open the best match as a Chrome group in the current window. Pinned tabs open separately. If Chrome needs access, use **Open as a Chrome group** in the prompt inside Ease to grant it and open the group.
-- Use **Create linked task** in a space’s menu or pick a space when editing an existing task. The task’s space button opens its saved tabs. You can use spaces as a guest, and they’re included in encrypted workspace sync when enabled. Chrome requests optional access when you use actions that read other tabs or their groups.
+- Use **Create linked task** in a space’s menu or pick a space when editing an existing task. The task’s space button opens its saved tabs. You can use spaces as a guest, and they’re synced when signed in to Ease with Google. Chrome requests optional access when you use actions that read other tabs or their groups.
 - Open **Home** for the assistant and dashboard. **Customize Home** lets you show, hide, and reorder cards for tasks, recently saved spaces, today’s agenda, flashcard reviews, and recent mail. It also lets you choose whether Ease opens on Home or the last tab. Existing workspaces retain their last-tab behavior until changed. Use **Animate sample prompts** to switch between typing and a still example. Typing is on by default.
 - Sign in to use the assistant on Home. Press **Enter** or the sparkle button to send and **Shift+Enter** for a new line. Click a rotating example to insert it, or attach selected text, a current page excerpt, an open email, or chosen saved tab titles. Review the visible source chips before sending. The right-click **Ask Ease** action and the sparkle icon in an open email prepare sources for you.
 - Home displays the latest request and streams its answer as words arrive. Ask for a supported market pair or the forecast in a named city to get data with its source. Review drafts or save tasks, snippets, and flashcards directly. The assistant can suggest an existing task label and turn a request for a checklist into a single task with individually checkable steps.
-- Open the history icon to browse saved requests in pages of ten, copy a response, reuse a prompt, reopen an action draft, or rate a reply. Search covers saved prompts, replies, and draft contents in this browser. With history on, Ease retains successful exchanges, drafts, model details, and ratings on the server for 30 days to improve the assistant. You can pause recording, delete entries, or clear the browser and server history. Home layout preferences are included in optional encrypted workspace sync.
+- Open the history icon to browse saved requests in pages of ten, copy a response, reuse a prompt, reopen an action draft, or rate a reply. Search covers saved prompts, replies, and draft contents in this browser. With history on, Ease retains successful exchanges, drafts, model details, and ratings on the server for 30 days to improve the assistant. You can pause recording, delete entries, or clear the browser and server history. Home layout preferences sync with your Google account.
 - Date and time displays use the calendar selected in Calendar settings and the device’s local time zone. Date-only market reference rates keep the provider’s publication date.
 - In **Translator settings**, enable **Ctrl + select** and grant Chrome access to eligible HTTPS websites once. Hold **Ctrl** while selecting text to translate it above the selection with the currently selected engine. The three AI engines use your Google-signed-in Ease session. You can also choose the source, target, result layout, and default clipboard folder in Translator.
 - Use **Settings → Language** to change the interface. English is the first-run default. Persian, Spanish, French, Brazilian Portuguese, Arabic, German, and Japanese are available. The Persian interface uses the bundled Vazir font.
@@ -72,9 +72,9 @@ Each new data module can join workspace search through its `moduleSearchSources`
 
 ## Accounts and calendar connections
 
-**Settings → Account** offers Google sign-in in OAuth-configured builds. The first online translation or encrypted sync operation verifies the account with Ease API and registers it on the server.
+Sign in with Google under **Settings → Account** to sync automatically. Use the same Google account on each device to restore your settings, snippets and folders, flashcards and progress, tasks, saved spaces, watchlists, and local calendar data. Changes sync in the background while Chrome is running. If two devices edit the same workspace independently, Ease asks which copy to keep. Site permissions, device unlock credentials, and connected calendar authorizations are managed on each device.
 
-Open **Settings → Encrypted sync** and set a passphrase to sync workspace preferences, snippets and folders, flashcards and review progress, tasks, and local Calendar events, holidays, and reminders. Enter the same passphrase on each device. Ease encrypts the workspace before sending it, and the passphrase is needed to open the cloud copy on a new device. Keep a copy of it. When the cloud and device have changed independently, Ease asks which version to keep. Site permissions, device unlock credentials, and connected calendar authorizations are managed separately on each device.
+Ease protects the stored workspace with an account-specific key issued by the Ease server after sign-in. To transfer a workspace from the previous sync system, open the current version on a device where that workspace is already accessible.
 
 **Calendar → Connected calendars** offers read-only connections. Ease refreshes on demand and attempts an hourly refresh while Chrome is running.
 
@@ -100,7 +100,7 @@ Open **Settings → Encrypted sync** and set a passphrase to sync workspace pref
 
 Ease asks for access to Google's sites when you sign in or connect Google Calendar. Calendar authorization is separate from sign-in. See the [Chrome OAuth integration guide](https://developer.chrome.com/docs/extensions/how-to/integrate/oauth) for stable IDs and client setup.
 
-Gmail and Outlook require separate provider consent and optional API host permissions. The inbox and account credentials are stored on this device. An email follow-up you save is a regular Calendar event and can be included in encrypted workspace sync. See the [mail OAuth setup](backend/README.md#configure-email-connections) for the deployment configuration.
+Gmail and Outlook require separate provider consent and optional API host permissions. The inbox and account credentials are stored on this device. An email follow-up you save is a regular Calendar event and syncs with your Google account. See the [mail OAuth setup](backend/README.md#configure-email-connections) for the deployment configuration.
 
 The module library marks AI Assistant as coming soon.
 
