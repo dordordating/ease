@@ -2926,6 +2926,11 @@ if (initialTranslationSelection !== null) {
   await focusQuickTask();
 } else if (workspaceRoute.get("open") === "todo" && savedTabAvailable("todo")) {
   switchTo("todo", false);
+} else if (workspaceRoute.get("open") === "spaces") {
+  switchTo(savedTabAvailable("spaces") ? "spaces" : "library", false);
+  const issue = workspaceRoute.get("spaceIssue");
+  if (issue === "no-match") reportError("spaceOmniboxNoMatch");
+  if (issue === "open-failed") reportError("spaceOpenFailed");
 } else if (workspaceRoute.get("open") === "account") {
   switchTo("settings", false);
   document.getElementById("ease-account")?.scrollIntoView({ block: "nearest" });

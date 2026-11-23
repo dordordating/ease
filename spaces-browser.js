@@ -7,6 +7,7 @@ const savedGroupsKey = id => `easeSpaceGroups:${id}`;
 const tabsAccess = { permissions: ["tabs"] };
 const groupsAccess = { permissions: ["tabGroups"] };
 const spaceGroupColors = { violet: "purple", blue: "blue", mint: "green", amber: "orange" };
+let opening = Promise.resolve();
 
 export async function forgetSpaceWindow(id) {
   await chrome.storage.session.remove([savedWindowKey(id), savedGroupsKey(id)]).catch(() => {});
@@ -139,7 +140,7 @@ async function restoreSpaceGroup(space, windowId, groupId, tabIds, savedGroups) 
   }
 }
 
-async function openSpace(space, { mode, windowId, canReadTabs, canGroup }) {
+async function openSpace(space, { mode, windowId, canReadTabs, canGroup, focused }) {
   if (!space.tabs.length) throw new SpaceError("spaceEmpty");
   const key = savedWindowKey(space.id);
   const grouped = mode === "group";
@@ -155,13 +156,13 @@ async function openSpace(space, { mode, windowId, canReadTabs, canGroup }) {
       target = await chrome.windows.get(entry.windowId).catch(() => undefined);
       if (!normalWindow(target)) target = undefined;
       if (target && !canReadTabs && entry.updatedAt === space.updatedAt) {
-        await chrome.windows.update(target.id, { focused: true });
+        if (focused) await chrome.windows.update(target.id, { focused: true });
         return { focused: true, count: 0 };
       }
       if (!canReadTabs) target = undefined;
     }
     if (!target) {
-      target = await chrome.windows.create({ url: tabs[0].url, focused: true, type: "normal" });
+      target = await chrome.windows.create({ url: tabs[0].url, focused, type: "normal" });
       if (!normalWindow(target)) throw new SpaceError("spaceOpenFailed");
       starter = target.tabs?.[0] ?? (await chrome.tabs.query({ windowId: target.id }))[0];
       if (!Number.isInteger(starter?.id)) throw new SpaceError("spaceOpenFailed");
@@ -251,14 +252,27 @@ async function openSpace(space, { mode, windowId, canReadTabs, canGroup }) {
     degraded ||= groupsFailed;
   }
   if (mode === "window") {
-    if (!createdWindow) await chrome.windows.update(target.id, { focused: true }).catch(() => { degraded = true; });
+    if (!createdWindow && focused) await chrome.windows.update(target.id, { focused: true }).catch(() => { degraded = true; });
     await chrome.storage.session.set({ [key]: { windowId: target.id, updatedAt: space.updatedAt } }).catch(() => {});
   }
   return { count: created.size, missed, degraded, focused: mode === "window" && !created.size };
 }
 
+export function openSavedSpace(id, { mode = "window", windowId, focused = true } = {}) {
+  const open = opening.then(async () => {
+    const workspace = await readWorkspace();
+    const space = workspace.spaces?.find(space => space.id === id);
+    if (!space) throw new SpaceError("spaceMissing");
+    const [canReadTabs, canGroup] = await Promise.all([
+      chrome.permissions.contains(tabsAccess), chrome.permissions.contains(groupsAccess)
+    ]);
+    return openSpace(space, { mode, windowId, canReadTabs, canGroup, focused });
+  });
+  opening = open.catch(() => {});
+  return open;
+}
+
 export function registerSpaceHandlers(queueWorkspace) {
-  let opening = Promise.resolve();
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     const workspaceUrl = chrome.runtime.getURL("workspace.html");
     if (message?.type !== spacesMessage || sender.id !== chrome.runtime.id || sender.tab?.incognito
@@ -284,17 +298,7 @@ export function registerSpaceHandlers(queueWorkspace) {
       if (!granted && message.mode === "group") throw new SpaceError("spaceGroupPermission");
       if (!granted && (capture || message.mode === "here")) throw new SpaceError("spaceTabPermission");
       if (capture) return saveCapture(message, windowId, queueWorkspace);
-      const open = opening.then(async () => {
-        const workspace = await readWorkspace();
-        const space = workspace.spaces?.find(space => space.id === message.id);
-        if (!space) throw new SpaceError("spaceMissing");
-        const [canReadTabs, canGroup] = await Promise.all([
-          chrome.permissions.contains(tabsAccess), chrome.permissions.contains(groupsAccess)
-        ]);
-        return openSpace(space, { mode: message.mode, windowId, canReadTabs, canGroup });
-      });
-      opening = open.catch(() => {});
-      return open;
+      return openSavedSpace(message.id, { mode: message.mode, windowId });
     });
     result.then(respond, error => respond({ error: error instanceof SpaceError ? error.code : capture ? "spaceSaveFailed" : "spaceOpenFailed" }));
     return true;

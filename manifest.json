@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ease",
-  "version": "0.4.31",
+  "version": "0.4.32",
   "description": "A fast, customizable workspace for everyday browser tasks.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -45,6 +45,7 @@
   "side_panel": {
     "default_path": "workspace.html?surface=panel"
   },
+  "omnibox": { "keyword": "ease" },
   "web_accessible_resources": [
     {
       "resources": ["translator-engine.js"],

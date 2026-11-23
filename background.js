@@ -20,6 +20,7 @@ import { changeFlashcardPreferences, FlashcardError, removeFlashcard, reviewFlas
 import { registerFlashcardReminderHandlers } from "./flashcard-reminders.js";
 import { registerTodoHandlers } from "./todo-background.js";
 import { forgetSpaceWindow, registerSpaceHandlers } from "./spaces-browser.js";
+import { registerSpaceOmnibox } from "./spaces-omnibox.js";
 import { updateSpaces } from "./spaces-store.js";
 import { taskAction } from "./todo-store.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
@@ -49,6 +50,7 @@ registerCalendarReminderHandlers();
 registerFlashcardReminderHandlers();
 registerTodoHandlers(queueWorkspace);
 registerSpaceHandlers(queueWorkspace);
+registerSpaceOmnibox();
 registerMarketAlertHandlers();
 registerMailHandlers();
 registerWorkspaceSyncHandlers(queueWorkspace);
