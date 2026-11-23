@@ -1,6 +1,6 @@
 import {
-  authorizeMailbox, composeMail, deliverMail, imapAccount, imapMessages, mailCapabilities, mailConfig, mailDomains,
-  mailPermission, mailboxMessages, mailboxProfile, mailProviders, MailError, readMailMessage, refreshMailToken, senderDomain
+  authorizeMailbox, composeMail, deliverMail, downloadMailAttachment, imapAccount, imapMessages, mailCapabilities, mailConfig, mailDomains,
+  mailPermission, mailboxMessages, mailboxProfile, mailProviders, MailError, readMailMessage, refreshMailToken, senderDomain, trashMailMessage
 } from "./mail-api.js";
 import { readWorkspace } from "./workspace-data.js";
 import { translate } from "./locales.js";
@@ -59,13 +59,19 @@ function changed() {
   return chrome.storage.session.set({ [mailUpdateKey]: crypto.randomUUID() }).catch(() => {});
 }
 
+function mergeMessages(current = [], older = []) {
+  const ids = new Set(current.map(message => message.id));
+  return [...current, ...older.filter(message => !ids.has(message.id))];
+}
+
 async function snapshot() {
   const saved = await accounts();
   return saved.map(record => {
     const { id, provider, email, preset, connection, smtp, messages = [], unread = 0, updatedAt = null, issue = null, notifications,
       sentMessages = [], sentIssue = null } = record;
-    const account = { id, provider, email, messages, unread, updatedAt, issue,
-      sentMessages, sentIssue,
+    const account = { id, provider, email, messages: mergeMessages(messages, record.inboxOlder), unread, updatedAt, issue,
+      sentMessages: mergeMessages(sentMessages, record.sentOlder), sentIssue,
+      hasMore: { inbox: Boolean(record.inboxCursor), sent: Boolean(record.sentCursor) },
       capabilities: mailCapabilities(record), notifications: { mode: notifications?.mode ?? "off", domains: notifications?.domains ?? [] } };
     if (provider === "imap") {
       const { host, security, username } = connection;
@@ -118,7 +124,7 @@ function registerAlertClicks() {
   });
 }
 
-async function refreshAccount(record) {
+async function refreshAccount(record, force) {
   let account = record;
   try {
     let inbox;
@@ -135,8 +141,11 @@ async function refreshAccount(record) {
       }
     }
     const now = Date.now();
-    const { notifications, count } = mailAlert(account, inbox.messages, now);
-    await save({ ...account, ...inbox, ...(notifications ? { notifications } : {}), issue: null, updatedAt: now });
+    const { next, ...listing } = inbox;
+    const older = force ? [] : account.inboxOlder ?? [];
+    const { notifications, count } = mailAlert(account, listing.messages, now);
+    await save({ ...account, ...listing, inboxOlder: older, inboxCursor: older.length ? account.inboxCursor : next ?? null,
+      ...(notifications ? { notifications } : {}), issue: null, updatedAt: now });
     await notifyNewMail(count).catch(() => {});
   } catch (error) {
     const issue = ["mailPermission", "mailReconnect", "mailImapBusy", "mailImapUnavailable"].includes(error?.code)
@@ -150,10 +159,10 @@ function refreshInbox(force = false) {
   refreshing = queue(async () => {
     const now = Date.now();
     const ready = (await accounts()).filter(account => (account.provider !== "imap" || account.issue !== "mailReconnect")
-      && (force || now - (account.updatedAt ?? 0) >= staleAfter));
+      && (force || account.inboxCursor === undefined || now - (account.updatedAt ?? 0) >= staleAfter));
     // Limit providers and partial failures to small batches, retaining other accounts' snapshots.
     for (let start = 0; start < ready.length; start += 3) {
-      await Promise.all(ready.slice(start, start + 3).map(refreshAccount));
+      await Promise.all(ready.slice(start, start + 3).map(account => refreshAccount(account, force)));
     }
     if (ready.length) await changed();
     return snapshot();
@@ -196,8 +205,8 @@ async function connectImap(data, replaceId) {
   const key = new TextEncoder().encode(JSON.stringify([host, username, security]));
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", key));
   account.id = "imap:" + Array.from(digest, value => value.toString(16).padStart(2, "0")).join("");
-  const inbox = await imapMessages(account.connection);
-  await saveLinked({ ...account, ...inbox, updatedAt: Date.now(), sentAt: null }, replaceId);
+  const { next, ...inbox } = await imapMessages(account.connection);
+  await saveLinked({ ...account, ...inbox, inboxOlder: [], inboxCursor: next ?? null, updatedAt: Date.now(), sentAt: null }, replaceId);
   return snapshot();
 }
 
@@ -222,7 +231,8 @@ async function readyAccount(record) {
 
 async function sentInbox(id, force) {
   const now = Date.now();
-  const selected = (await accounts()).filter(item => (!id || item.id === id) && (force || now - (item.sentAt ?? 0) >= staleAfter));
+  const selected = (await accounts()).filter(item => (!id || item.id === id)
+    && (force || item.sentCursor === undefined || now - (item.sentAt ?? 0) >= staleAfter));
   for (let index = 0; index < selected.length; index += 3) {
     await Promise.all(selected.slice(index, index + 3).map(async record => {
       let account = record;
@@ -230,13 +240,39 @@ async function sentInbox(id, force) {
         account = await readyAccount(record);
         const result = account.provider === "imap" ? await imapMessages(account.connection, "sent")
           : await mailboxMessages(account, account.accessToken, "sent");
-        await save({ ...account, sentMessages: result.messages, sentAt: Date.now(), sentIssue: result.available === false ? "mailSentUnavailable" : null });
+        const older = force ? [] : account.sentOlder ?? [];
+        await save({ ...account, sentMessages: result.messages, sentOlder: older, sentCursor: older.length ? account.sentCursor : result.next ?? null,
+          sentAt: Date.now(), sentIssue: result.available === false ? "mailSentUnavailable" : null });
       } catch {
         await save({ ...account, sentIssue: "mailSentUnavailable" });
       }
     }));
   }
   if (selected.length) await changed();
+  return snapshot();
+}
+
+async function loadMore(id, folder) {
+  const cursorKey = folder === "sent" ? "sentCursor" : "inboxCursor";
+  const olderKey = folder === "sent" ? "sentOlder" : "inboxOlder";
+  const selected = (await accounts()).filter(account => (!id || id === account.id) && account[cursorKey]);
+  let error;
+  for (let index = 0; index < selected.length; index += 3) {
+    await Promise.all(selected.slice(index, index + 3).map(async record => {
+      try {
+        const account = await readyAccount(record);
+        const cursor = account[cursorKey];
+        const result = account.provider === "imap" ? await imapMessages(account.connection, folder, cursor)
+          : await mailboxMessages(account, account.accessToken, folder, cursor);
+        const next = JSON.stringify(result.next) === JSON.stringify(cursor) ? null : result.next ?? null;
+        await save({ ...account, [olderKey]: mergeMessages(account[olderKey], result.messages), [cursorKey]: next });
+      } catch (issue) {
+        error = issue;
+      }
+    }));
+  }
+  if (selected.length) await changed();
+  if (error) throw error;
   return snapshot();
 }
 
@@ -254,12 +290,23 @@ async function accountAction(id, action, data, folder) {
     await save({ ...account, sentAt: null }).catch(() => {});
     return result;
   }
-  const messages = folder === "sent" ? account.sentMessages : account.messages;
-  const message = messages?.find(item => item.id === data);
+  const key = folder === "sent" ? "sentMessages" : "messages";
+  const older = folder === "sent" ? "sentOlder" : "inboxOlder";
+  const messageId = action === "attachment" ? data?.id : data;
+  const message = mergeMessages(account[key], account[older]).find(item => item.id === messageId);
   if (!message) throw new MailError("mailReadFailed");
+  if (action === "attachment") return downloadMailAttachment(account, message, data.attachment, account.accessToken, folder);
+  if (action === "trash") {
+    await trashMailMessage(account, message, account.accessToken, folder);
+    await save({ ...account, [key]: (account[key] ?? []).filter(item => item.id !== messageId),
+      [older]: (account[older] ?? []).filter(item => item.id !== messageId),
+      ...(folder === "inbox" && message.unread ? { unread: Math.max(0, (account.unread ?? 0) - 1) } : {}) }).then(changed).catch(() => {});
+    return snapshot();
+  }
   const result = await readMailMessage(account, message, account.accessToken, folder);
   if (folder === "inbox" && message.unread && result.marked) {
-    await save({ ...account, messages: messages.map(item => item.id === data ? { ...item, unread: false } : item),
+    const seen = item => item.id === messageId ? { ...item, unread: false } : item;
+    await save({ ...account, messages: (account.messages ?? []).map(seen), inboxOlder: (account.inboxOlder ?? []).map(seen),
       unread: Math.max(0, (account.unread ?? 0) - 1) }).then(changed).catch(() => {});
   }
   return result;
@@ -303,6 +350,8 @@ export function registerMailHandlers() {
     else if (message.action === "refresh") result = refreshInbox(message.force === true);
     else if (message.action === "sent" && typeof message.id === "string" && message.id.length <= 540) {
       result = queue(() => sentInbox(message.id, message.force === true));
+    } else if (message.action === "older" && typeof message.id === "string" && message.id.length <= 540) {
+      result = queue(() => loadMore(message.id, message.folder === "sent" ? "sent" : "inbox"));
     }
     else if (["connect", "upgrade"].includes(message.action) && Object.hasOwn(mailProviders, message.provider)) {
       if (connecting) {
@@ -329,7 +378,7 @@ export function registerMailHandlers() {
       const allowed = message.mode === "off" || (message.requestPermission
         ? chrome.permissions.request(notificationPermission) : chrome.permissions.contains(notificationPermission)).catch(() => false);
       result = updateNotifications(message.id, message.mode, message.domains, allowed);
-    } else if (["message", "send"].includes(message.action) && typeof message.id === "string" && message.id.length <= 540) {
+    } else if (["message", "send", "attachment", "trash"].includes(message.action) && typeof message.id === "string" && message.id.length <= 540) {
       result = queue(() => accountAction(message.id, message.action, message.data, message.folder === "sent" ? "sent" : "inbox"));
     } else if (message.action === "disconnect" && typeof message.id === "string" && message.id.length <= 540) {
       result = queue(async () => {

@@ -1,6 +1,7 @@
 """Read a small, read-only inbox snapshot over verified IMAP TLS."""
 
 import asyncio
+import base64
 import imaplib
 import ipaddress
 import re
@@ -16,6 +17,8 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+
+from .mail_mime import attachment_parts, decode_part, download_limit, message_id_pattern, structure
 
 router = APIRouter(prefix="/v1/mail/imap")
 tls = ssl.create_default_context()
@@ -77,12 +80,17 @@ class AuthenticationFailed(Exception):
 
 class ImapFolder(ImapSync):
     folder: Literal["inbox", "sent"] = "inbox"
+    before_uid: str | None = Field(default=None, pattern=r"^[1-9][0-9]{0,9}$")
+    uid_validity: str | None = Field(default=None, pattern=r"^[1-9][0-9]{0,9}$")
 
 
 class ImapMessage(ImapFolder):
     uid: str = Field(pattern=r"^[1-9][0-9]{0,9}$")
-    uid_validity: str | None = Field(default=None, pattern=r"^[1-9][0-9]{0,9}$")
     mark_read: bool = False
+
+
+class ImapAttachment(ImapMessage):
+    part: str = Field(pattern=r"^[1-9][0-9]{0,2}(\.[1-9][0-9]{0,2}){0,15}$")
 
 
 def public_address(value: str) -> bool:
@@ -213,7 +221,7 @@ _list_row = re.compile(rb'^\(([^)]*)\) (?:NIL|"[^"]*") (.+)$', re.IGNORECASE)
 _sent_names = {"sent", "sent items", "sent messages", "sent mail", "[gmail]/sent mail", "inbox.sent"}
 
 
-def sent_mailbox(client: PinnedImap) -> str | None:
+def special_mailbox(client: PinnedImap, role: bytes, names: set[str]) -> str | None:
     kind, rows = "NO", []
     if "SPECIAL-USE" in client.capabilities:
         try:
@@ -246,11 +254,15 @@ def sent_mailbox(client: PinnedImap) -> str | None:
             continue
         if not label or unsafe_control.search(label) or len(label) > 512:
             continue
-        if b"\\sent" in flags.lower().split():
+        if role in flags.lower().split():
             return client._quote(label)
-        if label.casefold() in _sent_names and fallback is None:
+        if label.casefold() in names and fallback is None:
             fallback = client._quote(label)
     return fallback
+
+
+def sent_mailbox(client: PinnedImap) -> str | None:
+    return special_mailbox(client, b"\\sent", _sent_names)
 
 
 def mailbox_validity(client: PinnedImap) -> str | None:
@@ -268,17 +280,27 @@ def mark_seen(client: PinnedImap, mailbox: str, uid: str, validity: str | None) 
         return False
 
 
+def select_message(client: PinnedImap, config: ImapMessage) -> tuple[str, str | None]:
+    mailbox = sent_mailbox(client) if config.folder == "sent" else "INBOX"
+    if not mailbox or client.select(mailbox, readonly=True)[0] != "OK":
+        raise HTTPException(404, "imap_message_missing")
+    validity = mailbox_validity(client)
+    if config.uid_validity and config.uid_validity != validity:
+        raise HTTPException(404, "imap_message_missing")
+    return mailbox, validity
+
+
+def imap_parts(client: PinnedImap, uid: str) -> list[dict]:
+    kind, rows = client.uid("FETCH", uid, "(UID BODYSTRUCTURE)")
+    return attachment_parts(structure(rows)) if kind == "OK" else []
+
+
 def read_message(config: ImapMessage, port: int, addresses: list[tuple]) -> dict:
     client = PinnedImap(config.host, port, addresses, config.security == "tls")
     try:
         client.upgrade()
         authenticate(client, config.username, config.password.get_secret_value())
-        mailbox = sent_mailbox(client) if config.folder == "sent" else "INBOX"
-        if not mailbox or client.select(mailbox, readonly=True)[0] != "OK":
-            raise HTTPException(404, "imap_message_missing")
-        validity = mailbox_validity(client)
-        if config.uid_validity and config.uid_validity != validity:
-            raise HTTPException(404, "imap_message_missing")
+        mailbox, validity = select_message(client, config)
         client.literal_limit = preview_limit
         kind, rows = client.uid("FETCH", config.uid, f"(UID FLAGS BODY.PEEK[]<0.{preview_limit}>)")
         for entry in rows if kind == "OK" and rows else ():
@@ -291,11 +313,22 @@ def read_message(config: ImapMessage, port: int, addresses: list[tuple]) -> dict
             part = message.get_body(preferencelist=("html", "plain"))
             content = part.get_content(errors="replace") if part else ""
             html = part is not None and part.get_content_type() == "text/html"
+            sender = message.get("Reply-To") or message.get("From")
+            reply_address = sender.addresses[0].addr_spec if getattr(sender, "addresses", ()) else ""
+            references = message_id_pattern.findall(str(message.get("References") or ""))[-12:]
+            message_id = str(message.get("Message-ID") or "")
+            try:
+                attachments = [{key: value for key, value in item.items() if key != "encoding"}
+                               for item in imap_parts(client, config.uid)]
+            except (imaplib.IMAP4.error, OSError):
+                attachments = []
             marked = config.folder == "inbox" and config.mark_read and (
                 b"\\Seen" in imaplib.ParseFlags(entry[0]) or mark_seen(client, mailbox, config.uid, validity)
             )
             return {"body": content[:96_000], "format": "html" if html else "text", "marked": marked,
-                    "partial": len(entry[1]) >= preview_limit or len(content) > 96_000}
+                    "partial": len(entry[1]) >= preview_limit or len(content) > 96_000, "attachments": attachments,
+                    "replyAddress": reply_address, "references": references,
+                    "messageId": message_id if message_id_pattern.fullmatch(message_id) else ""}
         raise HTTPException(404, "imap_message_missing")
     finally:
         client.shutdown()
@@ -323,6 +356,8 @@ def inbox_message(item: object, folder: str = "inbox") -> dict | None:
     if not isinstance(item, tuple) or len(item) != 2 or not all(isinstance(part, bytes) for part in item):
         return None
     attributes, headers = item
+    if b"\\Deleted" in imaplib.ParseFlags(attributes):
+        return None
     uid = uid_pattern.search(attributes)
     stamp = internal_date.search(attributes)
     if not uid or not stamp:
@@ -362,24 +397,38 @@ def read_inbox(config: ImapSync, port: int, addresses: list[tuple], folder: str 
         if kind != "OK" or not selected or not selected[0] or not re.fullmatch(rb"\d{1,10}", selected[0]):
             raise imaplib.IMAP4.error("INBOX unavailable")
         total = int(selected[0])
+        if isinstance(config, ImapFolder) and config.before_uid:
+            if config.uid_validity and config.uid_validity != validity:
+                raise HTTPException(409, "imap_cursor_expired")
+            kind, anchor = client.uid("FETCH", config.before_uid, "(UID)")
+            first = re.match(rb"(\d+) \(", anchor[0]) if kind == "OK" and anchor and isinstance(anchor[0], bytes) else None
+            if not first:
+                raise HTTPException(409, "imap_cursor_expired")
+            total = int(first[1]) - 1
         messages = []
+        next_cursor = None
         if total:
             person = "TO" if folder == "sent" else "FROM"
+            start = max(1, total - snapshot_size + 1)
             kind, rows = client.fetch(
-                f"{max(1, total - snapshot_size + 1)}:{total}",
+                f"{start}:{total}",
                 f"(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS ({person} SUBJECT)]<0.{header_limit}>)",
             )
             if kind != "OK":
                 raise imaplib.IMAP4.error("INBOX fetch failed")
             messages = [message for item in rows if (message := inbox_message(item, folder))][:snapshot_size]
             messages.sort(key=lambda message: message["received"], reverse=True)
+            uids = [uid[1].decode() for item in rows if isinstance(item, tuple) and (uid := uid_pattern.search(item[0]))]
+            if start > 1 and uids:
+                next_cursor = {"before_uid": min(uids, key=int), **({"uid_validity": validity} if validity else {})}
         if validity:
             for message in messages:
                 message["uidValidity"] = validity
         if folder == "sent":
             for message in messages:
                 message["unread"] = False
-        return {"messages": messages, "unread": int(unread[1]) if unread else sum(row["unread"] for row in messages)}
+        return {"messages": messages, "unread": int(unread[1]) if unread else sum(row["unread"] for row in messages),
+                **({"next": next_cursor} if next_cursor else {})}
     finally:
         client.shutdown()
 
@@ -435,3 +484,75 @@ async def sync_imap(payload: ImapFolder, request: Request):
 async def imap_message(payload: ImapMessage, request: Request):
     port = 993 if payload.security == "tls" else 143
     return await run_mail_io(request, payload.host, port, lambda addresses: read_message(payload, port, addresses))
+
+
+def get_attachment(config: ImapAttachment, port: int, addresses: list[tuple]) -> dict:
+    client = PinnedImap(config.host, port, addresses, config.security == "tls")
+    try:
+        client.upgrade()
+        authenticate(client, config.username, config.password.get_secret_value())
+        select_message(client, config)
+        part = next((item for item in imap_parts(client, config.uid) if item["id"] == config.part), None)
+        if not part:
+            raise HTTPException(404, "imap_attachment_missing")
+        if part["size"] is not None and part["size"] > download_limit:
+            raise HTTPException(413, "imap_attachment_large")
+        wire_limit = 8 * 1024 * 1024
+        client.literal_limit = wire_limit
+        client.remaining = wire_limit + 32 * 1024
+        status, rows = client.uid("FETCH", config.uid, f"(UID BODY.PEEK[{config.part}]<0.{wire_limit}>)")
+        for row in rows if status == "OK" and rows else ():
+            if not isinstance(row, tuple):
+                continue
+            uid = uid_pattern.search(row[0])
+            if not uid or uid[1].decode() != config.uid:
+                continue
+            if len(row[1]) >= wire_limit:
+                raise HTTPException(413, "imap_attachment_large")
+            data = decode_part(row[1], part["encoding"])
+            if len(data) > download_limit:
+                raise HTTPException(413, "imap_attachment_large")
+            return {"name": part["name"], "data": base64.b64encode(data).decode("ascii")}
+        raise HTTPException(404, "imap_attachment_missing")
+    finally:
+        client.shutdown()
+
+
+@router.post("/attachment")
+async def imap_attachment(payload: ImapAttachment, request: Request):
+    port = 993 if payload.security == "tls" else 143
+    return await run_mail_io(request, payload.host, port, lambda addresses: get_attachment(payload, port, addresses))
+
+
+def trash_message(config: ImapMessage, port: int, addresses: list[tuple]) -> dict:
+    client = PinnedImap(config.host, port, addresses, config.security == "tls")
+    try:
+        client.upgrade()
+        authenticate(client, config.username, config.password.get_secret_value())
+        mailbox = sent_mailbox(client) if config.folder == "sent" else "INBOX"
+        trash = special_mailbox(client, b"\\trash", {"trash", "deleted items", "deleted messages", "[gmail]/trash", "inbox.trash"})
+        if not trash or not mailbox or client.select(mailbox, readonly=False)[0] != "OK":
+            raise HTTPException(409, "imap_trash_unavailable")
+        validity = mailbox_validity(client)
+        if config.uid_validity and config.uid_validity != validity:
+            raise HTTPException(404, "imap_message_missing")
+        kind, identifiers = client.uid("FETCH", config.uid, "(UID)")
+        if kind != "OK" or not any(identifiers or ()):
+            raise HTTPException(404, "imap_message_missing")
+        if "MOVE" in client.capabilities:
+            if client.uid("MOVE", config.uid, trash)[0] != "OK":
+                raise HTTPException(502, "imap_trash_failed")
+        else:
+            if client.uid("COPY", config.uid, trash)[0] != "OK" or client.uid("STORE", config.uid, "+FLAGS.SILENT", r"(\Deleted)")[0] != "OK":
+                raise HTTPException(502, "imap_trash_failed")
+            if "UIDPLUS" in client.capabilities:
+                client.uid("EXPUNGE", config.uid)
+        return {"trashed": True}
+    finally:
+        client.shutdown()
+
+
+@router.post("/trash")
+async def imap_trash(payload: ImapMessage, request: Request):
+    port = 993 if payload.security == "tls" else 143
+    return await run_mail_io(request, payload.host, port, lambda addresses: trash_message(payload, port, addresses))

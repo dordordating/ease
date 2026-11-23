@@ -1,4 +1,5 @@
-import { imapPresets, mailMessageLink, mailPermission, mailProviders } from "./mail-api.js";
+import { encodeMailBytes, htmlText, imapPresets, mailAddress, mailDownloadLimit, mailFileName, mailMessageLink,
+  mailPermission, mailProviders, mailUploadLimit } from "./mail-api.js";
 import { htmlMailFrame } from "./mail-html.js";
 
 export function inboxMessages(accounts, folder = "inbox") {
@@ -14,7 +15,8 @@ function element(tag, className, text) {
   return item;
 }
 
-export function renderMail(container, { dateLocale, t, icon, settingsButton, composeButton, accounts, send, followUp, requestInWorker }) {
+export function renderMail(container, { dateLocale, t, icon, settingsButton, composeButton, accounts, send, followUp,
+  requestInWorker, openMenu, confirmDelete }) {
   const dates = new Intl.DateTimeFormat(dateLocale, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   const numbers = new Intl.NumberFormat(dateLocale);
   let accountId = "";
@@ -34,6 +36,10 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   let composing = false;
   let alertAccountId;
   const draftKey = "easeMailComposeDraft";
+  let files = [];
+  let fileWork = false;
+  let reply;
+  let forwarded;
 
   const module = element("section", "mail-module");
   const inbox = element("section", "mail-inbox");
@@ -51,11 +57,23 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   const reload = control("mailRefresh", "refresh", () => refreshFolder(true), true);
   const accountSummary = element("p", "mail-summary");
   const list = element("ul", "mail-list");
+  const more = control("mailLoadMore", "chevron-down", () => act("older", { id: accountId, folder }));
+  more.classList.add("mail-load-more");
   const reader = element("section", "mail-reader");
   const compose = element("form", "mail-imap-form mail-compose");
   const composeAccount = element("select", "translator-select");
   composeAccount.setAttribute("aria-label", t("mailComposeFrom"));
   const composeTo = field("mailComposeTo", { maxLength: 2600, required: true, inputMode: "email" });
+  const composeCc = field("mailCc", { maxLength: 2600, inputMode: "email" });
+  const ccButton = control("mailCc", null, () => {
+    composeCc.label.hidden = !composeCc.label.hidden;
+    ccButton.setAttribute("aria-expanded", String(!composeCc.label.hidden));
+    if (!composeCc.label.hidden) composeCc.input.focus();
+  });
+  ccButton.setAttribute("aria-expanded", "false");
+  composeCc.label.hidden = true;
+  const recipients = element("div", "mail-compose-recipients");
+  recipients.append(composeTo.label, ccButton);
   const composeSubject = field("mailComposeSubject", { maxLength: 180, dir: "auto" });
   const composeText = element("textarea", "translator-textarea");
   composeText.maxLength = 5000;
@@ -67,10 +85,20 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   const sendButton = element("button", "primary-button", t("mailSend"));
   sendButton.type = "submit";
   const composeActions = element("div", "mail-provider-buttons");
+  const fileInput = element("input");
+  fileInput.type = "file";
+  fileInput.multiple = true;
+  fileInput.hidden = true;
+  const fileList = element("ul", "mail-attachments");
+  const attach = control("mailAttach", "attach", () => fileInput.click());
+  const originals = control("mailIncludeOriginals", "attach", includeOriginals);
+  const fileActions = element("div", "mail-provider-buttons");
+  fileActions.append(attach, originals);
   const enableSend = control("mailSendPermissionAction", null, upgradeSender);
   const composeCancel = control("cancel", null, () => closeComposer());
   composeActions.append(sendButton, enableSend, composeCancel);
-  compose.append(element("h3", "", t("mailCompose")), composeAccount, composeTo.label, composeSubject.label, composeBody, composeActions);
+  compose.append(element("h3", "", t("mailCompose")), composeAccount, recipients, composeCc.label, composeSubject.label, composeBody,
+    fileInput, fileActions, fileList, composeActions);
   const state = element("p", "mail-state");
   state.setAttribute("role", "status");
   const settingsTitle = element("h2", "", t("mailAccounts"));
@@ -117,7 +145,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   imapActions.append(submit, cancel);
   imap.append(imapTitle, imapHint, emailField.label, hostField.label, transport, usernameField.label, passwordField.label, outgoing, imapActions);
   controls.append(accountSelect, unread, reload);
-  inbox.append(folderTabs, controls, accountSummary, list);
+  inbox.append(folderTabs, controls, accountSummary, list, more);
   settings.append(settingsTitle, settingsHint, connect, imap, alerts, linked);
   module.append(state, inbox, reader, compose, settings);
   container.append(module);
@@ -253,10 +281,11 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     const account = accounts.find(item => item.id === message.accountId);
     const actions = element("div", "mail-provider-buttons");
     actions.append(control("calendarBack", null, () => { opened = undefined; render(); }));
-    if (message.url) actions.append(control("mailOpenMessage", "link", () => {
-      chrome.tabs.create({ url: message.url }).catch(() => {});
-    }));
-    actions.append(control("mailFollowUp", "calendar", () => followUp(message), true));
+    const replyButton = control("mailReply", "reply", () => respondTo(message, result, false), true);
+    const forwardButton = control("mailForward", "forward", () => respondTo(message, result, true), true);
+    replyButton.disabled = !result || busy;
+    forwardButton.disabled = !result || busy;
+    actions.append(replyButton, forwardButton, messageMenu(message));
     const subject = element("h3", "", message.subject || t("mailNoSubject"));
     subject.dir = "auto";
     const sender = element("p", "mail-hint", message.folder === "sent"
@@ -281,6 +310,19 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
       if (body.tagName !== "IFRAME") body.dir = "auto";
       reader.append(body);
       if (result.partial) reader.append(element("p", "mail-hint", t("mailPartialBody")));
+      if (result.attachments?.length) {
+        const attachments = element("ul", "mail-attachments");
+        attachments.setAttribute("aria-label", t("mailAttachments"));
+        for (const item of result.attachments) {
+          const row = fileRow(item.name);
+          const download = control("mailDownload", "download", () => saveAttachment(message, item, download), true);
+          download.disabled = item.size > mailDownloadLimit;
+          if (download.disabled) download.title = t("mailDownloadLimit");
+          row.append(download);
+          attachments.append(row);
+        }
+        reader.append(attachments);
+      }
       if (message.folder !== "sent" && message.unread && !result.marked) {
         if (account && account.provider !== "imap" && !account.capabilities.mark) {
           const upgrade = control("mailMarkPermission", null, async () => {
@@ -295,32 +337,124 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     }
   }
 
-  async function openComposer() {
+  function messageMenu(message) {
+    const button = control("mailActions", "more", () => openMenu(button, action => {
+      if (message.url) action("mailOpenMessage", "link", () => chrome.tabs.create({ url: message.url }).catch(() => {}));
+      else {
+        const account = accounts.find(item => item.id === message.accountId);
+        const url = imapPresets[account?.imap?.preset]?.web;
+        if (url) action("mailOpenWebmail", "link", () => chrome.tabs.create({ url }).catch(() => {}));
+      }
+      action("mailFollowUp", "calendar", () => followUp(message));
+      action("mailDelete", "trash", () => deleteMessage(message));
+    }), true);
+    button.setAttribute("aria-haspopup", "menu");
+    button.disabled = busy;
+    return button;
+  }
+
+  async function deleteMessage(message) {
+    if (busy) return;
+    const account = accounts.find(item => item.id === message.accountId);
+    if (!account) return;
+    if (!account.capabilities.mark && account.provider !== "imap") {
+      if (!await act("upgrade", { id: account.id, provider: account.provider, send: account.capabilities.send, mark: true })) return;
+    }
+    confirmDelete(message.subject || t("mailNoSubject"), async () => {
+      const success = await act("trash", { id: message.accountId, data: message.id, folder: message.folder });
+      if (success) {
+        if (opened?.message === message) opened = undefined;
+        error = "mailDeleted";
+        render();
+      }
+      return success;
+    });
+  }
+
+  function fileRow(name) {
+    const row = element("li", "mail-file");
+    const title = element("bdi", "", name);
+    title.title = name;
+    row.append(title);
+    return row;
+  }
+
+  async function fetchAttachment(message, item) {
+    const answer = await send("attachment", { id: message.accountId, folder: message.folder, data: { id: message.id, attachment: item.id } });
+    if (!answer?.ok) throw Object.assign(new Error("Attachment request failed"), { code: answer?.error ?? "mailAttachmentFailed" });
+    return answer.value;
+  }
+
+  async function saveAttachment(message, item, button) {
+    button.disabled = true;
+    try {
+      const file = await fetchAttachment(message, item);
+      const bytes = Uint8Array.from(atob(file.data), character => character.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+      const anchor = element("a");
+      anchor.href = url;
+      anchor.download = mailFileName(file.name);
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 15_000);
+    } catch (issue) {
+      if (!disposed) { error = issue.code ?? "mailAttachmentFailed"; render(); }
+    } finally { button.disabled = false; }
+  }
+
+  function respondTo(message, result, forward) {
+    if (!result) return;
+    const title = message.subject || t("mailNoSubject");
+    const body = result.format === "html" ? htmlText(result.body) : result.body;
+    const quoted = body.trim().slice(0, 3200).split(/\r?\n/u).map(line => `> ${line}`).join("\n").slice(0, 3700);
+    const prefix = forward ? "Fwd" : "Re";
+    const subject = (new RegExp(`^${prefix}:`, "iu").test(title) ? title : `${prefix}: ${title}`).slice(0, 180);
+    openComposer({ id: message.accountId, to: forward ? "" : result.replyAddress || mailAddress(message.sender), subject,
+      body: `\n\n${quoted}`, reply: forward ? undefined : { messageId: result.messageId, references: result.references,
+        threadId: result.threadId, accountId: message.accountId },
+      forwarded: forward ? { message, attachments: result.attachments ?? [] } : undefined });
+  }
+
+  async function openComposer(seed) {
     if (!accounts.length || busy) return;
     opened = undefined;
     managing = false;
     closeImap();
     composing = true;
-    const draft = (await chrome.storage.session.get(draftKey).catch(() => ({})))[draftKey];
+    const draft = seed ?? (await chrome.storage.session.get(draftKey).catch(() => ({})))[draftKey];
     if (disposed || !composing) return;
     render();
+    compose.reset();
+    files = draft?.attachments ?? [];
+    reply = draft?.reply;
+    forwarded = draft?.forwarded;
+    composeCc.label.hidden = !draft?.cc;
+    ccButton.setAttribute("aria-expanded", String(!composeCc.label.hidden));
     if (draft) {
       if (accounts.some(account => account.id === draft.id)) composeAccount.value = draft.id;
       composeTo.input.value = draft.to ?? "";
+      composeCc.input.value = draft.cc ?? "";
       composeSubject.input.value = draft.subject ?? "";
       composeText.value = draft.body ?? "";
     }
     renderComposer();
-    composeTo.input.focus();
+    (seed?.to ? composeText : composeTo.input).focus();
+    if (seed?.to) composeText.setSelectionRange(0, 0);
   }
 
   function composeDraft() {
-    return { id: composeAccount.value, to: composeTo.input.value, subject: composeSubject.input.value, body: composeText.value };
+    return { id: composeAccount.value, to: composeTo.input.value, cc: composeCc.input.value, subject: composeSubject.input.value,
+      body: composeText.value, attachments: files,
+      ...(reply ? { reply: { ...reply, threadId: composeAccount.value === reply.accountId ? reply.threadId : undefined } } : {}) };
   }
 
   function closeComposer() {
     composing = false;
     compose.reset();
+    files = [];
+    reply = undefined;
+    forwarded = undefined;
     chrome.storage.session.remove(draftKey).catch(() => {});
     render();
   }
@@ -335,12 +469,67 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     enableSend.lastElementChild.textContent = t(current?.provider === "imap" ? "mailSmtpSettings" : "mailSendPermissionAction");
     for (const item of compose.elements) item.disabled = busy;
     sendButton.disabled = busy || !canSend;
+    sendButton.disabled ||= fileWork;
+    attach.disabled = busy || fileWork;
+    originals.hidden = !forwarded?.attachments?.length;
+    originals.disabled = busy || fileWork;
+    fileList.replaceChildren(...files.map((file, index) => {
+      const row = fileRow(file.name);
+      const remove = control("remove", "close", () => { files = files.filter((_, selected) => selected !== index); renderComposer(); }, true);
+      remove.disabled = busy || fileWork;
+      row.append(remove);
+      return row;
+    }));
+  }
+
+  function addFiles(items) {
+    const size = file => file.data.length / 4 * 3 - (file.data.endsWith("==") ? 2 : file.data.endsWith("=") ? 1 : 0);
+    const next = [...files, ...items];
+    if (next.length > 5 || next.reduce((sum, file) => sum + size(file), 0) > mailUploadLimit) {
+      error = "mailUploadLimit";
+      return false;
+    }
+    files = next;
+    error = undefined;
+    return true;
+  }
+
+  fileInput.addEventListener("change", async () => {
+    const selected = Array.from(fileInput.files);
+    fileInput.value = "";
+    if (!selected.length || fileWork) return;
+    if (selected.length + files.length > 5 || selected.reduce((sum, file) => sum + file.size, 0) > mailUploadLimit) {
+      error = "mailUploadLimit"; render(); return;
+    }
+    fileWork = true;
+    renderComposer();
+    try {
+      const items = await Promise.all(selected.map(async file => ({ name: mailFileName(file.name), data: encodeMailBytes(new Uint8Array(await file.arrayBuffer())) })));
+      if (!disposed && composing) addFiles(items);
+    } catch { error = "mailAttachmentFailed"; }
+    finally { fileWork = false; if (!disposed) render(); }
+  });
+
+  async function includeOriginals() {
+    const source = forwarded;
+    if (fileWork || !source?.attachments.length) return;
+    if (source.attachments.length + files.length > 5 || source.attachments.reduce((sum, item) => sum + (item.size ?? 0), 0) > mailUploadLimit) {
+      error = "mailUploadLimit"; render(); return;
+    }
+    fileWork = true;
+    renderComposer();
+    try {
+      const copies = [];
+      for (const item of source.attachments) copies.push(await fetchAttachment(source.message, item));
+      if (!disposed && composing && addFiles(copies)) forwarded = undefined;
+    } catch (issue) { error = issue.code ?? "mailAttachmentFailed"; }
+    finally { fileWork = false; if (!disposed) render(); }
   }
 
   async function upgradeSender() {
     const account = accounts.find(item => item.id === composeAccount.value);
     if (!account || busy) return;
-    await chrome.storage.session.set({ [draftKey]: composeDraft() }).catch(() => {});
+    await chrome.storage.session.set({ [draftKey]: { ...composeDraft(), ...(forwarded ? { forwarded } : {}) } }).catch(() => {});
     if (account.provider === "imap") {
       composing = false;
       managing = true;
@@ -490,6 +679,8 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     accountSummary.hidden = sent && !selected.some(item => item.sentIssue);
     accountSummary.textContent = sent ? t("mailSentUnavailable") : t("mailUnreadCount", { count: numbers.format(unreadCount) });
     const rows = inboxMessages(selected, folder).filter(row => sent || !unreadOnly || row.unread);
+    more.hidden = !selected.some(account => account.hasMore?.[folder]);
+    more.disabled = busy;
     list.replaceChildren(...rows.map(message => {
       const row = element("li", "mail-row");
       row.dataset.unread = String(message.unread);
@@ -514,7 +705,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
       open.append(subject, sender, detail);
       if (message.unread) open.append(element("span", "mail-unread-dot"));
       row.append(open);
-      row.append(control("mailFollowUp", "calendar", () => followUp(message), true));
+      row.append(messageMenu(message));
       return row;
     }));
     if (!rows.length) list.append(element("li", "mail-empty", t(sent ? "mailSentEmpty" : unreadOnly ? "mailNoUnread" : "mailEmpty")));

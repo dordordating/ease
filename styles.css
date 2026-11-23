@@ -5189,3 +5189,44 @@ button.mail-row-open:hover {
   border-radius: var(--radius);
   background: #fff;
 }
+
+.mail-load-more {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  margin-block-start: 7px;
+}
+
+.mail-compose-recipients {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 5px;
+}
+
+.mail-attachments {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mail-file {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  min-inline-size: 0;
+  padding: 3px 7px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 7px;
+  background: var(--surface);
+  font-size: 11px;
+}
+
+.mail-file bdi {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

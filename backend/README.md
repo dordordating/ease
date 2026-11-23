@@ -39,6 +39,8 @@ Allow outbound TCP 993 and 143 from the Ease API container. The API reads the in
 
 The reader fetches the preferred HTML or plain-text MIME part on demand through `/v1/mail/imap/message`. Inbox opens can set the IMAP `\\Seen` flag by UID. Sent discovery uses the IMAP `\\Sent` role and falls back to common mailbox names. IMAP accounts can submit via `/v1/mail/smtp/send` with SMTP STARTTLS on 587 or implicit TLS on 465. After SMTP accepts a message, Ease checks for a server-side copy by Message-ID before appending a copy to Sent. Allow outbound TCP on the used SMTP port and keep request-body logging disabled on both routes.
 
+IMAP pagination uses the previous page’s UID and mailbox validity. `/v1/mail/imap/attachment` downloads only the selected MIME part, with a 5 MiB decoded limit. SMTP accepts up to 2 MiB of decoded attachments in total. The SMTP request-body limit is 3 MiB to accommodate Base64 and message fields. Disable proxy request-body logging on the attachment and Trash routes as well. IMAP Trash uses the server’s mailbox role when available and never expunges unrelated messages.
+
 ## Translation tiers and limits
 
 | Tier | Default OpenRouter model | Override |

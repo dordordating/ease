@@ -791,7 +791,7 @@ function openWorkspaceMenu(anchor, point, label, populate) {
       }
     });
     item.setAttribute("role", "menuitem");
-    if (key === "deleteFolder" || key === "clipboardHistoryClear") item.dataset.action = "delete";
+    if (["deleteFolder", "clipboardHistoryClear", "mailDelete"].includes(key)) item.dataset.action = "delete";
     group.append(item);
   }
 
@@ -1403,7 +1403,14 @@ function render() {
     mailLocale = dateLocale;
     mailController = renderMail(view, {
       dateLocale, t, icon, settingsButton: mailSettings, composeButton: composeMail, accounts: mailAccounts, send: sendMail,
-      followUp: followUpMail, requestInWorker: inToolbarPopup
+      followUp: followUpMail, requestInWorker: inToolbarPopup,
+      openMenu: (anchor, populate) => openWorkspaceMenu(anchor, undefined, t("mailActions"), populate),
+      confirmDelete: (subject, remove) => {
+        if (editor.open) return;
+        const fields = openEditor(t("mailDelete"), t("mailDelete"), remove);
+        fields.append(node("p", "", t("mailDeleteConfirm", { subject })));
+        editor.showModal();
+      }
     });
   } else if (activePage === "library") renderLibrary();
   else if (activePage === "settings") renderSettings();

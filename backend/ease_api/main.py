@@ -121,25 +121,47 @@ class RequestBodyLimit:
     def __init__(self, app: ASGIApp, limit: int):
         self.app = app
         self.limit = limit
+        self.mail_uploads = asyncio.Semaphore(4)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
         if scope["type"] != "http" or scope["method"] != "POST":
             await self.app(scope, receive, send)
             return
+        if scope.get("path") != "/v1/mail/smtp/send":
+            await self.read_body(scope, receive, send, self.limit)
+            return
 
+        try:
+            await asyncio.wait_for(self.mail_uploads.acquire(), 0.75)
+        except TimeoutError:
+            response = JSONResponse({"detail": "mail_busy"}, status_code=429, headers={"Retry-After": "5"})
+            await response(scope, receive, send)
+            return
+        try:
+            await self.read_body(scope, receive, send, 3 * 1024 * 1024, timeout=20)
+        finally:
+            self.mail_uploads.release()
+
+    async def read_body(self, scope: Scope, receive: Receive, send: Send, limit: int, timeout: int | None = None):
         body = bytearray()
-        while True:
-            message = await receive()
-            if message["type"] == "http.disconnect":
-                return
-            chunk = message.get("body", b"")
-            if len(body) + len(chunk) > self.limit:
-                response = JSONResponse({"detail": "request_too_large"}, status_code=413)
-                await response(scope, receive, send)
-                return
-            body.extend(chunk)
-            if not message.get("more_body", False):
-                break
+        try:
+            async with asyncio.timeout(timeout):
+                while True:
+                    message = await receive()
+                    if message["type"] == "http.disconnect":
+                        return
+                    chunk = message.get("body", b"")
+                    if len(body) + len(chunk) > limit:
+                        response = JSONResponse({"detail": "request_too_large"}, status_code=413)
+                        await response(scope, receive, send)
+                        return
+                    body.extend(chunk)
+                    if not message.get("more_body", False):
+                        break
+        except TimeoutError:
+            response = JSONResponse({"detail": "upload_timeout"}, status_code=408)
+            await response(scope, receive, send)
+            return
 
         sent = False
 

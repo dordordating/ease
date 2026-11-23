@@ -1,6 +1,7 @@
 """Submit a single plain-text message using the user's verified SMTP server."""
 
 import imaplib
+import base64
 import re
 import smtplib
 from email.message import EmailMessage
@@ -11,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import Field, field_validator
 
 from .mail_imap import AuthenticationFailed, ImapSync, PinnedMailIO, append_sent, run_mail_io
+from .mail_mime import AttachedFile, message_id_pattern, upload_limit
 
 router = APIRouter(prefix="/v1/mail/smtp")
 address_pattern = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", re.ASCII)
@@ -25,19 +27,42 @@ def address(value: str) -> str:
 class SubmitMessage(ImapSync):
     sender: str = Field(max_length=254)
     to: list[str] = Field(min_length=1, max_length=10)
+    cc: list[str] = Field(default_factory=list, max_length=10)
     subject: str = Field(max_length=180)
     body: str = Field(min_length=1, max_length=5000)
     copy_to: ImapSync | None = None
+    attachments: list[AttachedFile] = Field(default_factory=list, max_length=5)
+    reply_to_id: str | None = Field(default=None, max_length=324)
+    references: list[str] = Field(default_factory=list, max_length=13)
 
     @field_validator("sender")
     @classmethod
     def sender_address(cls, value: str) -> str:
         return address(value)
 
-    @field_validator("to")
+    @field_validator("to", "cc")
     @classmethod
     def recipients(cls, values: list[str]) -> list[str]:
         return list(dict.fromkeys(address(item) for item in values))
+
+    @field_validator("attachments")
+    @classmethod
+    def total_size(cls, items):
+        if sum(len(base64.b64decode(item.data)) for item in items) > upload_limit:
+            raise ValueError("Attachments too large")
+        return items
+
+    @field_validator("reply_to_id")
+    @classmethod
+    def reference_id(cls, item):
+        if item is not None and not message_id_pattern.fullmatch(item):
+            raise ValueError("Invalid message ID")
+        return item
+
+    @field_validator("references")
+    @classmethod
+    def reference_ids(cls, values):
+        return [cls.reference_id(item) for item in values]
 
     @field_validator("subject")
     @classmethod
@@ -109,9 +134,17 @@ def submit(config: SubmitMessage, port: int, addresses: list[tuple]) -> tuple[by
             raise AuthenticationFailed from None
         message = EmailMessage(policy=SMTP)
         message["From"], message["To"], message["Subject"] = config.sender, ", ".join(config.to), config.subject
+        if config.cc:
+            message["Cc"] = ", ".join(config.cc)
+        if config.reply_to_id:
+            message["In-Reply-To"] = config.reply_to_id
+            message["References"] = " ".join(dict.fromkeys([*config.references, config.reply_to_id]))
         message["Date"], message["Message-ID"] = formatdate(localtime=False), make_msgid(domain=config.sender.split("@")[-1])
         message.set_content(config.body, cte="base64")
-        if client.mail(config.sender)[0] != 250 or any(client.rcpt(recipient)[0] not in (250, 251, 252) for recipient in config.to):
+        for item in config.attachments:
+            message.add_attachment(base64.b64decode(item.data), maintype="application", subtype="octet-stream", filename=item.name)
+        recipients = dict.fromkeys([*config.to, *config.cc])
+        if client.mail(config.sender)[0] != 250 or any(client.rcpt(recipient)[0] not in (250, 251, 252) for recipient in recipients):
             raise HTTPException(422, "smtp_recipient_rejected")
         raw = message.as_bytes()
         try:
