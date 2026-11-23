@@ -447,7 +447,7 @@ export function renderFlashcards(container, {
     const reminder = flashcardReminderPreferences(state);
     let reminderEnabled = reminder.enabled;
     const time = createTimePicker({ locale, t, label: t("flashcardsReminderTime"), value: reminder.time });
-    for (const control of time.element.querySelectorAll("select")) control.dataset.flashcardsWrite = "";
+    for (const control of time.element.querySelectorAll(":scope > input, :scope > button")) control.dataset.flashcardsWrite = "";
     const timeField = element("div", "field");
     timeField.append(element("span", "", t("flashcardsReminderTime")), time.element);
     const reminderToggle = button(t("flashcardsReminderEnable"), "secondary-button translator-inline-switch", () => {

@@ -144,7 +144,7 @@ export function renderTodo(container, {
     const choices = node("div", "todo-layout-choices");
     choices.setAttribute("role", "group");
     choices.setAttribute("aria-label", t("todoLayout"));
-    for (const [mode, label, symbol] of [["tabs", "todoLayoutTabs", "grid"], ["stacked", "todoLayoutStacked", "list"]]) {
+    for (const [mode, label, symbol] of [["tabs", "todoLayoutTabs", "horizontal-tabs"], ["stacked", "todoLayoutStacked", "list"]]) {
       const choice = button(t(label), () => {
         if ((state.layout ?? "tabs") !== mode) change("todo-preferences", { layout: mode });
       }, { glyph: symbol });
@@ -174,7 +174,13 @@ export function renderTodo(container, {
     const retention = node("label", "field");
     const duration = node("select", "calendar-select");
     duration.add(new Option(t("todoRetentionForever"), ""));
-    for (const days of taskRetentionOptions) duration.add(new Option(t("todoRetentionDays", { count: formatNumber.format(days) }), String(days)));
+    const options = [...taskRetentionOptions];
+    if (state.retentionDays && !options.includes(state.retentionDays)) options.push(state.retentionDays);
+    const special = { 0.5: "todoRetentionHours", 1: "todoRetentionDay", 7: "todoRetentionWeek" };
+    for (const days of options) {
+      const label = t(special[days] ?? "todoRetentionDays", { count: formatNumber.format(days === 0.5 ? 12 : days) });
+      duration.add(new Option(label, String(days)));
+    }
     duration.value = String(state.retentionDays ?? "");
     retention.append(node("span", "", t("todoRetention")), duration, node("small", "todo-reminder-hint", t("todoRetentionHint")));
     const save = button(t("save"), null, { style: "primary-button" });

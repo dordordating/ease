@@ -267,12 +267,8 @@ function updateCalendarTab(button, today = new Date()) {
   mark.setAttribute("aria-hidden", "true");
   mark.append(node("span", "calendar-date-number", dayNumber));
   if (kind !== "normal") mark.append(node("span", "calendar-date-accent"));
-  if (eventCount) {
-    const badge = node("span", "calendar-event-badge", eventCount > 9 ? `+${countFormat.format(9)}` : countFormat.format(eventCount));
-    badge.dir = "ltr";
-    mark.append(badge);
-  }
   button.replaceChildren(mark);
+  updateModuleBadge(button, eventCount, countFormat);
   button.setAttribute("aria-label", label.join(" · "));
   button.title = [label.join(" · "), button.draggable ? t("moduleOrderHint") : ""].filter(Boolean).join("\n");
 }
@@ -290,12 +286,19 @@ function refreshCalendarDay() {
 function updateMailBadge(tab) {
   if (!tab) return;
   const total = mailAccounts.reduce((sum, account) => sum + account.unread, 0);
-  tab.querySelector(".mail-badge")?.remove();
   const numbers = new Intl.NumberFormat(workspace.locale, { useGrouping: false });
   const label = total ? `${t("mail")} · ${t("mailUnreadCount", { count: numbers.format(total) })}` : t("mail");
   tab.setAttribute("aria-label", label);
-  if (total) {
-    const badge = node("span", "mail-badge", total > 9 ? `+${numbers.format(9)}` : numbers.format(total));
+  updateModuleBadge(tab, total, numbers);
+}
+
+function updateModuleBadge(tab, count, numbers) {
+  tab.querySelector(".module-count-badge")?.remove();
+  if (count) {
+    const badge = node("span", "module-count-badge");
+    const value = node("bdi", "", count > 9 ? `+${numbers.format(9)}` : numbers.format(count));
+    value.dir = "ltr";
+    badge.append(value);
     badge.setAttribute("aria-hidden", "true");
     tab.append(badge);
   }

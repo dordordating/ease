@@ -4,7 +4,8 @@ export const defaultTodo = { items: [], dailyTime: "" };
 export const taskLimits = { title: 160, notes: 2000 };
 export const taskSections = ["today", "inbox", "upcoming"];
 export const collapsedTaskKey = section => `easeTodoCollapsed:${section}`;
-export const taskRetentionOptions = [7, 30, 90];
+export const taskRetentionOptions = [0.5, 1, 3, 7];
+const savedRetentionValid = days => taskRetentionOptions.includes(days) || days === 30 || days === 90;
 const dayMilliseconds = 86_400_000;
 
 const iso = /^\d{4}-\d{2}-\d{2}$/u;
@@ -112,7 +113,7 @@ export function restoreTodo(value) {
   if (!Array.isArray(value?.items) || (value.dailyTime !== "" && !isTime(value.dailyTime))) return null;
   const labels = readLabels(value.labels);
   if (!labels || (value.layout !== undefined && !["tabs", "stacked"].includes(value.layout))) return null;
-  if (value.retentionDays !== undefined && !taskRetentionOptions.includes(value.retentionDays)) return null;
+  if (value.retentionDays !== undefined && !savedRetentionValid(value.retentionDays)) return null;
   const allowed = new Set(labels.map(label => label.id));
   const ids = new Set();
   const items = [];
@@ -139,7 +140,7 @@ function validCompletion(value) {
 }
 
 export function reconcileCompletedTasks(todo, now = Date.now()) {
-  if (!taskRetentionOptions.includes(todo?.retentionDays)) return { todo, next: Infinity };
+  if (!savedRetentionValid(todo?.retentionDays)) return { todo, next: Infinity };
   const retention = todo.retentionDays * dayMilliseconds;
   let next = Infinity;
   let changed = false;
@@ -199,7 +200,9 @@ export function taskAction(workspace, action, data) {
     else if (data.layout === "tabs") delete next.layout;
     if (Object.hasOwn(data, "retentionDays")) {
       if (data.retentionDays === null) delete next.retentionDays;
-      else if (taskRetentionOptions.includes(data.retentionDays)) next.retentionDays = data.retentionDays;
+      else if (taskRetentionOptions.includes(data.retentionDays) || (data.retentionDays === todo.retentionDays && savedRetentionValid(data.retentionDays))) {
+        next.retentionDays = data.retentionDays;
+      }
       else return "saveFailed";
     }
     workspace.todo = reconcileCompletedTasks(next).todo;

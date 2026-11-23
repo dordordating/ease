@@ -364,6 +364,7 @@ body[data-surface="panel"] .module-tabs {
 }
 
 .module-tab {
+  position: relative;
   display: grid;
   place-items: center;
   flex: none;
@@ -493,33 +494,6 @@ body[data-surface="panel"] .module-tabs {
   transform: rotate(45deg);
   border-radius: 1px;
   background: #df4057;
-}
-
-.calendar-event-badge {
-  position: absolute;
-  z-index: 1;
-  inset-block-start: -6px;
-  left: -5px;
-  display: grid;
-  place-items: center;
-  min-inline-size: 12px;
-  block-size: 12px;
-  padding-inline: 2px;
-  border: 1px solid var(--rail);
-  border-radius: 99px;
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-size: 8px;
-  font-weight: 760;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  white-space: nowrap;
-  direction: ltr;
-}
-
-html[dir="rtl"] .calendar-event-badge {
-  right: -5px;
-  left: auto;
 }
 
 .workspace {
@@ -4887,12 +4861,9 @@ body[data-surface] .folder-context-menu[popover] {
   fill: currentColor;
 }
 
-#tab-mail {
-  position: relative;
-}
-
-.mail-badge {
+.module-count-badge {
   position: absolute;
+  z-index: 1;
   inset-block-start: 0;
   inset-inline-end: 0;
   display: grid;
@@ -4907,7 +4878,8 @@ body[data-surface] .folder-context-menu[popover] {
   font-size: 8px;
   font-weight: 760;
   line-height: 1;
-  direction: ltr;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .mail-module,
@@ -5619,7 +5591,7 @@ body[data-surface="panel"] .mail-reader > .mail-attachments {
   border-color: transparent;
 }
 
-.todo-edit-fields :is(.date-picker-trigger, .time-picker select) {
+.todo-edit-fields :is(.date-picker-trigger, .time-picker) {
   min-block-size: 35px;
 }
 
@@ -5727,29 +5699,113 @@ body[data-surface="panel"] .mail-reader > .mail-attachments {
   color: var(--accent-ink);
 }
 
-.time-picker {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
-  gap: 3px;
-  min-inline-size: 0;
-  color: var(--muted);
-}
 
-.time-picker > select {
-  inline-size: 100%;
+.time-picker {
+  display: flex;
+  align-items: center;
+  gap: 2px;
   min-inline-size: 0;
   min-block-size: var(--control-height);
-  padding: 4px 3px;
+  padding-inline: 5px 3px;
   border: 1px solid var(--stroke);
   border-radius: 7px;
   background: var(--surface);
+}
+
+.time-picker:focus-within {
+  border-color: var(--accent);
+}
+
+.time-picker > input {
+  flex: 1;
+  min-inline-size: 0;
+  inline-size: 0;
+  min-block-size: 0;
+  padding: 4px 2px;
+  border: 0;
+  border-radius: 0;
+  outline-offset: 0;
+  background: transparent;
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
-.time-picker > select:disabled {
+.time-picker > input::placeholder {
   color: var(--quiet);
+}
+
+.time-picker > .time-picker-trigger {
+  display: inline-grid;
+  flex: none;
+  inline-size: 24px;
+  block-size: 24px;
+}
+
+.time-picker-trigger svg {
+  inline-size: 14px;
+  block-size: 14px;
+}
+
+.time-picker-panel[popover] {
+  position: fixed;
+  inset: 0 auto auto 0;
+  box-sizing: border-box;
+  inline-size: min(154px, 85vw);
+  max-block-size: calc(100vh - 8px);
+  overflow: auto;
+  margin: 0;
+  padding: 6px;
+  border: 1px solid var(--stroke);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 8px 20px var(--shadow);
+}
+
+.time-picker-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.time-picker-column {
+  display: grid;
+  gap: 3px;
+  color: var(--muted);
+  font-size: 10.5px;
+  text-align: center;
+}
+
+.time-picker-options {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  max-block-size: min(132px, 38vh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 3px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: 6px;
+  scrollbar-width: thin;
+}
+
+.time-picker-options button {
+  min-block-size: 24px;
+  padding: 2px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.time-picker-options button:hover,
+.time-picker-options button[aria-pressed="true"] {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.time-picker-clear {
+  margin-block-start: 4px;
 }
 
 .calendar-task-visibility {
