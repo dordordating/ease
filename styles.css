@@ -5190,6 +5190,39 @@ button.mail-row-open:hover {
   background: #fff;
 }
 
+body[data-surface="panel"] .app:has(.mail-reader:not([hidden])) {
+  block-size: calc(100vh / var(--workspace-zoom, 1));
+}
+
+body[data-surface="panel"] .workspace:has(.mail-reader:not([hidden])),
+body[data-surface="panel"] .mail-module:has(.mail-reader:not([hidden])),
+body[data-surface="panel"] .mail-reader:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  min-block-size: 0;
+}
+
+body[data-surface="panel"] .workspace:has(.mail-reader:not([hidden])) {
+  overflow: auto;
+}
+
+body[data-surface="panel"] .mail-module:has(.mail-reader:not([hidden])),
+body[data-surface="panel"] .mail-reader:not([hidden]) {
+  flex: 1;
+}
+
+body[data-surface="panel"] .mail-reader > :is(.mail-html-frame, .mail-message-body) {
+  flex: 1 0 180px;
+  block-size: auto;
+  overflow: auto;
+}
+
+body[data-surface="panel"] .mail-reader > .mail-attachments {
+  flex: none;
+  max-block-size: min(180px, 28vh);
+  overflow: auto;
+}
+
 .mail-load-more {
   display: flex;
   justify-content: center;
@@ -5229,4 +5262,8 @@ button.mail-row-open:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mail-file > button {
+  flex-shrink: 0;
 }

@@ -331,11 +331,20 @@ export async function mailboxMessages(account, token, folder = "inbox", cursor) 
 const addressPattern = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/u;
 const encoder = new TextEncoder();
 
+export function senderAddress(message) {
+  return mailAddress(message.senderAddress || message.sender).toLowerCase();
+}
+
 export function senderDomain(message) {
-  let address = (message.senderAddress || message.sender || "").trim();
-  address = address.match(/<([^<>]+)>\s*$/u)?.[1]?.trim() ?? address;
-  if (!addressPattern.test(address)) return "";
-  return address.slice(address.lastIndexOf("@") + 1).toLowerCase();
+  return senderAddress(message).split("@")[1] ?? "";
+}
+
+export function blockedMailSender(message, rules = []) {
+  if (!rules.length) return false;
+  const address = senderAddress(message);
+  if (!address) return false;
+  const domain = address.split("@")[1];
+  return rules.some(({ mode, value }) => value === (mode === "domain" ? domain : address));
 }
 
 export function mailDomains(value) {

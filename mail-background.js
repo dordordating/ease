@@ -1,6 +1,7 @@
 import {
-  authorizeMailbox, composeMail, deliverMail, downloadMailAttachment, imapAccount, imapMessages, mailCapabilities, mailConfig, mailDomains,
-  mailPermission, mailboxMessages, mailboxProfile, mailProviders, MailError, readMailMessage, refreshMailToken, senderDomain, trashMailMessage
+  authorizeMailbox, blockedMailSender, composeMail, deliverMail, downloadMailAttachment, imapAccount, imapMessages,
+  mailCapabilities, mailConfig, mailDomains, mailPermission, mailboxMessages, mailboxProfile, mailProviders, MailError,
+  readMailMessage, refreshMailToken, senderAddress, senderDomain, trashMailMessage
 } from "./mail-api.js";
 import { readWorkspace } from "./workspace-data.js";
 import { translate } from "./locales.js";
@@ -67,9 +68,15 @@ function mergeMessages(current = [], older = []) {
 async function snapshot() {
   const saved = await accounts();
   return saved.map(record => {
-    const { id, provider, email, preset, connection, smtp, messages = [], unread = 0, updatedAt = null, issue = null, notifications,
+    const { id, provider, email, preset, connection, smtp, messages = [], unread = 0, updatedAt = null, issue = null, notifications, blockedSenders = [],
       sentMessages = [], sentIssue = null } = record;
-    const account = { id, provider, email, messages: mergeMessages(messages, record.inboxOlder), unread, updatedAt, issue,
+    let visibleUnread = unread;
+    const inbox = mergeMessages(messages, record.inboxOlder).filter(message => {
+      if (!blockedMailSender(message, blockedSenders)) return true;
+      if (message.unread) visibleUnread -= 1;
+      return false;
+    });
+    const account = { id, provider, email, messages: inbox, unread: Math.max(0, visibleUnread), updatedAt, issue, blockedSenders,
       sentMessages: mergeMessages(sentMessages, record.sentOlder), sentIssue,
       hasMore: { inbox: Boolean(record.inboxCursor), sent: Boolean(record.sentCursor) },
       capabilities: mailCapabilities(record), notifications: { mode: notifications?.mode ?? "off", domains: notifications?.domains ?? [] } };
@@ -100,7 +107,8 @@ function mailAlert(account, messages, now) {
   const seen = new Set(config.seen);
   const fresh = messages.filter(message => message.received >= config.since && message.received <= now + 60_000
     && !seen.has(message.id) && message.unread);
-  const count = fresh.filter(message => config.mode === "all" || config.domains.includes(senderDomain(message))).length;
+  const count = fresh.filter(message => !blockedMailSender(message, account.blockedSenders)
+    && (config.mode === "all" || config.domains.includes(senderDomain(message)))).length;
   const next = { ...config, since: Math.max(config.since, now - 5 * 60_000),
     seen: [...new Set([...messages.map(message => message.id), ...(config.seen ?? [])])].slice(0, 128) };
   return { count, notifications: next };
@@ -181,6 +189,8 @@ function saveLinked(account, replaceId) {
       if (replacing && replacing.id !== account.id) target.delete(replacing.id);
       const notifications = previous?.notifications ?? replacing?.notifications;
       const updated = { ...previous, ...account, issue: null };
+      const blockedSenders = previous?.blockedSenders ?? (replacing?.email === account.email ? replacing.blockedSenders : undefined);
+      if (blockedSenders) updated.blockedSenders = blockedSenders;
       if (notifications && account.provider === "imap") updated.notifications = {
         ...notifications, since: Date.now(), seen: account.messages.map(message => message.id)
       };
@@ -294,7 +304,7 @@ async function accountAction(id, action, data, folder) {
   const older = folder === "sent" ? "sentOlder" : "inboxOlder";
   const messageId = action === "attachment" ? data?.id : data;
   const message = mergeMessages(account[key], account[older]).find(item => item.id === messageId);
-  if (!message) throw new MailError("mailReadFailed");
+  if (!message || (folder === "inbox" && blockedMailSender(message, account.blockedSenders))) throw new MailError("mailReadFailed");
   if (action === "attachment") return downloadMailAttachment(account, message, data.attachment, account.accessToken, folder);
   if (action === "trash") {
     await trashMailMessage(account, message, account.accessToken, folder);
@@ -324,6 +334,25 @@ async function updateNotifications(id, mode, domainText, allowed) {
     await changed();
     return snapshot();
   });
+}
+
+async function updateBlockedSenders(id, { action, mode, data }) {
+  if (!["address", "domain"].includes(mode) || typeof data !== "string") throw new MailError("mailUnavailable");
+  const account = await find(id);
+  if (!account) throw new MailError("mailReconnect");
+  const rules = account.blockedSenders ?? [];
+  let value = data;
+  if (action === "block-sender") {
+    const message = mergeMessages(account.messages, account.inboxOlder).find(item => item.id === data);
+    if (!message) throw new MailError("mailReadFailed");
+    value = mode === "domain" ? senderDomain(message) : senderAddress(message);
+    if (!value) throw new MailError("mailReadFailed");
+  }
+  const remaining = rules.filter(rule => rule.mode !== mode || rule.value !== value);
+  const blockedSenders = action === "block-sender" ? [...remaining, { mode, value }] : remaining;
+  await save({ ...account, blockedSenders });
+  await changed();
+  return snapshot();
 }
 
 function fromWorkspace(sender) {
@@ -378,6 +407,8 @@ export function registerMailHandlers() {
       const allowed = message.mode === "off" || (message.requestPermission
         ? chrome.permissions.request(notificationPermission) : chrome.permissions.contains(notificationPermission)).catch(() => false);
       result = updateNotifications(message.id, message.mode, message.domains, allowed);
+    } else if (["block-sender", "unblock-sender"].includes(message.action) && typeof message.id === "string" && message.id.length <= 540) {
+      result = queue(() => updateBlockedSenders(message.id, message));
     } else if (["message", "send", "attachment", "trash"].includes(message.action) && typeof message.id === "string" && message.id.length <= 540) {
       result = queue(() => accountAction(message.id, message.action, message.data, message.folder === "sent" ? "sent" : "inbox"));
     } else if (message.action === "disconnect" && typeof message.id === "string" && message.id.length <= 540) {

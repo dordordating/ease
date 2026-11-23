@@ -1,5 +1,5 @@
-import { encodeMailBytes, htmlText, imapPresets, mailAddress, mailDownloadLimit, mailFileName, mailMessageLink,
-  mailPermission, mailProviders, mailUploadLimit } from "./mail-api.js";
+import { blockedMailSender, encodeMailBytes, htmlText, imapPresets, mailAddress, mailDownloadLimit, mailFileName, mailMessageLink,
+  mailPermission, mailProviders, mailUploadLimit, senderAddress } from "./mail-api.js";
 import { htmlMailFrame } from "./mail-html.js";
 
 export function inboxMessages(accounts, folder = "inbox") {
@@ -35,6 +35,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   let opened;
   let composing = false;
   let alertAccountId;
+  let blockedAccountId;
   const draftKey = "easeMailComposeDraft";
   let files = [];
   let fileWork = false;
@@ -132,6 +133,14 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   saveAlert.type = "submit";
   alertActions.append(saveAlert, control("cancel", null, () => { alertAccountId = undefined; error = undefined; render(); }));
   alerts.append(element("h3", "", t("mailAlerts")), alertAddress, alertMode, alertDomains.label, alertActions);
+  const blocked = element("section", "mail-imap-form");
+  const blockedAccountAddress = element("bdi", "mail-hint");
+  const blockedRules = element("ul", "mail-attachments");
+  const backFromBlocked = control("calendarBack", null, closeBlocked);
+  const blockedActions = element("div", "mail-provider-buttons");
+  blockedActions.append(backFromBlocked);
+  blocked.append(element("h3", "", t("mailBlockedSenders")), blockedAccountAddress,
+    element("p", "mail-hint", t("mailBlockedHint")), blockedRules, blockedActions);
   const transport = element("div", "mail-imap-transport");
   transport.setAttribute("role", "group");
   transport.setAttribute("aria-label", t("mailImapSecurity"));
@@ -146,7 +155,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   imap.append(imapTitle, imapHint, emailField.label, hostField.label, transport, usernameField.label, passwordField.label, outgoing, imapActions);
   controls.append(accountSelect, unread, reload);
   inbox.append(folderTabs, controls, accountSummary, list, more);
-  settings.append(settingsTitle, settingsHint, connect, imap, alerts, linked);
+  settings.append(settingsTitle, settingsHint, connect, imap, alerts, blocked, linked);
   module.append(state, inbox, reader, compose, settings);
   container.append(module);
 
@@ -249,6 +258,10 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
         accounts = answer.value;
         if (action === "connect-imap") closeImap();
         if (action === "notifications") alertAccountId = undefined;
+        if (action === "block-sender") {
+          closeBlockedMessage();
+          error = data.mode === "domain" ? "mailDomainBlocked" : "mailSenderBlocked";
+        }
         return true;
       } else error = answer?.error ?? "mailUnavailable";
     } catch {
@@ -258,6 +271,13 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
       if (!disposed) render();
     }
     return false;
+  }
+
+  function closeBlockedMessage() {
+    const message = opened?.message;
+    if (message?.folder !== "inbox") return;
+    const account = accounts.find(item => item.id === message.accountId);
+    if (blockedMailSender(message, account?.blockedSenders)) opened = undefined;
   }
 
   async function openMessage(message) {
@@ -346,6 +366,11 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
         if (url) action("mailOpenWebmail", "link", () => chrome.tabs.create({ url }).catch(() => {}));
       }
       action("mailFollowUp", "calendar", () => followUp(message));
+      if (message.folder === "inbox" && senderAddress(message)) {
+        const block = mode => act("block-sender", { id: message.accountId, data: message.id, mode });
+        action("mailBlockSender", "ban", () => block("address"));
+        action("mailBlockDomain", "ban", () => block("domain"));
+      }
       action("mailDelete", "trash", () => deleteMessage(message));
     }), true);
     button.setAttribute("aria-haspopup", "menu");
@@ -587,6 +612,26 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     act("notifications", { id: alertAccountId, mode, domains: alertDomains.input.value, requestPermission: requestInWorker });
   });
 
+  function closeBlocked() {
+    blockedAccountId = undefined;
+    error = undefined;
+    render();
+  }
+
+  function renderBlocked(account) {
+    blockedAccountAddress.textContent = account.email;
+    blockedAccountAddress.dir = "ltr";
+    blockedRules.replaceChildren(...(account.blockedSenders ?? []).map(({ mode, value }) => {
+      const row = fileRow(value);
+      const unblock = control("mailUnblockSender", null, () => act("unblock-sender", { id: account.id, mode, data: value }));
+      unblock.disabled = busy;
+      row.append(unblock);
+      return row;
+    }));
+    if (!blockedRules.childElementCount) blockedRules.append(element("li", "mail-hint", t("mailNoBlockedSenders")));
+    backFromBlocked.disabled = busy;
+  }
+
   async function verifyProviders(force = false) {
     if ((configured && !force) || verifying) return;
     verifying = true;
@@ -614,11 +659,15 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
   }
 
   function renderSettings() {
-    const editing = Boolean(imapPreset || alertAccountId);
+    const blockedAccount = accounts.find(account => account.id === blockedAccountId);
+    if (!blockedAccount) blockedAccountId = undefined;
+    const editing = Boolean(imapPreset || alertAccountId || blockedAccount);
     settingsHint.hidden = editing;
     connect.hidden = editing;
     linked.hidden = editing;
     alerts.hidden = !alertAccountId;
+    blocked.hidden = !blockedAccount;
+    if (blockedAccount) renderBlocked(blockedAccount);
     alertDomains.label.hidden = alertMode.value !== "domains";
     for (const item of alerts.elements) item.disabled = busy;
     if (editing) {
@@ -646,10 +695,17 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
       copy.append(address, element("small", "", t(account.issue ?? "mailConnected", { provider: label })));
       const disconnect = control("mailDisconnect", "close", () => act("disconnect", { id: account.id }), true);
       const alert = control("mailAlerts", "bell", () => openAlerts(account), true);
+      const manageBlocked = control("mailBlockedSenders", "ban", () => {
+        blockedAccountId = account.id;
+        error = undefined;
+        render();
+        backFromBlocked.focus();
+      }, true);
       alert.setAttribute("aria-pressed", String(account.notifications?.mode !== "off"));
       alert.disabled = busy;
+      manageBlocked.disabled = busy;
       disconnect.disabled = busy;
-      row.append(copy, alert, disconnect);
+      row.append(copy, alert, manageBlocked, disconnect);
       if (account.imap) {
         const edit = control("mailImapEdit", "edit", () => openImap(account.imap.preset, account), true);
         edit.disabled = busy;
@@ -748,6 +804,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     if (busy) return;
     if (opened) opened = undefined;
     if (composing) closeComposer();
+    if (blockedAccountId) { closeBlocked(); return; }
     if (alertAccountId) { alertAccountId = undefined; error = undefined; render(); return; }
     if (imapPreset) { closeImap(); render(); return; }
     if (!accounts.length) {
@@ -768,6 +825,7 @@ export function renderMail(container, { dateLocale, t, icon, settingsButton, com
     update(next) {
       const loaded = !accounts.length && next.length;
       accounts = next;
+      closeBlockedMessage();
       if (loaded && !busy) act("refresh");
       else render();
     },
