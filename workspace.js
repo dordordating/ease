@@ -43,7 +43,7 @@ import { icon } from "./icons.js";
 import { deviceUnlockAvailable, readDeviceUnlock, registerDeviceUnlock } from "./vault-device.js";
 import { vaultPinAttemptsStorageKey, vaultPolicyFor, vaultSessionStorageKey } from "./vault-session.js";
 import { isRtl, localeNames, translate } from "./locales.js";
-import { calendarSystemFor, defaultCalendar, defaultTranslator, defaultWorkspace, densities, folderIcons, moduleAvailable, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes, visibleModules } from "./workspace-data.js";
+import { calendarSystemFor, defaultCalendar, defaultTranslator, defaultWorkspace, densities, folderIcons, moduleAvailable, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes, toolsWelcomeKey, visibleModules } from "./workspace-data.js";
 
 const view = document.querySelector("#workspace");
 const editor = document.querySelector("#editor");
@@ -88,6 +88,7 @@ let currentWindowId;
 let inToolbarPopup = false;
 let homeController;
 let homeLocale;
+let toolsWelcomePending;
 let assistantHistorySearch;
 const calendarNavigation = {};
 let calendarController;
@@ -251,8 +252,16 @@ function workspaceDateLocale() {
   return new Intl.Locale(workspace.locale, { calendar }).toString();
 }
 
+function dismissToolsWelcome() {
+  if (!toolsWelcomePending) return;
+  toolsWelcomePending = false;
+  refreshHome();
+  chrome.storage.local.remove(toolsWelcomeKey).catch(() => {});
+}
+
 function switchTo(page, focus = true, showHistory = false) {
   activePage = page;
+  if (page === library.id) dismissToolsWelcome();
   rememberWorkspaceTab(page);
   translatorHistoryOpen = page === "translate" && showHistory;
   query = "";
@@ -446,11 +455,13 @@ function bindModuleReorder(tab, id) {
 function section(title, description, action) {
   const header = node("div", "section-header");
   const content = node("div", "section-copy");
-  content.append(node("h1", "", title));
+  const heading = node("h1", "", title);
+  content.append(heading);
   if (description) content.append(node("p", "", description));
   header.append(content);
   if (action) header.append(action);
   view.append(header);
+  return heading;
 }
 
 function emptyState(title, description, symbol, action, container = view) {
@@ -1170,22 +1181,37 @@ const moduleSearchSources = {
     })) : []
   }),
   markets: marketSearchSource,
-  shopping: () => ({
-    label: "shopping",
-    entries: workspace.tabs.includes("shopping") ? shoppingViewState().watches.map(watch => {
+  shopping: () => {
+    const { watches, purchases } = shoppingViewState();
+    if (!savedTabAvailable("shopping")) return { label: "shopping", entries: [] };
+    const entries = watches.map(watch => {
       const quote = shoppingObservations[watch.id]?.quote;
       const title = quote?.title ?? watch.title;
       const option = watch.optionLabel || quote?.optionLabel || watch.variantLabel || quote?.variantLabel;
       const detail = [quote?.sellerName || watch.sellerName, option].filter(Boolean).join(" · ");
+      const job = purchases.jobs[watch.id];
       return { id: `shopping-result-${watch.id}`, title, detail,
-        keywords: [title, detail, watch.title, `DKP-${watch.productId}`, "Digikala", "دیجی‌کالا"],
+        keywords: [title, detail, watch.title, `DKP-${watch.productId}`, "Digikala", "دیجی‌کالا", job?.orderId,
+          ...(job?.tracking?.shipments ?? []).map(stage => stage.title)],
         open() {
           switchTo("shopping", false);
           shoppingController?.focusWatch(watch.id);
         }
       };
-    }) : []
-  }),
+    });
+    for (const order of Object.values(purchases.history)) {
+      const detail = t("shoppingPurchaseOrder", { order: order.orderId });
+      entries.push({ id: `shopping-result-order-${order.orderId}`, title: order.title, detail,
+        keywords: [order.title, order.variant, order.orderId, t("shoppingPurchaseHistory"),
+          ...(order.tracking?.shipments ?? []).map(stage => stage.title)],
+        open() {
+          switchTo("shopping", false);
+          shoppingController?.focusOrder(order.orderId);
+        }
+      });
+    }
+    return { label: "shopping", entries };
+  },
   mail: () => ({
     label: "mail",
     entries: workspace.tabs.includes("mail") ? [...inboxMessages(mailAccounts), ...inboxMessages(mailAccounts, "sent")].map(message => ({
@@ -1602,6 +1628,8 @@ function render() {
       onRemoveAlert: (id) => mutate("markets-remove-alert", { id })
     });
   } else if (activePage === "shopping") {
+    const historyButton = button(t("shoppingPurchaseHistory"), "icon-button shopping-history-toggle", { symbol: "history", iconOnly: true });
+    historyButton.id = "shopping-history-button";
     const refreshButton = button(t("shoppingRefresh"), "icon-button", { symbol: "refresh", iconOnly: true });
     refreshButton.id = "shopping-refresh";
     refreshButton.disabled = true;
@@ -1613,15 +1641,16 @@ function render() {
     });
     purchaseSettings.id = "shopping-purchase-settings";
     const actions = node("div", "module-title-actions");
-    actions.append(refreshButton, notifyButton, purchaseSettings);
-    section(t("shopping"), undefined, actions);
+    actions.append(historyButton, refreshButton, notifyButton, purchaseSettings);
+    const heading = section(t("shopping"), undefined, actions);
     const body = node("section", "shopping-module");
     view.append(body);
     shoppingLocale = dateLocale;
     shoppingController = renderShopping(body, {
       ...shoppingViewState(), node, glyph, button, t, icon, locale: workspace.locale,
       dateLocale, firstDay: workspace.calendar?.firstDay, editor, openEditor, reportError, showToast, mutate,
-      refreshButton, notifyButton, openMenu: (anchor, populate) => openWorkspaceMenu(anchor, undefined, t("shoppingActions"), populate)
+      heading, historyButton, refreshButton, notifyButton, purchaseSettings,
+      openMenu: (anchor, populate) => openWorkspaceMenu(anchor, undefined, t("shoppingActions"), populate)
     });
   } else if (activePage === "mail") {
     const mailSettings = button(t("mailAccounts"), "icon-button", { symbol: "mail-settings", iconOnly: true });
@@ -1660,7 +1689,7 @@ function render() {
 function refreshHome() {
   if (!homeController?.root.isConnected) return;
   homeController.update({
-    home: workspace.home, tabs: workspace.tabs, accountId: translatorAccountId, events: appointmentEvents(),
+    home: workspace.home, toolsWelcomePending, tabs: workspace.tabs, accountId: translatorAccountId, events: appointmentEvents(),
     tasks: (workspace.todo ?? defaultTodo).items, taskLabels: workspace.todo?.labels ?? [], spaces: workspace.spaces,
     flashcards: workspace.flashcards, translationTarget: translationLanguagePreferences(workspace.translator).target,
     mail: inboxMessages(mailAccounts)
@@ -1677,6 +1706,8 @@ function showHome(dateLocale) {
       async onPreferences(patch) {
         if (await mutate("home-preferences", patch)) await refreshWorkspace();
       },
+      openTools: () => switchTo(library.id),
+      dismissToolsWelcome,
       openModule: openHomeModule,
       async openTask(id) {
         if (await openHomeModule("todo")) todoController?.openTask(id);
@@ -3332,6 +3363,11 @@ chrome.storage.onChanged.addListener((changes, area) => {
     takeQuickTask().then(received => { if (received) focusQuickTask(); });
   }
   if (area !== "local") return;
+  if (changes[toolsWelcomeKey]) {
+    toolsWelcomePending = changes[toolsWelcomeKey].newValue === true;
+    if (activePage === library.id && toolsWelcomePending) dismissToolsWelcome();
+    else refreshHome();
+  }
   for (const section of taskSections) {
     const change = changes[collapsedTaskKey(section)];
     if (!change || collapsedTodo.has(section) === Boolean(change.newValue)) continue;
@@ -3402,9 +3438,9 @@ if (inPanel) chrome.runtime.onMessage?.addListener((message, sender) => {
 });
 const initialTranslationSelection = await takeTranslatorSelection();
 if (initialTranslationSelection !== null) activePage = "translate";
-const [initialAccount, initialHistory, initialMarketAlerts, rememberedTab, savedCollapse, savedShopping] = await Promise.all([
+const [initialAccount, initialHistory, initialMarketAlerts, launchState, savedCollapse, savedShopping] = await Promise.all([
   getGoogleAccount().catch(() => null), readTranslationHistory().catch(() => null), readMarketAlertState().catch(() => ({})),
-  chrome.storage.local.get(lastWorkspaceTabKey).then(saved => saved[lastWorkspaceTabKey]).catch(() => undefined),
+  chrome.storage.local.get([lastWorkspaceTabKey, toolsWelcomeKey]).catch(() => ({})),
   chrome.storage.local.get(taskSections.map(collapsedTaskKey)).catch(() => ({})),
   chrome.storage.local.get(workspaceOwnerKey).then(async result => {
     const owner = result[workspaceOwnerKey] ?? null;
@@ -3420,7 +3456,8 @@ shoppingOwner = savedShopping.owner;
 shoppingObservations = savedShopping.observations;
 shoppingPurchases = savedShopping.purchases;
 shoppingPayment = savedShopping.payment;
-lastWorkspaceTab = rememberedTab ?? home.id;
+lastWorkspaceTab = launchState[lastWorkspaceTabKey] ?? home.id;
+toolsWelcomePending ??= launchState[toolsWelcomeKey] === true;
 await refreshWorkspace(undefined, initialTranslationSelection === null ? lastWorkspaceTab : undefined);
 workspaceInitialized = true;
 refreshMailSnapshot();

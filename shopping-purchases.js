@@ -4,12 +4,13 @@ import { addDigikalaTabItem, waitForShopTab } from "./shopping-cart.js";
 import { digipayCreditControl, isDigiPayCreditPage, shoppingCreditPermission } from "./shopping-checkout-digipay.js";
 import { digikalaCheckoutControl } from "./shopping-checkout-page.js";
 import {
-  checkoutInvoiceKey, digikalaCartUrl, digikalaCheckoutStage, digikalaOrdersUrl, digikalaShippingUrl, invoiceAddressIssue,
+  checkoutInvoiceKey, digikalaCartUrl, digikalaCheckoutStage, digikalaOrdersUrl, digikalaOrderUrl, digikalaShippingUrl, invoiceAddressIssue,
   loadDigikalaCart, loadDigikalaInvoice, readDigikalaBuyer, readDigikalaReceipt, selectDigikalaDeliveryAddress,
   setDigikalaCartQuantity, verifyDigikalaDeliveryAddress
 } from "./shopping-checkout-digikala.js";
 import { DigikalaCheckoutError, isDigikalaPage, withDigikalaTab } from "./shopping-digikala-session.js";
 import { readDigikalaProduct, quoteForWatch, shoppingHostPermission, shoppingNotificationPermission } from "./shopping-digikala.js";
+import { archiveShoppingOrder } from "./shopping-orders.js";
 import {
   canRetryShoppingPurchase, checkoutAmounts, checkoutCartIssue, checkoutCartsMatch, checkoutCostIssue, checkoutItemsKey,
   isShoppingCreditMode, isShoppingPaymentMode, pendingCreditTotal, purchaseJobApplies, readShoppingPurchases, shoppingPaymentKey,
@@ -23,7 +24,7 @@ const errorFor = error => error instanceof DigikalaCheckoutError ? error.code : 
 const requireCheckout = (condition, code = "shoppingPurchaseReview") => {
   if (!condition) throw new DigikalaCheckoutError(code);
 };
-const savedState = (state, jobs = state.jobs) => ({ policy: state.policy, jobs });
+const savedState = (state, jobs = state.jobs) => ({ policy: state.policy, jobs, history: state.history });
 const changeJob = (state, id, job) => ({ [state.key]: savedState(state, { ...state.jobs, [id]: job }) });
 const pause = () => new Promise(resolve => setTimeout(resolve, 300));
 
@@ -42,7 +43,7 @@ function creditHandoff(tab) {
   } catch { return false; }
 }
 
-export async function stageShoppingPurchase(workspace, action, data, transaction) {
+export async function stageShoppingPurchase(workspace, action, data, transaction, previousWatch) {
   // All purchase approvals and results live in the current browser profile.
   if (action === "shopping-save" && data.purchase === undefined) return;
   const owner = (await chrome.storage.local.get(workspaceOwnerKey))[workspaceOwnerKey] ?? null;
@@ -66,11 +67,13 @@ export async function stageShoppingPurchase(workspace, action, data, transaction
   const mode = action === "shopping-remove" ? "notify" : data.purchase?.mode;
   if (previous?.status === "running" || previous?.status === "submitting") return "shoppingPurchaseWorking";
   if (previous?.status === "awaiting" && state.payment?.token === previous.token) return "shoppingPurchasePending";
+  const history = previousWatch && previous?.status === "paid" && previous.orderId
+    ? { ...state.history, [previous.orderId]: archiveShoppingOrder(previousWatch, previous, Date.now()) } : state.history;
   if (mode === "notify") {
     if (!previous) return;
     const jobs = { ...state.jobs };
     delete jobs[id];
-    transaction.storageUpdates = { [state.key]: savedState(state, jobs) };
+    transaction.storageUpdates = { [state.key]: savedState({ ...state, history }, jobs) };
     return;
   }
   const paymentMode = isShoppingPaymentMode(mode);
@@ -107,7 +110,7 @@ export async function stageShoppingPurchase(workspace, action, data, transaction
     }
     catch (error) { return errorFor(error); }
   }
-  transaction.storageUpdates = changeJob(state, id, next);
+  transaction.storageUpdates = changeJob({ ...state, history }, id, next);
 }
 
 async function script(tabId, intent, expected = {}) {
@@ -250,7 +253,7 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
       const state = await readShoppingPurchases(owner);
       if (state.payment?.token !== token || state.payment.tabId !== tabId) return false;
       const job = state.jobs[id];
-      const values = job?.token === token ? changeJob(state, id, { ...job, ...receipt, status: "paid" }) : {};
+      const values = job?.token === token ? changeJob(state, id, { ...job, ...receipt, status: "paid", paidAt: Date.now() }) : {};
       await chrome.storage.local.set({ ...values, [shoppingPaymentKey]: null });
       return true;
     });
@@ -363,7 +366,8 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
       if ([oldTab?.url, oldTab?.pendingUrl].some(url => digikalaCheckoutStage(url) === "receipt")) {
         const receipt = previous.cartId && !oldTab.incognito && oldTab.status === "complete"
           ? await readDigikalaReceipt(oldTab.id, oldTab.url, previous.cartId).catch(() => null) : null;
-        await setJob(owner, id, job.token, { tabId: oldTab.id, ...(receipt ?? {}), status: receipt ? "paid" : "unknown" });
+        await setJob(owner, id, job.token, { tabId: oldTab.id,
+          ...(receipt ? { ...receipt, paidAt: Date.now(), status: "paid" } : { status: "unknown" }) });
         return;
       }
       if (isShoppingPaymentMode(job.mode)) {
@@ -574,12 +578,19 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
       const { jobs, payment } = await readShoppingPurchases(owner);
       const job = jobs[id];
       if (!job) return { error: "shoppingRuleMissing" };
+      if (job.status === "paid") {
+        const url = digikalaOrderUrl(job.orderId);
+        const [existing] = await chrome.tabs.query({ url });
+        if (Number.isInteger(existing?.id)) await chrome.tabs.update(existing.id, { active: true });
+        else await chrome.tabs.create({ url });
+        return { ok: true };
+      }
       const tab = Number.isInteger(job.tabId) ? await chrome.tabs.get(job.tabId).catch(() => null) : null;
       if (tab && ((job.status === "awaiting" && payment?.token === job.token && creditHandoff(tab))
         || ["cart", "shipping", "payment", "receipt"].includes(digikalaCheckoutStage(tab.url))
         || (job.status === "review" && /^https:\/\/www\.digikala\.com\/(product\/|users\/login)/u.test(tab.url ?? "")))) {
         await chrome.tabs.update(tab.id, { active: true });
-      } else await chrome.tabs.create({ url: ["unknown", "paid", "submitting", "awaiting"].includes(job.status) ? digikalaOrdersUrl : digikalaCartUrl });
+      } else await chrome.tabs.create({ url: ["unknown", "submitting", "awaiting"].includes(job.status) ? digikalaOrdersUrl : digikalaCartUrl });
       return { ok: true };
     }
   };

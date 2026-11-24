@@ -23,7 +23,7 @@ export async function readShoppingPurchases(owner) {
 
 export function shoppingPurchaseView(state, payment = null) {
   return { policy: shoppingPurchasePolicy(state?.policy) ?? defaultShoppingPurchasePolicy,
-    jobs: state?.jobs ?? {}, payment };
+    jobs: state?.jobs ?? {}, history: state?.history ?? {}, payment };
 }
 
 export function purchaseJobApplies(watch, job, policy) {

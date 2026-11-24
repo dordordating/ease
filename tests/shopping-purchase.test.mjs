@@ -7,6 +7,7 @@ import {
 import { isDigiPayCreditPage } from "../shopping-checkout-digipay.js";
 import { readDigikalaFromPage } from "../shopping-digikala-session.js";
 import { quoteForWatch, readDigikalaProduct } from "../shopping-digikala.js";
+import { maintainShoppingOrders, nextShoppingOrderWork, shoppingOrdersToCheck } from "../shopping-orders.js";
 import { stageShoppingPurchase } from "../shopping-purchases.js";
 import {
   canRetryShoppingPurchase, checkoutCartIssue, checkoutCartsMatch, checkoutCostIssue, checkoutItemsKey, pendingCreditTotal, purchaseJobApplies,
@@ -122,6 +123,76 @@ test("DigiPay confirmation uses only the approved checkout and only once", () =>
     "https://other.mydigipay.com/credit/bnpl-pay/fixture", "https://web.mydigipay.com:1234/credit/bnpl-pay/fixture"]) {
     assert.equal(isDigiPayCreditPage(url), false, url);
   }
+});
+
+test("history archives verified orders after a week and only expires unpurchased watches with an end time", () => {
+  const now = Date.UTC(2026, 10, 24, 12);
+  const day = 86_400_000;
+  const paid = { id: "paid", title: "Purchase", endAt: now - 12 * day, quantity: 1 };
+  const pending = { id: "pending", endAt: now - 4 * day };
+  const expired = { id: "expired", endAt: now - 3 * day };
+  const recent = { id: "recent", endAt: now - 3 * day + 1 };
+  const unscheduled = { id: "unscheduled", endAt: null };
+  const watches = [paid, pending, expired, recent, unscheduled];
+  const state = { owner: null, history: {}, payment: { id: pending.id, owner: null }, jobs: {
+    paid: { status: "paid", orderId: "88280", invoiceQuote: { checkedAt: now - 7 * day }, buyer: { accountId: "321" } },
+    pending: { status: "unknown" }
+  } };
+  assert.deepEqual(shoppingOrdersToCheck(watches, state, now), [{ id: "88280", accountId: "321" }]);
+  const tracking = { shipments: [{ title: "Preparing", next: "Dispatch" }], checkedAt: now, finished: false };
+  const updates = new Map([["88280", { checkedAt: now, accountId: "321", tracking }]]);
+  const result = maintainShoppingOrders(watches, state, updates, now);
+  assert.deepEqual(result.watches.map(item => item.id), ["pending", "recent", "unscheduled"]);
+  assert.deepEqual(Object.keys(result.jobs), ["pending"]);
+  const order = result.history["88280"];
+  assert.equal(order.paidAt, now - 7 * day);
+  assert.deepEqual(order.tracking, tracking);
+  assert.equal(nextShoppingOrderWork(result.watches, { ...state, ...result }, now, true), now + 1);
+  assert.deepEqual(shoppingOrdersToCheck([], { ...state, ...result }, now), []);
+  assert.deepEqual(shoppingOrdersToCheck([], { ...state, ...result }, now + 6 * 60 * 60_000), [{ id: "88280", accountId: "321" }]);
+  const later = maintainShoppingOrders(result.watches, { ...state, ...result }, new Map(), now + 1);
+  assert.deepEqual(later.watches.map(item => item.id), ["pending", "unscheduled"]);
+});
+
+test("removing the watch for a paid order keeps its verified history", async t => {
+  const key = shoppingPurchaseKey(null);
+  const previous = { ...watch, id: "completed", title: "Purchased item" };
+  const paidAt = Date.UTC(2026, 10, 24, 12);
+  globalThis.chrome = { storage: { local: { get: async () => ({ [key]: { policy: policy("review"), jobs: {
+    [previous.id]: { status: "paid", orderId: "88280", paidAt }
+  } } }) } } };
+  t.after(() => { delete globalThis.chrome; });
+  const transaction = {};
+  assert.equal(await stageShoppingPurchase({ shopping: [] }, "shopping-remove", { id: previous.id }, transaction, previous), undefined);
+  assert.deepEqual(transaction.storageUpdates[key].jobs, {});
+  assert.equal(transaction.storageUpdates[key].history["88280"].title, previous.title);
+  assert.equal(transaction.storageUpdates[key].history["88280"].paidAt, paidAt);
+});
+
+test("order status reads only the exact verified order and projects shipment progress without private fields", async t => {
+  const calls = [];
+  globalThis.location = { origin: "https://www.digikala.com" };
+  t.after(() => { delete globalThis.location; });
+  t.mock.method(globalThis, "fetch", async (url, options) => {
+    calls.push(url);
+    assert.equal(options.method, "GET");
+    assert.equal(options.credentials, "include");
+    return Response.json({ data: { order: {
+      id: 88280, status: "confirmed", created_at: "2026-11-23T12:00:00Z",
+      address: { mobile: "private", name: "private" },
+      shipments: [{ status: [
+        { title: "Order confirmed", is_current: true, percentage: 25 },
+        { title: "Preparing", percentage: 50 }
+      ] }]
+    } } });
+  });
+  assert.deepEqual(await readDigikalaFromPage("order-status", "88280"), { status: 200, data: {
+    state: "confirmed", placedAt: "2026-11-23T12:00:00Z",
+    progress: [{ title: "Order confirmed", next: "Preparing", finished: false }]
+  } });
+  assert.deepEqual(await readDigikalaFromPage("order-status", "99999"), { status: 200, data: null });
+  assert.equal(await readDigikalaFromPage("order-status", "../another"), null);
+  assert.deepEqual(calls, ["https://api.digikala.com/v1/order/88280/", "https://api.digikala.com/v1/order/99999/"]);
 });
 
 test("cart verification permits a partial quantity during setup and requires the exact quantity for checkout", () => {

@@ -5,6 +5,7 @@ import { defaultHome, normalizeHome } from "./home-store.js";
 import { defaultShopping, shoppingAvailable } from "./shopping-store.js";
 
 export const storageKey = "easeWorkspace";
+export const toolsWelcomeKey = "easeToolsWelcomePending";
 
 export const modules = [
   { id: "clipboard", icon: "clipboard", color: "#ba9aff", released: true },

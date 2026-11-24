@@ -3,6 +3,8 @@
 }
 
 .shopping-module,
+.shopping-watch-view,
+.shopping-history,
 .shopping-lookup-results,
 .shopping-list {
   display: grid;
@@ -13,6 +15,14 @@
   max-inline-size: 640px;
   gap: 9px;
 }
+
+.shopping-watch-view,
+.shopping-history {
+  gap: 9px;
+}
+
+.shopping-history > button { justify-self: center; }
+.shopping-history-toggle:dir(rtl)[aria-pressed="true"] svg { transform: scaleX(-1); }
 
 .shopping-lookup {
   display: grid;
@@ -505,6 +515,37 @@
 .shopping-checkout-status[data-status="paid"] { background: var(--positive-wash); }
 .shopping-checkout-status[data-status="review"],
 .shopping-checkout-status[data-status="unknown"] { background: var(--subtle); }
-.shopping-checkout-link { min-block-size: 25px; padding-block: 2px; }
+.shopping-checkout-link { min-block-size: 25px; padding-block: 2px; text-decoration: none; }
 .shopping-checkout-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .shopping-checkout-retry { inline-size: 25px; min-block-size: 25px; padding: 3px; }
+
+.shopping-order-summary {
+  display: grid;
+  justify-items: start;
+  gap: 5px;
+  color: var(--muted);
+  font-size: .92em;
+}
+
+.shopping-order-progress {
+  display: grid;
+  flex-basis: 100%;
+  justify-self: stretch;
+  gap: 4px;
+  margin: 2px 0 0;
+  padding: 6px 7px;
+  border-inline-start: 2px solid color-mix(in srgb, var(--positive) 62%, var(--stroke));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface) 60%, transparent);
+  color: var(--text);
+  list-style: none;
+}
+
+.shopping-order-progress li {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 7px;
+}
+
+.shopping-order-progress small { color: var(--muted); }

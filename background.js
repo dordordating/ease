@@ -1,6 +1,6 @@
 import {
   defaultTranslator, densities, moduleAvailable, modules, palettes, readWorkspace, reorderModule, shortcutSlots, sizes, storageKey,
-  themes, translatorEngines, workspaceZoomLevels
+  themes, toolsWelcomeKey, translatorEngines, workspaceZoomLevels
 } from "./workspace-data.js";
 import { localeNames, translate } from "./locales.js";
 import { setToolbarBrand } from "./brand.js";
@@ -84,7 +84,10 @@ async function initializeBrowser() {
   ]);
 }
 
-chrome.runtime.onInstalled?.addListener(() => { initializeBrowser().catch(() => {}); });
+chrome.runtime.onInstalled?.addListener(async ({ reason } = {}) => {
+  if (reason === "install") await chrome.storage.local.set({ [toolsWelcomeKey]: true }).catch(() => {});
+  await initializeBrowser().catch(() => {});
+});
 chrome.runtime.onStartup?.addListener(() => { initializeBrowser().catch(() => {}); });
 chrome.storage.onChanged.addListener(({ [storageKey]: change }, area) => {
   if (area === "local" && change?.newValue?.palette && change.newValue.palette !== change.oldValue?.palette) {
@@ -387,8 +390,9 @@ async function updateWorkspace(workspace, action, data, transaction) {
     case "shopping-save":
     case "shopping-remove": {
       if (!moduleAvailable("shopping", workspace.locale)) return "shoppingUnavailable";
+      const previousWatch = workspace.shopping?.find?.(watch => watch.id === data?.id);
       const error = updateShopping(workspace, action, data);
-      return error || stageShoppingPurchase(workspace, action, data, transaction);
+      return error || stageShoppingPurchase(workspace, action, data, transaction, previousWatch);
     }
     case "shopping-pause":
       if (!moduleAvailable("shopping", workspace.locale)) return "shoppingUnavailable";

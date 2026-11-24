@@ -8,9 +8,10 @@ import {
   readDigikalaProduct, quoteForWatch, searchDigikala, ShoppingLookupError, shoppingHostPermission, shoppingNotificationPermission
 } from "./shopping-digikala.js";
 import { prepareDigikalaCart, waitForShopTab } from "./shopping-cart.js";
-import { previewDigikalaInvoice, readDigikalaDeliveryChoices } from "./shopping-checkout-digikala.js";
+import { checkDigikalaOrderStatuses, previewDigikalaInvoice, readDigikalaDeliveryChoices } from "./shopping-checkout-digikala.js";
 import { DigikalaCheckoutError, isDigikalaPage, withDigikalaTab } from "./shopping-digikala-session.js";
-import { canRetryShoppingPurchase, purchaseJobApplies, readShoppingPurchases, shoppingPurchasePrefix } from "./shopping-purchase-store.js";
+import { canRetryShoppingPurchase, purchaseJobApplies, readShoppingPurchases, shoppingPaymentKey, shoppingPurchasePrefix } from "./shopping-purchase-store.js";
+import { maintainShoppingOrders, nextShoppingOrderWork, shoppingOrdersToCheck } from "./shopping-orders.js";
 import { fillDigikalaCart, shoppingPurchases } from "./shopping-purchases.js";
 
 export const shoppingMessage = "ease-shopping";
@@ -48,11 +49,13 @@ function nextCheck(watch, observations, now) {
   return Math.max(watch.startAt ?? 0, next);
 }
 
-async function scheduleAlarm(context, observations, permitted) {
+async function scheduleAlarm(context, observations, purchaseState, permitted) {
   const now = Date.now();
-  const pending = permitted && context.enabled ? context.watches.filter(watch => active(watch, now)) : [];
-  if (pending.length) {
-    const next = Math.min(...pending.map(watch => nextCheck(watch, observations, now)));
+  const tracking = permitted && context.enabled;
+  const pending = tracking ? context.watches.filter(watch => active(watch, now) && purchaseState.jobs[watch.id]?.status !== "paid") : [];
+  const orders = nextShoppingOrderWork(context.watches, { ...purchaseState, owner: context.owner }, now, tracking);
+  const next = Math.min(orders ?? Infinity, ...pending.map(watch => nextCheck(watch, observations, now)));
+  if (Number.isFinite(next)) {
     await chrome.alarms.create(alarmName, { when: Math.max(now + 1000, next) });
   } else {
     await chrome.alarms.clear(alarmName);
@@ -96,20 +99,26 @@ function showAlert(watch, quote, locale, alertedAt) {
   });
 }
 
-async function reconcile(force, queueWorkspace, retry, id) {
+async function reconcile(force, queueWorkspace, retry, id, ordersOnly) {
   const context = await currentShopping();
-  const permitted = await chrome.permissions.contains(shoppingHostPermission);
-  const observations = await readObservations(context.key);
+  const [permitted, observations, initialPurchases] = await Promise.all([
+    chrome.permissions.contains(shoppingHostPermission), readObservations(context.key), readShoppingPurchases(context.owner)
+  ]);
   const now = Date.now();
-  const pending = permitted && context.enabled ? context.watches.filter(watch =>
-    (!id || watch.id === id) && active(watch, now) && (force || watch.startAt === null || watch.startAt <= now)
+  const tracking = permitted && context.enabled;
+  const pending = tracking && !ordersOnly ? context.watches.filter(watch =>
+    (!id || watch.id === id) && initialPurchases.jobs[watch.id]?.status !== "paid" && active(watch, now)
+    && (force || watch.startAt === null || watch.startAt <= now)
     && (force || nextCheck(watch, observations, now) <= now + 1000)) : [];
-  if (!pending.length) {
-    await scheduleAlarm(context, observations, permitted);
-    if (!Object.keys(observations).some(id => !context.watches.some(watch => watch.id === id))) return;
+  const orders = tracking ? shoppingOrdersToCheck(context.watches, initialPurchases, now, ordersOnly || (retry && !id)) : [];
+  const orderWork = nextShoppingOrderWork(context.watches, { ...initialPurchases, owner: context.owner }, now, tracking);
+  if (!pending.length && !orders.length && (orderWork === null || orderWork > now)
+    && Object.keys(observations).every(id => context.watches.some(watch => watch.id === id))) {
+    await scheduleAlarm(context, observations, initialPurchases, permitted);
+    return;
   }
 
-  const products = await checkProducts(pending);
+  const [products, orderUpdates] = await Promise.all([checkProducts(pending), checkDigikalaOrderStatuses(orders)]);
   return queueWorkspace(async () => {
     const latest = await currentShopping();
     if (latest.owner !== context.owner) return;
@@ -117,16 +126,17 @@ async function reconcile(force, queueWorkspace, retry, id) {
     const notify = allowed && await canNotify();
     const newest = await readObservations(context.key);
     const purchaseState = await readShoppingPurchases(context.owner);
-    const { jobs, policy } = purchaseState;
+    const { policy } = purchaseState;
     const next = {};
     const checked = new Map(pending.map(watch => [watch.id, shoppingWatchKey(watch)]));
     const checkedAt = Date.now();
+    const { watches, jobs, history } = maintainShoppingOrders(latest.watches, { ...purchaseState, owner: latest.owner }, orderUpdates, checkedAt);
     const notices = [];
     const attempts = [];
-    const updated = latest.watches.map(watch => {
+    const updated = watches.map(watch => {
       const rule = shoppingWatchKey(watch);
       const previous = newest[watch.id]?.rule === rule ? newest[watch.id] : null;
-      if (!latest.enabled || !allowed || !active(watch, checkedAt) || checked.get(watch.id) !== rule) {
+      if (!latest.enabled || !allowed || jobs[watch.id]?.status === "paid" || !active(watch, checkedAt) || checked.get(watch.id) !== rule) {
         if (previous) next[watch.id] = previous;
         return watch;
       }
@@ -151,11 +161,14 @@ async function reconcile(force, queueWorkspace, retry, id) {
     });
     const changes = {};
     if (JSON.stringify(next) !== JSON.stringify(newest)) changes[context.key] = next;
-    if (updated.some((watch, index) => watch !== latest.watches[index])) {
+    if (updated.length !== latest.watches.length || updated.some((watch, index) => watch !== latest.watches[index])) {
       changes[storageKey] = { ...latest.workspace, shopping: updated };
     }
+    if (JSON.stringify(jobs) !== JSON.stringify(purchaseState.jobs) || JSON.stringify(history) !== JSON.stringify(purchaseState.history)) {
+      changes[purchaseState.key] = { policy, jobs, history };
+    }
     if (Object.keys(changes).length) await chrome.storage.local.set(changes);
-    await scheduleAlarm(latest, next, allowed);
+    await scheduleAlarm({ ...latest, watches: updated }, next, { ...purchaseState, jobs, history }, allowed);
     await Promise.allSettled(notices.map(({ watch, quote }) => showAlert(watch, quote, latest.locale, checkedAt)));
     return { owner: latest.owner, attempts };
   });
@@ -181,8 +194,8 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
   let notificationListeners = false;
   const cartRequests = new Map();
   const purchases = shoppingPurchases(queueWorkspace, currentShopping, openShopping);
-  const run = (force = false, { retry = false, id } = {}) => {
-    const check = pending.then(() => reconcile(force, queueWorkspace, retry, id)).then(ready => {
+  const run = (force = false, { retry = false, id, ordersOnly = false } = {}) => {
+    const check = pending.then(() => reconcile(force, queueWorkspace, retry, id, ordersOnly)).then(ready => {
       if (ready?.attempts.length) void purchases.run(ready.owner, ready.attempts).catch(() => {});
     });
     pending = check.catch(() => {});
@@ -264,6 +277,8 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
       });
     } else if (action === "refresh") {
       result = run(true, { retry: true, id }).then(() => ({ ok: true }));
+    } else if (action === "refresh-orders") {
+      result = run(false, { ordersOnly: true }).then(() => ({ ok: true }));
     } else if (action === "cart") {
       result = requestCart(id);
     } else if (action === "open-checkout") {
@@ -342,6 +357,10 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
       && Object.entries(value.newValue?.jobs ?? {}).some(([id, job]) =>
         job.status === "armed" && job.token !== value.oldValue?.jobs?.[id]?.token));
     if (armed) void poll(true);
+    const paid = Object.entries(changes).some(([key, value]) => key.startsWith(shoppingPurchasePrefix)
+      && Object.entries(value.newValue?.jobs ?? {}).some(([id, job]) =>
+        job.status === "paid" && value.oldValue?.jobs?.[id]?.status !== "paid"));
+    if (paid || (changes[shoppingPaymentKey]?.oldValue && !changes[shoppingPaymentKey]?.newValue)) void poll(false);
     const change = changes[storageKey];
     if (!change) return;
     const before = change.oldValue;

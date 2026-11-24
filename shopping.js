@@ -1,4 +1,5 @@
 import { shoppingMessage } from "./shopping-background.js";
+import { digikalaOrderUrl } from "./shopping-checkout-digikala.js";
 import { shoppingCreditPermission } from "./shopping-checkout-digipay.js";
 import { shoppingHostPermission, shoppingNotificationPermission } from "./shopping-digikala.js";
 import {
@@ -19,7 +20,7 @@ const request = (action, data) => chrome.runtime.sendMessage({ type: shoppingMes
 const requestCreditAccess = () => chrome.permissions.request(shoppingCreditPermission).catch(() => false);
 
 export function renderShopping(root, options) {
-  const { node, button, glyph, t, icon, locale, dateLocale, firstDay, refreshButton, notifyButton,
+  const { node, button, glyph, t, icon, locale, dateLocale, firstDay, heading, historyButton, refreshButton, notifyButton, purchaseSettings,
     editor, openEditor, reportError, showToast, mutate, openMenu } = options;
   const numbers = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
   const amounts = new Intl.NumberFormat(locale, { useGrouping: "always", maximumFractionDigits: 0 });
@@ -29,6 +30,8 @@ export function renderShopping(root, options) {
   const priceText = rials => t("shoppingTomanPrice", { amount: numbers.format(rials / 10) });
   const price = rials => node("bdi", "shopping-price", priceText(rials));
   let { watches, observations, purchases } = options;
+  let historyOpen = false;
+  let historyLimit = 16;
   let lookupVersion = 0;
   let connected = false;
   let live = true;
@@ -74,7 +77,23 @@ export function renderShopping(root, options) {
   const list = node("ul", "shopping-list");
   const empty = node("div", "shopping-empty");
   empty.append(glyph("shopping", "shopping-store-mark"), node("strong", "", t("shoppingEmpty")));
-  root.append(connection, form, activeProduct, feedback, result, list, empty);
+  const watchView = node("div", "shopping-watch-view");
+  watchView.append(connection, form, activeProduct, feedback, result, list, empty);
+  const historyView = node("section", "shopping-history");
+  historyView.id = "shopping-history";
+  historyView.hidden = true;
+  historyView.setAttribute("aria-label", t("shoppingPurchaseHistory"));
+  const historyList = node("ul", "shopping-list");
+  const historyEmpty = node("p", "shopping-empty", t("shoppingPurchaseHistoryEmpty"));
+  const historyMore = button(t("shoppingPurchaseHistoryMore"), "secondary-button", { onClick: () => {
+    historyLimit += 16;
+    renderHistory();
+  } });
+  historyView.append(historyList, historyEmpty, historyMore);
+  root.append(watchView, historyView);
+  historyButton.setAttribute("aria-controls", historyView.id);
+  historyButton.setAttribute("aria-pressed", "false");
+  historyButton.onclick = () => showHistory(!historyOpen);
 
   function thumb(url) {
     const frame = node("span", "shopping-thumb");
@@ -121,7 +140,7 @@ export function renderShopping(root, options) {
     connected = access;
     connection.hidden = access;
     refreshButton.disabled = !access;
-    notifyButton.hidden = notifications || !access;
+    notifyButton.hidden = notifications || !access || historyOpen;
     renderWatches();
   }
 
@@ -201,7 +220,7 @@ export function renderShopping(root, options) {
   refreshButton.onclick = async () => {
     refreshButton.disabled = true;
     refreshButton.dataset.busy = "true";
-    const response = await request("refresh");
+    const response = await request(historyOpen ? "refresh-orders" : "refresh");
     delete refreshButton.dataset.busy;
     refreshButton.disabled = !connected;
     if (response?.error) reportError(response.error);
@@ -425,6 +444,40 @@ export function renderShopping(root, options) {
     else if (!response?.clicked) showToast(t("shoppingCartOnSite"));
   }
 
+  function addInvoiceQuote(container, quote) {
+    if (!quote) return;
+    const line = node("small", "shopping-last-invoice", t("shoppingQuoteBreakdown", {
+      total: priceText(quote.total), shipping: priceText(quote.shipping)
+    }));
+    line.title = t("shoppingCheckedAt", { date: dates.format(quote.checkedAt) });
+    container.append(line);
+  }
+
+  function addOrderTracking(container, tracking) {
+    if (!tracking) return;
+    let stages = tracking.shipments;
+    const states = { cancelled: "shoppingOrderCancelled", canceled: "shoppingOrderCancelled",
+      returned: "shoppingOrderReturned", delivered: "shoppingOrderDelivered", completed: "shoppingOrderDelivered" };
+    const status = Object.hasOwn(states, tracking.state) ? states[tracking.state] : null;
+    if (status && (!stages.length || status === "shoppingOrderCancelled" || status === "shoppingOrderReturned")) {
+      stages = [{ title: t(status) }];
+    }
+    if (!stages.length) return;
+    const progress = node("ul", "shopping-order-progress");
+    progress.setAttribute("aria-label", t("shoppingOrderTracking"));
+    progress.title = t("shoppingCheckedAt", { date: dates.format(tracking.checkedAt) });
+    for (const [index, stage] of stages.entries()) {
+      const row = node("li");
+      const title = node("span", "", stage.title);
+      title.dir = "auto";
+      if (stages.length > 1) row.append(node("small", "", t("shoppingOrderShipment", { number: numbers.format(index + 1) })));
+      row.append(title);
+      if (stage.next) row.append(node("small", "", t("shoppingOrderNext", { next: stage.next })));
+      progress.append(row);
+    }
+    container.append(progress);
+  }
+
   function renderWatch(watch, status) {
     const raw = observations[watch.id];
     const liveSample = raw?.rule === shoppingWatchKey(watch) ? raw : null;
@@ -499,13 +552,8 @@ export function renderShopping(root, options) {
       const statusText = node("span", "", job.orderId ? t("shoppingPurchaseOrder", { order: job.orderId }) : t(purchaseStatus));
       if (job.status === "running" || job.status === "submitting") checkout.setAttribute("role", "status");
       checkout.append(statusText);
-      if (job.invoiceQuote && purchaseStatus !== "shoppingPurchaseRearm") {
-        const lastQuote = node("small", "shopping-last-invoice", t("shoppingQuoteBreakdown", {
-          total: priceText(job.invoiceQuote.total), shipping: priceText(job.invoiceQuote.shipping)
-        }));
-        lastQuote.title = t("shoppingCheckedAt", { date: dates.format(job.invoiceQuote.checkedAt) });
-        checkout.append(lastQuote);
-      }
+      if (purchaseStatus !== "shoppingPurchaseRearm") addInvoiceQuote(checkout, job.invoiceQuote);
+      if (job.status === "paid") addOrderTracking(checkout, job.tracking);
       if (purchaseStatus === "shoppingPurchaseRearm") {
         const edit = button(t("shoppingEdit"), "secondary-button shopping-checkout-link", { symbol: "edit", onClick: () => editWatch(watch) });
         edit.id = `shopping-checkout-${watch.id}`;
@@ -543,7 +591,8 @@ export function renderShopping(root, options) {
           controls.append(confirm);
         }
         const openLabel = job.status === "awaiting" ? "shoppingPurchaseContinuePayment"
-          : job.status === "unknown" || job.status === "paid" ? "shoppingPurchaseOpenOrders" : "shoppingPurchaseOpenCheckout";
+          : job.status === "paid" ? "shoppingOpenOrder"
+            : job.status === "unknown" ? "shoppingPurchaseOpenOrders" : "shoppingPurchaseOpenCheckout";
         const open = button(t(openLabel),
           "secondary-button shopping-checkout-link", { symbol: "open-window", onClick: async () => {
             const result = await request("open-checkout", { id: watch.id });
@@ -571,6 +620,60 @@ export function renderShopping(root, options) {
     if (focus) document.getElementById(focus)?.focus({ preventScroll: true });
   }
 
+  function ordersByDate() {
+    return Object.values(purchases.history).sort((a, b) => b.paidAt - a.paidAt);
+  }
+
+  function renderHistory() {
+    const focus = historyList.contains(document.activeElement) ? document.activeElement.id : null;
+    const orders = ordersByDate();
+    historyList.replaceChildren(...orders.slice(0, historyLimit).map(order => {
+      const card = node("li", "shopping-card");
+      card.id = `shopping-order-${order.orderId}`;
+      card.tabIndex = -1;
+      card.dataset.state = "shoppingPurchased";
+      const head = node("div", "shopping-card-heading");
+      const title = node("div", "shopping-card-title");
+      title.append(titleOf(order.title, "shopping-product-title"));
+      if (order.variant) title.append(node("span", "shopping-variant-name", order.variant));
+      const badge = node("span", "shopping-status", t("shoppingPurchased"));
+      badge.prepend(glyph("check"));
+      head.append(thumb(order.image), title, badge);
+      const summary = node("div", "shopping-order-summary");
+      const date = dates.format(order.paidAt);
+      summary.append(node("span", "", t("shoppingPurchaseOrder", { order: order.orderId })), node("small", "", date));
+      addInvoiceQuote(summary, order.invoiceQuote);
+      addOrderTracking(summary, order.tracking);
+      const open = linkTo(digikalaOrderUrl(order.orderId), t("shoppingOpenOrder"), "secondary-button shopping-checkout-link");
+      open.id = `shopping-order-link-${order.orderId}`;
+      summary.append(open);
+      card.append(head, summary);
+      return card;
+    }));
+    historyEmpty.hidden = orders.length > 0;
+    historyMore.hidden = orders.length <= historyLimit;
+    if (focus) document.getElementById(focus)?.focus({ preventScroll: true });
+  }
+
+  function showHistory(open) {
+    historyOpen = open;
+    watchView.hidden = open;
+    historyView.hidden = !open;
+    purchaseSettings.hidden = open;
+    if (open) notifyButton.hidden = true;
+    else void updateAccess().catch(() => {});
+    heading.textContent = t(open ? "shoppingPurchaseHistory" : "shopping");
+    const label = t(open ? "shoppingBackToWatchlist" : "shoppingPurchaseHistory");
+    historyButton.title = label;
+    historyButton.setAttribute("aria-label", label);
+    historyButton.setAttribute("aria-pressed", String(open));
+    historyButton.replaceChildren(glyph(open ? "chevron-left" : "history"));
+    refreshButton.title = t(open ? "shoppingRefreshOrders" : "shoppingRefresh");
+    refreshButton.setAttribute("aria-label", refreshButton.title);
+    if (open) renderHistory();
+    root.parentElement.scrollTop = 0;
+  }
+
   const refreshPermissions = () => { void updateAccess().catch(() => {}); };
   chrome.permissions.onAdded?.addListener(refreshPermissions);
   chrome.permissions.onRemoved?.addListener(refreshPermissions);
@@ -581,11 +684,25 @@ export function renderShopping(root, options) {
     fill,
     openSettings() { openPurchaseSettings({ ...options, numberField, readAmount }, purchases); },
     focusWatch(id) {
+      if (historyOpen) showHistory(false);
       const card = document.getElementById(`shopping-watch-${id}`);
       card?.scrollIntoView({ block: "nearest" });
       card?.focus({ preventScroll: true });
     },
-    update(next) { ({ watches, observations, purchases } = next); renderWatches(); },
+    focusOrder(id) {
+      const index = ordersByDate().findIndex(order => order.orderId === id);
+      if (index < 0) return;
+      historyLimit = Math.max(historyLimit, index + 1);
+      showHistory(true);
+      const card = document.getElementById(`shopping-order-${id}`);
+      card?.scrollIntoView({ block: "nearest" });
+      card?.focus({ preventScroll: true });
+    },
+    update(next) {
+      ({ watches, observations, purchases } = next);
+      if (historyOpen) renderHistory();
+      else renderWatches();
+    },
     dispose() {
       live = false;
       clearInterval(stamp);

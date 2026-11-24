@@ -3,12 +3,17 @@ import {
   checkoutAmounts, checkoutCartIssue, checkoutCartsMatch, checkoutItemsKey, defaultShoppingPurchasePolicy,
   isShoppingCreditMode, isShoppingPaymentMode
 } from "./shopping-purchase-store.js";
-import { DigikalaCheckoutError, digikalaStorefront as storefront, isDigikalaPage, readDigikalaInTab } from "./shopping-digikala-session.js";
+import { DigikalaCheckoutError, digikalaStorefront as storefront, isDigikalaPage, readDigikalaInTab, withDigikalaTab } from "./shopping-digikala-session.js";
 
 export const digikalaCartUrl = storefront + "/checkout/cart/";
 export const digikalaShippingUrl = storefront + "/checkout/shipping/";
 export const digikalaOrdersUrl = storefront + "/profile/orders/";
 export const digikalaAddressesUrl = storefront + "/profile/addresses/";
+
+export function digikalaOrderUrl(value) {
+  const id = opaqueId(value);
+  return id ? `${digikalaOrdersUrl}${id}/` : digikalaOrdersUrl;
+}
 
 const digipayCreditTitles = {
   "credit-one": ["یکقسطه", "1قسطه", "یکقسط", "1قسط", "تکقسطه"],
@@ -100,6 +105,39 @@ async function readDigikalaAccount(tabId) {
   const accountId = opaqueId(profile?.id);
   if (!accountId) throw new DigikalaCheckoutError("shoppingPurchaseSignIn");
   return accountId;
+}
+
+function orderPlacedAt(value, now) {
+  const timestamp = integer(value);
+  const placed = timestamp !== null ? (timestamp < 100_000_000_000 ? timestamp * 1000 : timestamp)
+    : typeof value === "string" && /^\d{4}-\d{2}-\d{2}[T ].*(?:Z|[+-]\d{2}:?\d{2})$/iu.test(value) ? Date.parse(value) : NaN;
+  return placed >= Date.UTC(2000, 0, 1) && placed <= now ? placed : null;
+}
+
+export async function checkDigikalaOrderStatuses(orders) {
+  const checkedAt = Date.now();
+  const updates = new Map(orders.map(({ id, accountId }) => [id, { accountId, checkedAt }]));
+  if (!orders.length) return updates;
+  await withDigikalaTab(async tabId => {
+    const account = await readDigikalaAccount(tabId);
+    const eligible = orders.filter(order => !order.accountId || order.accountId === account);
+    for (let offset = 0; offset < eligible.length; offset += 4) {
+      await Promise.all(eligible.slice(offset, offset + 4).map(async ({ id }) => {
+        if (!opaqueId(id)) return;
+        const result = await readDigikalaInTab(tabId, "order-status", id).catch(() => null);
+        if (result?.status !== 200 || !result.data) return;
+        const { progress, state } = result.data;
+        if (!Array.isArray(progress)) return;
+        const shipments = progress.filter(step => step?.title);
+        const placedAt = orderPlacedAt(result.data.placedAt, checkedAt);
+        const terminal = ["cancelled", "canceled", "delivered", "returned", "completed"].includes(state);
+        if (!shipments.length && !terminal && !placedAt) return;
+        updates.get(id).tracking = { shipments, state, placedAt, checkedAt,
+          finished: terminal || (progress.length > 0 && progress.every(step => step?.finished)) };
+      }));
+    }
+  }).catch(() => {});
+  return updates;
 }
 
 async function buyerForAddress(accountId, address) {

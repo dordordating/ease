@@ -77,6 +77,24 @@ export async function readDigikalaFromPage(kind, option) {
   if (kind === "receipt" && validId(option?.id) && validId(option?.code)) {
     return request(`/v1/thank-you/payment/${option.id}/${option.code}/`);
   }
+  if (kind === "order-status" && validId(option)) {
+    const { status, data } = await request(`/v1/order/${option}/`);
+    const order = data?.order;
+    if (String(order?.id) !== option) return { status, data: null };
+    const text = value => typeof value === "string" ? value.trim().slice(0, 120) : "";
+    const shipments = Array.isArray(order.shipments) ? order.shipments : [];
+    const progress = shipments.map(shipment => {
+      const steps = Array.isArray(shipment?.status) ? shipment.status : [];
+      const index = steps.findIndex(step => step?.is_current === true || step?.is_current === 1);
+      if (index < 0) return null;
+      return { title: text(steps[index]?.title), next: text(steps[index + 1]?.title),
+        finished: index === steps.length - 1 && Number(steps[index]?.percentage) === 100 };
+    });
+    // The order API also contains contact, address and transaction details. Keep those in the merchant tab.
+    const state = typeof order.status === "string" && /^[a-z_-]+$/iu.test(order.status) ? order.status.toLowerCase() : "";
+    const placedAt = typeof order.created_at === "string" || Number.isSafeInteger(order.created_at) ? order.created_at : null;
+    return { status, data: { progress, state, placedAt } };
+  }
   return null;
 }
 

@@ -14,7 +14,7 @@ const widgetDetails = {
 
 export function renderHome(options) {
   const {
-    node, glyph, button, t, dateLocale, locale, onPreferences, openModule, openTask,
+    node, glyph, button, t, dateLocale, locale, onPreferences, openTools, dismissToolsWelcome, openModule, openTask,
     completeTask, addTask, restoreSpace, openEvent, openMail
   } = options;
   const root = node("div", "home-screen");
@@ -35,6 +35,24 @@ export function renderHome(options) {
   headerActions.append(historyButton, layout);
   const dashboard = node("div", "home-dashboard");
   const assistant = renderHomeAssistant({ ...options, navigation: headerActions });
+  const welcome = node("section", "home-welcome");
+  welcome.hidden = true;
+  const welcomeTitle = node("h1", "", t("homeWelcomeTitle"));
+  welcomeTitle.id = "home-welcome-title";
+  welcome.setAttribute("aria-labelledby", welcomeTitle.id);
+  const welcomeCopy = node("div", "home-welcome-copy");
+  const browse = button(t("homeWelcomeBrowse"), "primary-button home-welcome-action", { symbol: "arrow", onClick: openTools });
+  welcomeCopy.append(welcomeTitle, node("p", "", t("homeWelcomeHint")), browse);
+  const toolIcons = node("div", "home-welcome-tools");
+  toolIcons.setAttribute("aria-hidden", "true");
+  toolIcons.append(...["todo", "mail", "translate", "spaces"].map(symbol => glyph(symbol, "home-welcome-tool")));
+  const dismiss = button(t("homeWelcomeDismiss"), "icon-button home-welcome-dismiss", {
+    symbol: "close", iconOnly: true, onClick() {
+      dismissToolsWelcome();
+      assistant.focus();
+    }
+  });
+  welcome.append(welcomeCopy, toolIcons, dismiss);
   const history = renderAssistantHistory({
     ...options,
     onReuse(prompt) {
@@ -43,7 +61,7 @@ export function renderHome(options) {
     }
   });
   const grid = node("div", "home-widgets");
-  dashboard.append(assistant.root, grid);
+  dashboard.append(welcome, assistant.root, grid);
   const settings = node("section", "home-settings");
   settings.id = "home-settings";
   settings.setAttribute("aria-label", t("homeLayout"));
@@ -347,6 +365,7 @@ export function renderHome(options) {
     },
     update(next) {
       state = next;
+      welcome.hidden = next.toolsWelcomePending !== true;
       prefs = normalizeHome(next.home);
       const key = JSON.stringify(prefs);
       if (prefsKey !== key) {

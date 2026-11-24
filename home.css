@@ -49,6 +49,93 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
   gap: 10px;
 }
 
+.home-welcome {
+  --welcome-glow: 88%;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: clamp(10px, 4cqi, 18px);
+  padding: clamp(13px, 4.5cqi, 20px);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--stroke));
+  border-radius: 16px;
+  background: radial-gradient(ellipse at var(--welcome-glow) 28%, var(--accent-wash), transparent 78%), var(--surface);
+}
+
+.home-welcome:dir(rtl) { --welcome-glow: 12%; }
+
+.home-welcome h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(20px, 6.4cqi, 25px);
+  font-weight: 800;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+.home-welcome-copy p {
+  margin: 6px 0 12px;
+  max-inline-size: 38ch;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.home-welcome-action {
+  flex-direction: row-reverse;
+  max-inline-size: 100%;
+  min-block-size: 34px;
+}
+
+.home-welcome-action:dir(rtl) svg { transform: scaleX(-1); }
+
+.home-welcome-dismiss {
+  position: absolute;
+  inset-block-start: 6px;
+  inset-inline-end: 6px;
+  inline-size: 26px;
+  block-size: 26px;
+  min-block-size: 26px;
+}
+
+.home-welcome-tools {
+  --tool-size: clamp(29px, 10.5cqi, 43px);
+  display: grid;
+  grid-template-columns: repeat(2, var(--tool-size));
+  gap: 5px;
+  margin-block-start: 15px;
+  margin-inline-end: 4px;
+  transform: rotate(7deg);
+}
+
+.home-welcome-tools:dir(rtl) { transform: rotate(-7deg); }
+
+.home-welcome-tool {
+  --tool-ink: var(--accent);
+  display: grid;
+  place-items: center;
+  block-size: var(--tool-size);
+  border: 1px solid color-mix(in srgb, var(--tool-ink) 28%, var(--stroke-subtle));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--tool-ink) 12%, var(--surface));
+  color: var(--tool-ink);
+  box-shadow: 0 3px 7px color-mix(in srgb, var(--shadow) 30%, transparent);
+}
+
+.home-welcome-tool:nth-child(1) { --tool-ink: var(--positive); }
+.home-welcome-tool:nth-child(2) { --tool-ink: var(--mail); }
+.home-welcome-tool:nth-child(3) { --tool-ink: var(--translate); }
+
+.home-welcome-tool svg { inline-size: 18px; block-size: 18px; }
+
+@container home (max-width: 265px) {
+  .home-welcome {
+    grid-template-columns: minmax(0, 1fr);
+    padding-inline-end: 38px;
+  }
+
+  .home-welcome-tools { display: none; }
+}
+
 .home-assistant {
   gap: 4px;
   min-inline-size: 0;
