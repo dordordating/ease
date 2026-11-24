@@ -1,0 +1,71 @@
+import { digikalaPrice, shoppingWatchKey } from "./shopping-store.js";
+
+export const shoppingPaymentKey = "easeDigikalaPendingPayment";
+export const shoppingPurchasePrefix = "easeShoppingPurchases:";
+export const defaultShoppingPurchasePolicy = Object.freeze({ cart: "review", delivery: "include", shippingLimit: null });
+
+export function shoppingPurchaseKey(owner) {
+  return shoppingPurchasePrefix + (owner ? `account:${owner}` : "guest");
+}
+
+export function shoppingPurchasePolicy(value) {
+  if (!value || !["review", "include"].includes(value.cart) || !["include", "separate", "max"].includes(value.delivery)) return null;
+  const shippingLimit = value.delivery === "max" ? value.shippingLimit : null;
+  if (value.delivery === "max" && shippingLimit !== 0 && !digikalaPrice(shippingLimit)) return null;
+  return { cart: value.cart, delivery: value.delivery, shippingLimit };
+}
+
+export async function readShoppingPurchases(owner) {
+  const key = shoppingPurchaseKey(owner);
+  const values = await chrome.storage.local.get([key, shoppingPaymentKey]);
+  return { key, ...shoppingPurchaseView(values[key], values[shoppingPaymentKey]) };
+}
+
+export function shoppingPurchaseView(state, payment = null) {
+  return { policy: shoppingPurchasePolicy(state?.policy) ?? defaultShoppingPurchasePolicy,
+    jobs: state?.jobs ?? {}, payment };
+}
+
+export function purchaseJobApplies(watch, job, policy) {
+  return job?.rule === shoppingWatchKey(watch) && (job.mode === "prepare" || JSON.stringify(job.policy) === JSON.stringify(policy));
+}
+
+export function shoppingPurchaseStatus(watch, job, policy) {
+  if (!job) return null;
+  if (job.status === "armed" && !purchaseJobApplies(watch, job, policy)) return "shoppingPurchaseRearm";
+  if (job.status === "submitting" || job.status === "running") return "shoppingPurchaseWorking";
+  if (job.status === "paid") return "shoppingPurchasePaid";
+  if (job.status === "unknown") return "shoppingPurchaseUnknown";
+  if (job.status === "prepared") return "shoppingPurchasePrepared";
+  if (job.status === "review") return job.reason ?? "shoppingPurchaseReview";
+  return job.status === "armed" ? "shoppingPurchaseArmed" : null;
+}
+
+export function checkoutCartIssue(cart, watch, offer, policy, { requireTarget = true } = {}) {
+  if (!cart || cart.extraServices) return "shoppingPurchaseReview";
+  const matching = cart.items.filter(item => item.variantId === offer.variantId);
+  if (matching.length > 1 || (requireTarget && matching.length !== 1)) return "shoppingPurchaseCartChanged";
+  const target = matching[0];
+  if (target && (target.quantity !== 1 || (target.productId && target.productId !== watch.productId)
+    || (target.sellerId && target.sellerId !== offer.sellerId) || (target.price !== null && target.price !== offer.price))) {
+    return "shoppingPurchaseCartChanged";
+  }
+  if (policy.cart === "review" && cart.items.length > matching.length) return "shoppingPurchaseMixedCart";
+  return null;
+}
+
+export function checkoutCostIssue(invoice, limit, policy) {
+  const { total, shipping } = invoice;
+  if (!digikalaPrice(total) || (shipping !== 0 && !digikalaPrice(shipping)) || shipping > total) {
+    return "shoppingPurchaseDeliveryUnknown";
+  }
+  if (policy.delivery === "max" && shipping > policy.shippingLimit) return "shoppingPurchaseShippingLimit";
+  const counted = policy.delivery === "include" ? total : total - shipping;
+  if (limit !== null && counted > limit) return "shoppingPurchaseOverLimit";
+  return null;
+}
+
+export function checkoutItemsKey(cart) {
+  return JSON.stringify(cart.items.map(item => [item.variantId, item.quantity, item.price, item.sellerId, item.productId])
+    .sort((a, b) => a[0].localeCompare(b[0])));
+}

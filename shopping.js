@@ -5,6 +5,8 @@ import {
   shoppingPollMinutes, shoppingReadErrors, shoppingStatus, shoppingWatchKey
 } from "./shopping-store.js";
 import { createShoppingSellerPicker } from "./shopping-sellers.js";
+import { shoppingPurchaseStatus } from "./shopping-purchase-store.js";
+import { openPurchaseSettings, purchaseEditor } from "./shopping-purchase-ui.js";
 import { createDatePicker } from "./date-picker.js";
 import { createTimePicker } from "./time-picker.js";
 import { localTaskDay } from "./todo-store.js";
@@ -20,7 +22,7 @@ export function renderShopping(root, options) {
   const dates = new Intl.DateTimeFormat(dateLocale, { dateStyle: "medium", timeStyle: "short" });
   const priceText = rials => t("shoppingTomanPrice", { amount: numbers.format(rials / 10) });
   const price = rials => node("bdi", "shopping-price", priceText(rials));
-  let { watches, observations } = options;
+  let { watches, observations, purchases } = options;
   let lookupVersion = 0;
   let connected = false;
   let live = true;
@@ -242,8 +244,15 @@ export function renderShopping(root, options) {
         reportError("shoppingInvalidSchedule");
         return false;
       }
+      const checkout = action.read();
+      if (checkout.error) {
+        action.root.open = true;
+        reportError(checkout.error);
+        return false;
+      }
       const saved = await mutate("shopping-save", {
-        id: watch?.id, productId, title, image, ...picker.selection(), priceLimit: limit, discount, startAt, endAt
+        id: watch?.id, productId, title, image, ...picker.selection(), priceLimit: limit, discount, startAt, endAt,
+        purchase: checkout.payload
       });
       if (saved) {
         if (!watch) {
@@ -300,7 +309,8 @@ export function renderShopping(root, options) {
     }
     const starts = dateTime("shoppingStarts", watch?.startAt, "00:00");
     const ends = dateTime("shoppingEnds", watch?.endAt, "23:59");
-    fields.append(heading, picker.root, thresholds, ruleHint, schedule);
+    const action = purchaseEditor({ node, t, numberField, priceText }, purchases, purchases.jobs[watch?.id]);
+    fields.append(heading, picker.root, thresholds, ruleHint, schedule, action.root);
     editor.showModal();
     if (focusSeller) picker.focus();
     else cap.focus();
@@ -342,6 +352,8 @@ export function renderShopping(root, options) {
     const quote = liveSample?.quote;
     const name = quote?.title ?? watch.title;
     const ready = status === "shoppingReady";
+    const job = purchases.jobs[watch.id];
+    const purchaseStatus = shoppingPurchaseStatus(watch, job, purchases.policy);
     const card = node("li", "shopping-card");
     card.id = `shopping-watch-${watch.id}`;
     card.tabIndex = -1;
@@ -392,7 +404,7 @@ export function renderShopping(root, options) {
     })});
     more.id = `shopping-more-${watch.id}`;
     more.setAttribute("aria-haspopup", "menu");
-    if (ready) {
+    if (ready && !job) {
       const add = button(t("shoppingPrepareCart"), "secondary-button shopping-cart", { symbol: "shopping", onClick: () => cart(watch, add) });
       add.id = `shopping-cart-${watch.id}`;
       actions.append(add);
@@ -400,6 +412,27 @@ export function renderShopping(root, options) {
     actions.append(more);
     footer.append(values, actions);
     card.append(head, footer);
+    if (purchaseStatus) {
+      const checkout = node("div", "shopping-checkout-status");
+      checkout.dataset.status = job.status;
+      const statusText = node("span", "", job.orderId ? t("shoppingPurchaseOrder", { order: job.orderId }) : t(purchaseStatus));
+      if (job.status === "running" || job.status === "submitting") checkout.setAttribute("role", "status");
+      checkout.append(statusText);
+      if (["review", "prepared", "paid", "unknown"].includes(job.status)) {
+        const open = button(t(job.status === "unknown" || job.status === "paid" ? "shoppingPurchaseOpenOrders" : "shoppingPurchaseOpenCheckout"),
+          "secondary-button shopping-checkout-link", { symbol: "open-window", onClick: async () => {
+            const result = await request("open-checkout", { id: watch.id });
+            if (result?.error) reportError(result.error);
+          }});
+        open.id = `shopping-checkout-${watch.id}`;
+        checkout.append(open);
+      } else if (purchaseStatus === "shoppingPurchaseRearm") {
+        const edit = button(t("shoppingEdit"), "secondary-button shopping-checkout-link", { symbol: "edit", onClick: () => editWatch(watch) });
+        edit.id = `shopping-checkout-${watch.id}`;
+        checkout.append(edit);
+      }
+      card.append(checkout);
+    }
     return card;
   }
 
@@ -424,12 +457,13 @@ export function renderShopping(root, options) {
   stamp = setInterval(renderWatches, shoppingPollMinutes * 60_000 / 4);
   return {
     fill,
+    openSettings() { openPurchaseSettings({ ...options, numberField }, purchases); },
     focusWatch(id) {
       const card = document.getElementById(`shopping-watch-${id}`);
       card?.scrollIntoView({ block: "nearest" });
       card?.focus({ preventScroll: true });
     },
-    update(next) { ({ watches, observations } = next); renderWatches(); },
+    update(next) { ({ watches, observations, purchases } = next); renderWatches(); },
     dispose() {
       live = false;
       clearInterval(stamp);

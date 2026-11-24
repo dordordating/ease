@@ -8,6 +8,8 @@ import {
   readDigikalaProduct, quoteForWatch, searchDigikala, ShoppingLookupError, shoppingHostPermission, shoppingNotificationPermission
 } from "./shopping-digikala.js";
 import { prepareDigikalaCart } from "./shopping-cart.js";
+import { purchaseJobApplies, readShoppingPurchases, shoppingPurchasePrefix } from "./shopping-purchase-store.js";
+import { shoppingPurchases } from "./shopping-purchases.js";
 
 export const shoppingMessage = "ease-shopping";
 const alarmName = "ease-shopping-check";
@@ -105,16 +107,18 @@ async function reconcile(force, queueWorkspace) {
   }
 
   const products = await checkProducts(pending);
-  await queueWorkspace(async () => {
+  return queueWorkspace(async () => {
     const latest = await currentShopping();
     if (latest.owner !== context.owner) return;
     const allowed = await chrome.permissions.contains(shoppingHostPermission);
     const notify = allowed && await canNotify();
     const newest = await readObservations(context.key);
+    const { jobs, policy } = await readShoppingPurchases(context.owner);
     const next = {};
     const checked = new Map(pending.map(watch => [watch.id, shoppingWatchKey(watch)]));
     const checkedAt = Date.now();
     const notices = [];
+    const purchaseIds = [];
     const updated = latest.watches.map(watch => {
       const rule = shoppingWatchKey(watch);
       const previous = newest[watch.id]?.rule === rule ? newest[watch.id] : null;
@@ -125,9 +129,15 @@ async function reconcile(force, queueWorkspace) {
       const { product, error } = products.get(watch.productId);
       const quote = product ? quoteForWatch(product, watch) : previous?.quote ?? null;
       const sample = { rule, quote, checkedAt, error, alertedAt: previous?.alertedAt ?? null };
-      if (notify && !sample.alertedAt && shoppingStatus(watch, sample, checkedAt) === "shoppingReady") {
-        sample.alertedAt = checkedAt;
-        notices.push({ watch, quote });
+      if (shoppingStatus(watch, sample, checkedAt) === "shoppingReady") {
+        const job = jobs[watch.id];
+        if (job?.status === "armed" && purchaseJobApplies(watch, job, policy)) {
+          purchaseIds.push(watch.id);
+          sample.alertedAt ??= checkedAt;
+        } else if (notify && !sample.alertedAt && !job) {
+          sample.alertedAt = checkedAt;
+          notices.push({ watch, quote });
+        }
       }
       next[watch.id] = sample;
       return product ? updateWatchDetails(watch, quote) : watch;
@@ -140,6 +150,7 @@ async function reconcile(force, queueWorkspace) {
     if (Object.keys(changes).length) await chrome.storage.local.set(changes);
     await scheduleAlarm(latest, next, allowed);
     await Promise.allSettled(notices.map(({ watch, quote }) => showAlert(watch, quote, latest.locale, checkedAt)));
+    return { owner: latest.owner, purchaseIds };
   });
 }
 
@@ -162,8 +173,11 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
   let menuPending = Promise.resolve();
   let notificationListeners = false;
   const cartRequests = new Map();
+  const purchases = shoppingPurchases(queueWorkspace, currentShopping, openShopping);
   const run = (force = false) => {
-    const check = pending.then(() => reconcile(force, queueWorkspace));
+    const check = pending.then(() => reconcile(force, queueWorkspace)).then(ready => {
+      if (ready?.purchaseIds.length) void purchases.run(ready.owner, ready.purchaseIds).catch(() => {});
+    });
     pending = check.catch(() => {});
     return check;
   };
@@ -188,6 +202,9 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
     const context = await currentShopping();
     const watch = context.enabled && context.watches.find(watch => watch.id === id);
     if (!watch) return { error: "shoppingRuleMissing" };
+    const { payment, jobs } = await readShoppingPurchases(context.owner);
+    if (payment) return { error: "shoppingPurchasePending" };
+    if (jobs[id]) return { error: "shoppingPurchaseUseCheckout" };
     if (!await chrome.permissions.contains(shoppingHostPermission)) return { error: "shoppingConnect" };
     const refresh = () => poll(true);
     try {
@@ -215,7 +232,7 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
 
   function requestCart(id) {
     if (!cartRequests.has(id)) {
-      cartRequests.set(id, addToCart(id).finally(() => cartRequests.delete(id)));
+      cartRequests.set(id, purchases.queue(() => addToCart(id)).finally(() => cartRequests.delete(id)));
     }
     return cartRequests.get(id);
   }
@@ -234,6 +251,8 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
       result = run(true).then(() => ({ ok: true }));
     } else if (action === "cart") {
       result = requestCart(id);
+    } else if (action === "open-checkout") {
+      result = purchases.open(id);
     } else if (action === "lookup") {
       result = (async () => {
         const link = digikalaProductLink(input);
@@ -279,12 +298,22 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
     });
   }
   registerNotifications();
-  chrome.alarms.onAlarm.addListener(({ name }) => { if (name === alarmName) return poll(false); });
-  chrome.runtime.onInstalled?.addListener(() => { updateMenu(); return poll(true); });
-  chrome.runtime.onStartup?.addListener(() => { updateMenu(); return poll(false); });
+  const recover = () => purchases.recover().catch(() => {});
+  void recover();
+  chrome.alarms.onAlarm.addListener(({ name }) => {
+    if (name === alarmName) return recover().then(() => poll(false));
+  });
+  chrome.runtime.onInstalled?.addListener(() => { updateMenu(); return recover().then(() => poll(true)); });
+  chrome.runtime.onStartup?.addListener(() => { updateMenu(); return recover().then(() => poll(false)); });
   chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local") return;
+    const armed = Object.entries(changes).some(([key, value]) =>
+      key.startsWith(shoppingPurchasePrefix)
+      && Object.entries(value.newValue?.jobs ?? {}).some(([id, job]) =>
+        job.status === "armed" && job.token !== value.oldValue?.jobs?.[id]?.token));
+    if (armed) void poll(true);
     const change = changes[storageKey];
-    if (area !== "local" || !change) return;
+    if (!change) return;
     const before = change.oldValue;
     const after = change.newValue;
     const toggled = before?.tabs?.includes("shopping") !== after?.tabs?.includes("shopping");

@@ -26,6 +26,7 @@ import { renderTranslatorSites } from "./translator-sites-ui.js";
 import { readTranslationHistory, translationHistoryKey, translationHistoryMessage } from "./translation-history-store.js";
 import { renderShopping } from "./shopping.js";
 import { digikalaProductUrl, restoreShopping, shoppingObservationKey, shoppingReadErrors, shoppingStatus } from "./shopping-store.js";
+import { shoppingPaymentKey, shoppingPurchaseKey, shoppingPurchaseView } from "./shopping-purchase-store.js";
 import { workspaceOwnerKey } from "./workspace-accounts.js";
 import { renderTranslationHistory } from "./translation-history-view.js";
 import { clipboardHistoryKey, clipboardHistoryMessage, loadClipboardHistory } from "./clipboard-history-store.js";
@@ -112,6 +113,8 @@ let shoppingController;
 let shoppingLocale;
 let shoppingOwner = null;
 let shoppingObservations = {};
+let shoppingPurchases;
+let shoppingPayment;
 let mailAccounts = [];
 let mailController;
 let mailLocale;
@@ -327,7 +330,8 @@ function updateModuleBadge(tab, count, numbers) {
 }
 
 function shoppingViewState() {
-  return { watches: restoreShopping(workspace.shopping) ?? [], observations: shoppingObservations };
+  return { watches: restoreShopping(workspace.shopping) ?? [], observations: shoppingObservations,
+    purchases: { ...shoppingPurchaseView(shoppingPurchases, shoppingPayment), owner: shoppingOwner } };
 }
 
 function updateShoppingBadge(tab) {
@@ -337,9 +341,11 @@ function updateShoppingBadge(tab) {
   updateModuleBadge(tab, ready, new Intl.NumberFormat(workspace.locale, { useGrouping: false }));
 }
 
-async function readShoppingObservations(owner) {
-  const key = shoppingObservationKey(owner);
-  return (await chrome.storage.local.get(key))[key] ?? {};
+async function readShoppingState(owner) {
+  const observations = shoppingObservationKey(owner);
+  const purchases = shoppingPurchaseKey(owner);
+  const data = await chrome.storage.local.get([observations, purchases, shoppingPaymentKey]);
+  return { observations: data[observations] ?? {}, purchases: data[purchases], payment: data[shoppingPaymentKey] };
 }
 
 function refreshShoppingView() {
@@ -1598,8 +1604,12 @@ function render() {
     const notifyButton = button(t("shoppingEnableNotifications"), "icon-button", { symbol: "bell", iconOnly: true });
     notifyButton.id = "shopping-notifications";
     notifyButton.hidden = true;
+    const purchaseSettings = button(t("shoppingPurchaseSettings"), "icon-button", {
+      symbol: "shopping-settings", iconOnly: true, onClick: () => shoppingController?.openSettings()
+    });
+    purchaseSettings.id = "shopping-purchase-settings";
     const actions = node("div", "module-title-actions");
-    actions.append(refreshButton, notifyButton);
+    actions.append(refreshButton, notifyButton, purchaseSettings);
     section(t("shopping"), undefined, actions);
     const body = node("section", "shopping-module");
     view.append(body);
@@ -3334,18 +3344,23 @@ chrome.storage.onChanged.addListener((changes, area) => {
     shoppingOwner = changes[workspaceOwnerKey].newValue ?? null;
     const owner = shoppingOwner;
     shoppingObservations = {};
-    readShoppingObservations(owner).then(samples => {
+    shoppingPurchases = undefined;
+    readShoppingState(owner).then(state => {
       if (owner === shoppingOwner) {
-        shoppingObservations = samples;
+        shoppingObservations = state.observations;
+        shoppingPurchases = state.purchases;
+        shoppingPayment = state.payment;
         refreshShoppingView();
       }
     }).catch(() => {});
   }
   const shoppingChange = changes[shoppingObservationKey(shoppingOwner)];
-  if (shoppingChange) {
-    shoppingObservations = shoppingChange.newValue ?? {};
-    refreshShoppingView();
-  }
+  const purchaseChange = changes[shoppingPurchaseKey(shoppingOwner)];
+  const paymentChange = changes[shoppingPaymentKey];
+  if (shoppingChange) shoppingObservations = shoppingChange.newValue ?? {};
+  if (purchaseChange) shoppingPurchases = purchaseChange.newValue;
+  if (paymentChange) shoppingPayment = paymentChange.newValue;
+  if (shoppingChange || purchaseChange || paymentChange) refreshShoppingView();
   if (changes[translationHistoryKey]) {
     translationHistory = changes[translationHistoryKey].newValue ?? { enabled: false, entries: [] };
     if (query || activePage === "translate") render();
@@ -3389,7 +3404,7 @@ const [initialAccount, initialHistory, initialMarketAlerts, rememberedTab, saved
   chrome.storage.local.get(taskSections.map(collapsedTaskKey)).catch(() => ({})),
   chrome.storage.local.get(workspaceOwnerKey).then(async result => {
     const owner = result[workspaceOwnerKey] ?? null;
-    return { owner, observations: await readShoppingObservations(owner) };
+    return { owner, ...await readShoppingState(owner) };
   }).catch(() => ({ owner: null, observations: {} })),
   refreshClipboardHistory()
 ]);
@@ -3399,6 +3414,8 @@ if (initialHistory) translationHistory = initialHistory;
 marketAlertState = initialMarketAlerts;
 shoppingOwner = savedShopping.owner;
 shoppingObservations = savedShopping.observations;
+shoppingPurchases = savedShopping.purchases;
+shoppingPayment = savedShopping.payment;
 lastWorkspaceTab = rememberedTab ?? home.id;
 await refreshWorkspace(undefined, initialTranslationSelection === null ? lastWorkspaceTab : undefined);
 workspaceInitialized = true;

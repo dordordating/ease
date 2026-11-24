@@ -81,14 +81,15 @@ function searchProducts(payload) {
   return Array.isArray(list) ? list.filter(widget => widget?.type === "product").map(widget => widget.data) : [];
 }
 
-async function readPublicJson(url, product = false) {
+export async function readDigikalaJson(url, { product = false, headers = {} } = {}) {
+  if (new URL(url).origin !== api) throw new ShoppingLookupError("shoppingUnavailable");
   const options = {
     credentials: "include", cache: "no-store", redirect: "manual",
-    headers: { Accept: "application/json" }, signal: AbortSignal.timeout(9000)
+    headers: { Accept: "application/json", ...headers }, signal: AbortSignal.timeout(9000)
   };
   const redirected = response => response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400);
   let response = await fetch(url, options);
-  // Digikala sets a CDN cookie on the first request. Retry the same public URL with the browser's cookie jar.
+  // Digikala sets a CDN cookie on the first request. Retry the same endpoint with the browser's cookie jar.
   if (redirected(response)) response = await fetch(url, options);
   if (redirected(response)) throw new ShoppingLookupError("shoppingStoreConnection");
   if (product && response.status === 404) throw new ShoppingLookupError("shoppingProductMissing");
@@ -100,7 +101,7 @@ async function readPublicJson(url, product = false) {
 export async function readDigikalaProduct(id) {
   const productId = digikalaId(id);
   if (!productId) throw new ShoppingLookupError("shoppingInvalidLink");
-  const data = await readPublicJson(`${api}/product/v1/products/${productId}/`, true);
+  const data = await readDigikalaJson(`${api}/product/v1/products/${productId}/`, { product: true });
   return productDetails(data, productId);
 }
 
@@ -108,7 +109,7 @@ export async function searchDigikala(query) {
   const url = new URL(`${api}/discovery/api/v2/search`);
   url.searchParams.set("q", query);
   url.searchParams.set("page", "1");
-  const products = searchProducts(await readPublicJson(url));
+  const products = searchProducts(await readDigikalaJson(url));
   return [...new Map(products.map(productSummary).filter(Boolean).map(item => [item.id, item])).values()].slice(0, 12);
 }
 

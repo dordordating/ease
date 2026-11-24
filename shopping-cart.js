@@ -45,8 +45,7 @@ export async function clickDigikalaAdd({ productId, variantId, price, deadline }
   return false;
 }
 
-export async function prepareDigikalaCart(watch, quote, authorize) {
-  const tab = await chrome.tabs.create({ url: digikalaProductUrl(watch.productId, quote.variantId) });
+export async function addDigikalaTabItem(tab, watch, quote, authorize) {
   if (!quote.singleItem || !quote.variantId || !Number.isInteger(tab.id) || !chrome.tabs.onUpdated?.removeListener) return false;
   if (!await waitForProductTab(tab.id, watch.productId) || !await authorize()) return false;
   try {
@@ -59,4 +58,9 @@ export async function prepareDigikalaCart(watch, quote, authorize) {
   } catch {
     return false;
   }
+}
+
+export async function prepareDigikalaCart(watch, quote, authorize) {
+  const tab = await chrome.tabs.create({ url: digikalaProductUrl(watch.productId, quote.variantId) });
+  return addDigikalaTabItem(tab, watch, quote, authorize);
 }

@@ -374,3 +374,76 @@
   .shopping-card-heading { gap: 5px; }
   .shopping-card .shopping-thumb { inline-size: 27px; block-size: 27px; }
 }
+.shopping-purchase-choices {
+  display: grid;
+  gap: 4px;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.shopping-purchase-choices legend { margin-block-end: 5px; font-weight: 650; }
+.shopping-purchase-modes legend { position: absolute; clip-path: inset(50%); }
+
+.shopping-purchase-choice, .shopping-purchase-consent {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+.shopping-purchase-choice {
+  min-block-size: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--stroke);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.shopping-purchase-choice:has(:checked) {
+  background: var(--accent-wash);
+  border-color: var(--accent);
+}
+
+.shopping-purchase-choice input, .shopping-purchase-consent input {
+  flex: none;
+  inline-size: 14px;
+  block-size: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.shopping-wallet-fields, .shopping-payment-review { display: grid; gap: 7px; }
+.shopping-wallet-fields[hidden] { display: none; }
+
+.shopping-purchase-terms {
+  margin: 0;
+  padding-inline-start: 18px;
+  color: var(--muted);
+  font-size: .93em;
+}
+
+.shopping-purchase-consent, .shopping-payment-review {
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: var(--accent-wash);
+}
+
+.shopping-checkout-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--accent-wash);
+  color: var(--text);
+  font-size: .9em;
+}
+
+.shopping-checkout-status[data-status="armed"] { color: var(--accent); }
+.shopping-checkout-status[data-status="review"],
+.shopping-checkout-status[data-status="unknown"] { background: var(--subtle); }
+.shopping-checkout-link { min-block-size: 25px; padding-block: 2px; }

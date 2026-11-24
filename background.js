@@ -28,6 +28,7 @@ import { forgetSpaceWindow, registerSpaceHandlers } from "./spaces-browser.js";
 import { registerSpaceOmnibox } from "./spaces-omnibox.js";
 import { registerShoppingHandlers } from "./shopping-background.js";
 import { updateShopping } from "./shopping-store.js";
+import { stageShoppingPurchase } from "./shopping-purchases.js";
 import { updateSpaces } from "./spaces-store.js";
 import { taskAction } from "./todo-store.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
@@ -384,9 +385,15 @@ async function updateWorkspace(workspace, action, data, transaction) {
     case "space-favorite":
       return updateSpaces(workspace, action, data);
     case "shopping-save":
+    case "shopping-remove": {
+      const error = updateShopping(workspace, action, data);
+      return error || stageShoppingPurchase(workspace, action, data, transaction);
+    }
     case "shopping-pause":
-    case "shopping-remove":
       return updateShopping(workspace, action, data);
+    case "shopping-purchase-settings":
+    case "shopping-purchase-release":
+      return stageShoppingPurchase(workspace, action, data, transaction);
     case "todo-preferences":
     case "save-todo-label":
     case "remove-todo-label":
@@ -610,7 +617,9 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const transaction = { sessions, writeWorkspace: true };
       const error = await updateWorkspace(workspace, message.action, message.data, transaction);
       if (error) return { error };
-      if (transaction.writeWorkspace) await chrome.storage.local.set({ [storageKey]: workspace });
+      const writes = { ...transaction.storageUpdates };
+      if (transaction.writeWorkspace) writes[storageKey] = workspace;
+      if (Object.keys(writes).length) await chrome.storage.local.set(writes);
       await transaction.afterCommit?.();
     }
     return { workspace: await hydrateWorkspace(workspace, sessions) };
