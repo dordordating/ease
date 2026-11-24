@@ -1,6 +1,9 @@
 const productHosts = new Set(["www.digikala.com", "digikala.com"]);
 const imageHosts = new Set(["dkstatics-public.digikala.com", "static.digikala.com"]);
 const productPath = /^\/product\/dkp-([1-9]\d{0,11})(?:\/|$)/u;
+const snappShopHosts = new Set(["snappshop.ir", "www.snappshop.ir"]);
+const snappShopImages = new Set(["cdn.snappshop.ir"]);
+const snappShopProductPath = /^\/product\/snp-([1-9]\d{0,11})(?:\/|$)/iu;
 const watchLimit = 20;
 const maxPriceRials = 10_000_000_000_000;
 
@@ -54,11 +57,61 @@ export function digikalaSearchUrl(query) {
   return url.href;
 }
 
-export function digikalaImage(value) {
+export function snappShopId(value) {
+  return typeof value === "string" && /^[a-zA-Z0-9_-]{1,64}$/u.test(value) ? value : null;
+}
+
+export function isSnappShopPage(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && snappShopHosts.has(url.host) && !url.username && !url.password;
+  } catch { return false; }
+}
+
+export function snappShopProductLink(input) {
+  if (typeof input !== "string" || input.length > 2000) return null;
+  const value = input.trim();
+  const code = /^snp-([1-9]\d{0,11})$/iu.exec(value)?.[1];
+  if (code) return { store: "snappshop", productId: code, variantId: null };
+  try {
+    const url = new URL(/^(?:www\.)?snappshop\.ir\//iu.test(value) ? `https://${value}` : value);
+    if (!isSnappShopPage(url.href)) return null;
+    const match = snappShopProductPath.exec(url.pathname);
+    if (!match) return null;
+    const slug = url.pathname.slice(match[0].length).split("/")[0];
+    let title;
+    try { if (slug) title = shoppingTitle(decodeURIComponent(slug).replace(/[-_]+/gu, " ")); }
+    catch { /* The product code is enough to watch the link. */ }
+    return { store: "snappshop", productId: match[1], variantId: null, ...(title ? { title } : {}) };
+  } catch { return null; }
+}
+
+export function shoppingProductLink(input) {
+  return snappShopProductLink(input) ?? digikalaProductLink(input);
+}
+
+export function shoppingProductUrl({ productId, store, variantId, title }) {
+  if (store !== "snappshop") return digikalaProductUrl(productId, variantId, title);
+  const id = digikalaId(productId);
+  return id ? `https://snappshop.ir/product/snp-${id}` : null;
+}
+
+export function shoppingSearchUrl(query, store) {
+  if (store !== "snappshop") return digikalaSearchUrl(query);
+  const url = new URL("https://snappshop.ir/search");
+  url.searchParams.set("query", query);
+  return url.href;
+}
+
+export function shoppingProductCode(productId, store) {
+  return `${store === "snappshop" ? "SNP" : "DKP"}-${productId}`;
+}
+
+function productImage(value, allowedHosts) {
   if (typeof value !== "string" || value.length > 1400) return null;
   try {
     const url = new URL(value);
-    if (url.protocol === "https:" && imageHosts.has(url.host) && !url.username && !url.password) {
+    if (url.protocol === "https:" && allowedHosts.has(url.host) && !url.username && !url.password) {
       return `${url.origin}${url.pathname}`;
     }
   } catch {
@@ -66,6 +119,9 @@ export function digikalaImage(value) {
   }
   return null;
 }
+
+export const digikalaImage = value => productImage(value, imageHosts);
+export const snappShopImage = value => productImage(value, snappShopImages);
 
 export function digikalaPrice(value) {
   return Number.isSafeInteger(value) && value > 0 && value <= maxPriceRials ? value : null;
@@ -116,7 +172,11 @@ function timestamp(value) {
 function normalizeWatch(source) {
   const productId = digikalaId(source?.productId);
   if (!productId) return null;
-  const variantId = source.variantId == null ? null : digikalaId(source.variantId);
+  const { store } = source;
+  if (store != null && store !== "snappshop" && store !== "digikala") return null;
+  const snappshop = store === "snappshop";
+  const offerId = snappshop ? snappShopId : digikalaId;
+  const variantId = source.variantId == null ? null : offerId(source.variantId);
   const priceLimit = source.priceLimit == null ? null : digikalaPrice(source.priceLimit);
   const discount = source.discount ?? null;
   const startAt = source.startAt ?? null;
@@ -124,11 +184,11 @@ function normalizeWatch(source) {
   const quantity = shoppingQuantity(source.quantity ?? 1);
   const optionKey = source.optionKey ?? null;
   const optionLabel = optionKey ? watchText(source.optionLabel, 240) : "";
-  const sellerId = variantId && digikalaId(source.sellerId);
+  const sellerId = variantId && offerId(source.sellerId);
   const sellerName = variantId ? watchText(source.sellerName, 120) : "";
   const allSellers = !variantId && source.allSellers === true;
   const exclusions = allSellers ? source.excludedSellers ?? [] : [];
-  if (!Array.isArray(exclusions) || exclusions.length > 500 || exclusions.some(id => !digikalaId(id))) return null;
+  if (!Array.isArray(exclusions) || exclusions.length > 500 || exclusions.some(id => !offerId(id))) return null;
   if (!quantity || (optionKey !== null && (typeof optionKey !== "string" || !optionKey || optionKey.length > 1400))
     || (source.variantId != null && !variantId) || (source.priceLimit != null && !priceLimit)
     || (discount !== null && (!Number.isInteger(discount) || discount < 1 || discount > 99))
@@ -136,15 +196,16 @@ function normalizeWatch(source) {
     || (startAt !== null && endAt !== null && endAt <= startAt)) return null;
   return {
     productId, variantId, priceLimit, discount, startAt, endAt,
-    title: shoppingTitle(source.title) || `DKP-${productId}`,
+    title: shoppingTitle(source.title) || shoppingProductCode(productId, store),
     variantLabel: variantId ? watchText(source.variantLabel, 180) : "",
-    image: digikalaImage(source.image),
+    image: snappshop ? snappShopImage(source.image) : digikalaImage(source.image),
     paused: source.paused === true,
+    ...(snappshop ? { store } : {}),
     ...(quantity !== 1 ? { quantity } : {}),
     ...(optionKey ? { optionKey, optionLabel } : {}),
     ...(sellerId ? { sellerId } : {}),
     ...(sellerName ? { sellerName } : {}),
-    ...(allSellers ? { allSellers, excludedSellers: [...new Set(exclusions.map(digikalaId))].sort() } : {})
+    ...(allSellers ? { allSellers, excludedSellers: [...new Set(exclusions.map(offerId))].sort() } : {})
   };
 }
 
@@ -167,6 +228,7 @@ export function shoppingWatchKey(watch) {
   if (watch.allSellers) terms.push(watch.excludedSellers);
   // Keep existing one-unit approvals and observations usable after the upgrade.
   if (watch.optionKey || (watch.quantity ?? 1) !== 1) terms.push({ option: watch.optionKey ?? null, quantity: watch.quantity ?? 1 });
+  if (watch.store === "snappshop") terms.push(watch.store);
   return JSON.stringify(terms);
 }
 
@@ -184,7 +246,11 @@ export function updateShopping(workspace, action, data) {
   }
   if (action !== "shopping-save") return "shoppingInvalidRule";
 
-  const watch = normalizeWatch({ ...data, paused: current?.paused });
+  if (data.expectedRule !== undefined && (!current || data.expectedRule !== shoppingWatchKey(current))) {
+    return "assistantShoppingChanged";
+  }
+  if (data.paused !== undefined && typeof data.paused !== "boolean") return "shoppingInvalidRule";
+  const watch = normalizeWatch({ ...data, paused: data.paused ?? current?.paused });
   if (!watch) return "shoppingInvalidRule";
   if (!current && watches.length >= watchLimit) return "shoppingLimit";
   if (watches.some(item => item !== current && shoppingWatchKey(item) === shoppingWatchKey(watch))) return "shoppingDuplicate";

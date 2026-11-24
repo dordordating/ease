@@ -26,13 +26,20 @@
 
 .shopping-lookup {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 5px;
   padding: 3px 4px;
   border: 1px solid var(--stroke);
   border-radius: var(--radius);
   background: var(--subtle);
+}
+
+.shopping-store-picker {
+  max-inline-size: 105px;
+  min-block-size: var(--control-height);
+  padding-inline: 6px;
+  font-size: 11px;
 }
 
 .shopping-lookup:focus-within {
@@ -186,9 +193,15 @@
 }
 
 .shopping-variant-name,
+.shopping-store-label,
 .shopping-terms {
   color: var(--muted);
   font-size: 11px;
+}
+
+.shopping-store-label {
+  justify-self: start;
+  font-weight: 600;
 }
 
 .shopping-status {
@@ -549,3 +562,9 @@
 }
 
 .shopping-order-progress small { color: var(--muted); }
+.shopping-assistant-pause {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}

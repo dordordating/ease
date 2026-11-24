@@ -1,10 +1,12 @@
 import { shoppingMessage } from "./shopping-background.js";
+import { assistantWatchRule, hasAssistantOfferSelection } from "./assistant-shopping.js";
 import { digikalaOrderUrl } from "./shopping-checkout-digikala.js";
 import { shoppingCreditPermission } from "./shopping-checkout-digipay.js";
-import { shoppingHostPermission, shoppingNotificationPermission } from "./shopping-digikala.js";
+import { shoppingNotificationPermission } from "./shopping-digikala.js";
+import { shoppingPermissions } from "./shopping-catalog.js";
 import {
-  digikalaPrice, digikalaProductLink, digikalaProductUrl, digikalaSearchUrl, parseShoppingNumber,
-  offerFitsQuantity, shoppingNumberDigits, shoppingPollMinutes, shoppingQuantity, shoppingReadErrors, shoppingWatchKey
+  digikalaPrice, parseShoppingNumber, offerFitsQuantity, shoppingNumberDigits, shoppingPollMinutes, shoppingProductCode,
+  shoppingProductLink, shoppingProductUrl, shoppingQuantity, shoppingReadErrors, shoppingSearchUrl, shoppingWatchKey
 } from "./shopping-store.js";
 import { createShoppingSellerPicker } from "./shopping-sellers.js";
 import {
@@ -21,7 +23,7 @@ const requestCreditAccess = () => chrome.permissions.request(shoppingCreditPermi
 
 export function renderShopping(root, options) {
   const { node, button, glyph, t, icon, locale, dateLocale, firstDay, heading, historyButton, refreshButton, notifyButton, purchaseSettings,
-    editor, openEditor, reportError, showToast, mutate, openMenu } = options;
+    editor, openEditor, reportError, showToast, mutate, openMenu, askAssistant } = options;
   const numbers = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
   const amounts = new Intl.NumberFormat(locale, { useGrouping: "always", maximumFractionDigits: 0 });
   const group = amounts.formatToParts(1000).find(part => part.type === "group").value;
@@ -33,11 +35,17 @@ export function renderShopping(root, options) {
   let historyOpen = false;
   let historyLimit = 16;
   let lookupVersion = 0;
-  let connected = false;
+  let access = new Set();
   let live = true;
   let stamp;
+  let assistantDraft;
 
   const form = node("form", "shopping-lookup");
+  const storePicker = node("select", "shopping-store-picker");
+  storePicker.setAttribute("aria-label", t("shoppingSearchStore"));
+  storePicker.append(new Option(t("shoppingDigikala"), "digikala"), new Option(t("shoppingSnappShop"), "snappshop"));
+  const storeOf = product => product?.store ?? "digikala";
+  const storeLabel = product => t(storeOf(product) === "snappshop" ? "shoppingSnappShop" : "shoppingDigikala");
   const input = node("input");
   input.type = "search";
   input.dir = "auto";
@@ -47,27 +55,28 @@ export function renderShopping(root, options) {
   input.setAttribute("aria-label", input.placeholder);
   const find = button(t("shoppingSearch"), "icon-button shopping-find", { symbol: "search", iconOnly: true });
   find.type = "submit";
-  form.append(input, find);
+  form.append(storePicker, input, find);
 
   const connection = node("div", "shopping-connection");
   connection.hidden = true;
   const connect = button(t("shoppingConnect"), "secondary-button", { symbol: "link", onClick: async () => {
     connect.disabled = true;
-    const response = await request("connect");
+    const response = await request("connect", { store: storePicker.value });
     connect.disabled = false;
     if (response?.error) return reportError(response.error);
     await updateAccess();
-    if (input.value.trim()) void lookup(input.value.trim());
+    if (assistantDraft?.watchId) openAssistantDraft(assistantDraft);
+    else if (input.value.trim()) void lookup(input.value.trim());
   }});
   connection.append(glyph("shopping", "shopping-store-mark"), node("span", "", t("shoppingConnectHint")), connect);
 
   const activeProduct = button(t("shoppingTrackOpenPage"), "secondary-button shopping-track-page", { symbol: "plus" });
   activeProduct.hidden = true;
   chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-    const product = digikalaProductLink(tab?.url);
+    const product = shoppingProductLink(tab?.url);
     if (!live || !product) return;
     activeProduct.hidden = false;
-    activeProduct.onclick = () => fill(digikalaProductUrl(product.productId, product.variantId, product.title));
+    activeProduct.onclick = () => fill(shoppingProductUrl(product));
   }).catch(() => {});
 
   const result = node("div", "shopping-lookup-results");
@@ -132,21 +141,31 @@ export function renderShopping(root, options) {
     feedback.textContent = key ? t(key) : "";
   }
 
+  function updateConnection() {
+    connection.hidden = access.has(storePicker.value);
+    refreshButton.disabled = historyOpen ? !access.has("digikala") : !access.size;
+  }
+
   async function updateAccess() {
-    const [access, notifications] = await Promise.all([
-      chrome.permissions.contains(shoppingHostPermission), chrome.permissions.contains(shoppingNotificationPermission)
+    const [stores, notifications] = await Promise.all([
+      Promise.all(Object.entries(shoppingPermissions).map(async ([store, permission]) =>
+        await chrome.permissions.contains(permission) ? store : null)), chrome.permissions.contains(shoppingNotificationPermission)
     ]);
     if (!live) return;
-    connected = access;
-    connection.hidden = access;
-    refreshButton.disabled = !access;
-    notifyButton.hidden = notifications || !access || historyOpen;
+    access = new Set(stores.filter(Boolean));
+    updateConnection();
+    notifyButton.hidden = notifications || !access.size || historyOpen;
     renderWatches();
   }
 
   async function lookup(value) {
     const version = ++lookupVersion;
-    const link = digikalaProductLink(value);
+    const proposal = assistantDraft?.input === value ? assistantDraft : undefined;
+    const link = shoppingProductLink(value);
+    const store = link ? storeOf(link) : storePicker.value;
+    storePicker.value = store;
+    updateConnection();
+    const connected = access.has(store);
     if (!connected) {
       setFeedback("shoppingConnect");
       connect.focus();
@@ -156,26 +175,27 @@ export function renderShopping(root, options) {
     find.disabled = true;
     form.setAttribute("aria-busy", "true");
     result.replaceChildren();
-    const response = connected ? await request("lookup", { input: value }) : { error: "shoppingConnect" };
+    const response = connected ? await request("lookup", { input: value, store }) : { error: "shoppingConnect" };
     if (!live || version !== lookupVersion) return;
     find.disabled = false;
     form.removeAttribute("aria-busy");
     setFeedback(response?.error);
-    const legacy = link && watches.filter(watch => watch.productId === link.productId && watch.variantId === link.variantId
-      && watch.title === `DKP-${link.productId}`);
+    const legacy = link && watches.filter(watch => storeOf(watch) === store && watch.productId === link.productId
+      && watch.variantId === link.variantId && watch.title === shoppingProductCode(link.productId, store));
     const existing = legacy?.length === 1 ? legacy[0] : undefined;
     if (response?.product) {
-      editWatch(existing, response.product, response.variantId);
+      if (proposal) await reviewDraft(proposal, undefined, response.product);
+      else editWatch(existing, response.product, response.variantId);
       return;
     }
     if (response?.error) {
       if (link && response.error !== "shoppingProductMissing") {
-        const draft = { id: link.productId, title: link.title || `DKP-${link.productId}`, fromLink: true };
+        const draft = { id: link.productId, store, title: link.title || shoppingProductCode(link.productId, store), fromLink: true };
         result.append(button(t("shoppingSaveLink"), "secondary-button", {
-          symbol: "plus", onClick: () => editWatch(existing, draft, link.variantId)
-        }), linkTo(digikalaProductUrl(link.productId, link.variantId, link.title), t("shoppingOpenProduct")));
+          symbol: "plus", onClick: () => proposal ? reviewDraft(proposal, undefined, draft) : editWatch(existing, draft, link.variantId)
+        }), linkTo(shoppingProductUrl(link), t("shoppingOpenProduct")));
       } else if (shoppingReadErrors.has(response.error)) {
-        result.append(linkTo(digikalaSearchUrl(value), t("shoppingOpenSearch")));
+        result.append(linkTo(shoppingSearchUrl(value, store), t("shoppingOpenSearch")));
       }
       return;
     }
@@ -188,20 +208,23 @@ export function renderShopping(root, options) {
       copy.append(titleOf(product.title, "shopping-product-title"));
       if (product.price !== null) copy.append(price(product.price));
       choice.append(thumb(product.image), copy, glyph("plus"));
-      choice.addEventListener("click", () => editWatch(undefined, product));
+      choice.addEventListener("click", () => proposal ? reviewDraft(proposal, undefined, product) : editWatch(undefined, product));
       result.append(choice);
     }
   }
 
   function fill(value) {
     input.value = value;
-    if (connected) {
+    const link = shoppingProductLink(value);
+    if (link) storePicker.value = storeOf(link);
+    updateConnection();
+    if (access.has(storePicker.value)) {
       void lookup(value);
       return;
     }
     updateAccess().then(() => {
       if (!live || input.value !== value) return;
-      if (connected) void lookup(value);
+      if (access.has(storePicker.value)) void lookup(value);
       else input.focus();
     }).catch(() => {});
   }
@@ -209,20 +232,30 @@ export function renderShopping(root, options) {
     event.preventDefault();
     if (input.value.trim()) void lookup(input.value.trim());
   });
-  input.addEventListener("search", () => {
-    if (input.value) return;
+  function clearLookup() {
     lookupVersion++;
     result.replaceChildren();
     find.disabled = false;
     form.removeAttribute("aria-busy");
     setFeedback();
+  }
+  input.addEventListener("search", () => { if (!input.value) clearLookup(); });
+  input.addEventListener("input", () => {
+    if (input.value.trim() !== assistantDraft?.input) assistantDraft = undefined;
+    const link = shoppingProductLink(input.value);
+    if (link && storePicker.value !== storeOf(link)) {
+      storePicker.value = storeOf(link);
+      clearLookup();
+      updateConnection();
+    }
   });
+  storePicker.addEventListener("change", () => { clearLookup(); updateConnection(); });
   refreshButton.onclick = async () => {
     refreshButton.disabled = true;
     refreshButton.dataset.busy = "true";
     const response = await request(historyOpen ? "refresh-orders" : "refresh");
     delete refreshButton.dataset.busy;
-    refreshButton.disabled = !connected;
+    updateConnection();
     if (response?.error) reportError(response.error);
   };
   notifyButton.onclick = async () => {
@@ -269,25 +302,65 @@ export function renderShopping(root, options) {
     return control;
   }
 
-  function editWatch(watch, product, variantId, focusSeller = false) {
+  async function reviewDraft(proposal, watch, product) {
+    if (!live || editor.open) return;
+    const version = lookupVersion;
+    const needsOffer = hasAssistantOfferSelection(proposal.selection);
+    if (needsOffer && !Array.isArray(product?.offers)) {
+      const target = watch ?? { productId: product.id, store: product.store };
+      const response = await request("lookup", { store: target.store, input: shoppingProductUrl(target) });
+      if (!live || version !== lookupVersion || editor.open) return;
+      if (!response?.product) {
+        if (response?.error === "shoppingConnect") {
+          assistantDraft = proposal;
+          storePicker.value = storeOf(target);
+          updateConnection();
+          connect.focus();
+        }
+        reportError(response?.error ?? "shoppingUnavailable");
+        return;
+      }
+      product = response.product;
+    }
+    const original = watch ? watches.find(item => item.id === watch.id) : undefined;
+    if (watch && !original) return reportError("shoppingRuleMissing");
+    const base = original ?? {
+      variantId: proposal.product?.variantId ?? null, allSellers: !proposal.product?.variantId
+    };
+    const rule = assistantWatchRule(product, base, proposal.changes, proposal.selection, locale);
+    assistantDraft = undefined;
+    editWatch(original, product, undefined, !rule, {
+      ...proposal, rule: rule ?? { ...base, ...proposal.changes }, chooseOffer: !rule
+    });
+  }
+
+  function editWatch(watch, product, variantId, focusSeller = false, proposal) {
     if (editor.open) return;
-    const selected = watch?.variantId ?? variantId;
+    const draft = proposal?.rule ?? watch;
+    const selected = draft?.variantId ?? variantId;
     const productId = watch?.productId ?? product.id;
+    const store = watch?.store ?? product?.store;
     const sample = watch && observations[watch.id];
     const currentQuote = sample && sample.rule === shoppingWatchKey(watch) ? sample.quote : null;
     const liveQuote = currentQuote && !sample.error && Date.now() - sample.checkedAt <= 3 * shoppingPollMinutes * 60_000 ? currentQuote : null;
     let title = product?.title ?? currentQuote?.title ?? watch?.title;
     let image = product?.image ?? currentQuote?.image ?? watch?.image;
     const pickers = [];
+    let offerReviewed = !proposal?.chooseOffer;
     let action;
     let invoiceOffer;
-    const changed = () => action?.invalidateConsent();
+    const changed = () => action?.invalidateConsent?.();
     const fields = openEditor(t(watch ? "shoppingEdit" : "shoppingNew"), t("save"), async () => {
       const limit = cap.value.trim() ? readAmount(cap) : null;
       const discount = percent.value.trim() ? parseShoppingNumber(percent.value) : null;
       const count = readQuantity();
       const startAt = starts.read();
       const endAt = ends.read();
+      if (!offerReviewed) {
+        picker.focus();
+        reportError("assistantShoppingOfferChoice");
+        return false;
+      }
       if (!count) {
         quantity.focus();
         reportError("shoppingInvalidQuantity");
@@ -310,10 +383,14 @@ export function renderShopping(root, options) {
       }
       if (checkout.payload.confirm && isShoppingCreditMode(checkout.payload.mode)) await requestCreditAccess();
       const saved = await mutate("shopping-save", {
-        id: watch?.id, productId, title, image, ...picker.selection(), quantity: count, priceLimit: limit, discount, startAt, endAt,
+        id: watch?.id, store, productId, title, image, ...picker.selection(), quantity: count, priceLimit: limit, discount, startAt, endAt,
+        ...(proposal && { expectedOwner: proposal.owner }),
+        ...(proposal && watch && { expectedRule: shoppingWatchKey(watch) }),
+        ...(pauseWatch && { paused: pauseWatch.checked }),
         purchase: checkout.payload
-      });
+      }, reportError, proposal && (next => proposal.onSaved?.(watch?.id ?? next.shopping?.[0]?.id)));
       if (saved) {
+        if (proposal) assistantDraft = undefined;
         if (!watch) {
           input.value = "";
           result.replaceChildren();
@@ -327,18 +404,19 @@ export function renderShopping(root, options) {
     const offerCopy = node("div", "shopping-result-copy");
     const preview = node("div", "shopping-offer-preview");
     const headingName = titleOf(title, "shopping-product-title");
-    offerCopy.append(headingName, preview);
+    offerCopy.append(headingName, node("span", "shopping-store-label", storeLabel({ store })), preview);
     heading.append(thumb(image), offerCopy);
     const thresholds = node("div", "shopping-field-row shopping-thresholds");
-    const cap = numberField(thresholds, t("shoppingCeiling"), watch?.priceLimit ? watch.priceLimit / 10 : null);
-    const percent = numberField(thresholds, t("shoppingDiscount"), watch?.discount, false);
-    const quantity = numberField(thresholds, t("shoppingQuantity"), watch?.quantity ?? 1, false);
+    const cap = numberField(thresholds, t("shoppingCeiling"), draft?.priceLimit ? draft.priceLimit / 10 : null);
+    const percent = numberField(thresholds, t("shoppingDiscount"), draft?.discount, false);
+    const quantity = numberField(thresholds, t("shoppingQuantity"), draft?.quantity ?? 1, false);
     quantity.placeholder = numbers.format(1);
     const readQuantity = () => shoppingQuantity(parseShoppingNumber(quantity.value));
-    let customCap = watch?.priceLimit != null;
+    let customCap = Boolean(proposal) || watch?.priceLimit != null;
     cap.addEventListener("input", () => { customCap = true; changed(); });
     percent.addEventListener("input", changed);
-    const picker = createShoppingSellerPicker({ node, t, locale, watch, variantId: selected, product, readQuantity, onEdit: changed,
+    const picker = createShoppingSellerPicker({ node, t, locale, watch: draft, variantId: selected, product, readQuantity,
+      onEdit() { offerReviewed = true; changed(); },
       onChange(offer, catalogReady) {
         const observed = (offer ? liveQuote?.variantId === offer.id : !catalogReady) ? liveQuote : null;
         const value = offer?.price ?? (offer?.available === false ? null : observed?.price);
@@ -364,12 +442,12 @@ export function renderShopping(root, options) {
     percent.setAttribute("aria-describedby", ruleHint.id);
 
     const schedule = node("details", "snippet-advanced shopping-schedule");
-    schedule.open = Boolean(watch?.startAt || watch?.endAt);
+    schedule.open = Boolean(draft?.startAt || draft?.endAt);
     const dates = node("div", "snippet-advanced-fields");
     schedule.append(node("summary", "", t("shoppingSchedule")), dates);
 
     const clockText = date => [date.getHours(), date.getMinutes()].map(unit => String(unit).padStart(2, "0")).join(":");
-    let customEnd = watch?.endAt != null;
+    let customEnd = draft?.endAt != null;
     function suggestEnd() {
       if (customEnd) return;
       const value = starts.read();
@@ -405,15 +483,36 @@ export function renderShopping(root, options) {
         }
       };
     }
-    const starts = dateTime("shoppingStarts", watch?.startAt, true, suggestEnd);
-    const ends = dateTime("shoppingEnds", watch?.endAt, false, () => { customEnd = true; });
-    action = purchaseEditor({ node, button, t, numberField, priceText, readAmount, request }, purchases, purchases.jobs[watch?.id]);
+    const starts = dateTime("shoppingStarts", draft?.startAt, true, suggestEnd);
+    const ends = dateTime("shoppingEnds", draft?.endAt, false, () => { customEnd = true; });
+    action = purchaseEditor({ node, button, t, numberField, priceText, readAmount, request, store }, purchases, purchases.jobs[watch?.id],
+      proposal?.purchase);
     action.updateOffer(invoiceOffer);
-    fields.append(heading, picker.root, thresholds, ruleHint, schedule, action.root);
+    fields.append(heading);
+    if (proposal?.chooseOffer) {
+      const requested = [proposal.selection.option, proposal.selection.seller,
+        proposal.selection.exclude.length ? t("assistantShoppingExcluded", { sellers: proposal.selection.exclude.join("، ") }) : ""
+      ].filter(Boolean);
+      fields.append(node("small", "shopping-field-hint", [t("assistantShoppingOfferChoice"), ...requested].join(" · ")));
+    }
+    fields.append(picker.root, thresholds, ruleHint);
+    let pauseWatch;
+    if (proposal && Object.hasOwn(proposal.changes, "paused")) {
+      const row = node("label", "shopping-assistant-pause");
+      pauseWatch = node("input");
+      pauseWatch.type = "checkbox";
+      pauseWatch.checked = draft.paused;
+      row.append(pauseWatch, node("span", "", t("shoppingPaused")));
+      fields.append(row);
+    }
+    if (store === "snappshop") fields.append(node("small", "shopping-field-hint", t("shoppingSnappCatalogArea")));
+    fields.append(schedule, action.root);
     editor.showModal();
     if (focusSeller) picker.focus();
     else cap.focus();
-    if (connected && !product?.offers && !product?.fromLink) request("lookup", { input: digikalaProductUrl(productId, selected) }).then(response => {
+    if (access.has(store ?? "digikala") && !product?.offers && !product?.fromLink) request("lookup", {
+      store, input: shoppingProductUrl({ productId, store, variantId: selected })
+    }).then(response => {
       if (editor.open && fields.isConnected && response?.product) {
         title = response.product.title;
         headingName.textContent = title;
@@ -446,7 +545,8 @@ export function renderShopping(root, options) {
 
   function addInvoiceQuote(container, quote) {
     if (!quote) return;
-    const line = node("small", "shopping-last-invoice", t("shoppingQuoteBreakdown", {
+    const line = node("small", "shopping-last-invoice", t(quote.subtotal == null ? "shoppingQuoteBreakdown" : "shoppingSnappBreakdown", {
+      ...(quote.subtotal != null ? { subtotal: priceText(quote.subtotal) } : {}),
       total: priceText(quote.total), shipping: priceText(quote.shipping)
     }));
     line.title = t("shoppingCheckedAt", { date: dates.format(quote.checkedAt) });
@@ -493,7 +593,7 @@ export function renderShopping(root, options) {
     const head = node("div", "shopping-card-heading");
     const labels = node("div", "shopping-card-title");
     const variant = watch.optionLabel || quote?.optionLabel || watch.variantLabel || quote?.variantLabel;
-    labels.append(titleOf(name, "shopping-product-title"));
+    labels.append(titleOf(name, "shopping-product-title"), node("span", "shopping-store-label", storeLabel(watch)));
     const sellerName = quote?.sellerName || watch.sellerName;
     if (variant) {
       const label = node("span", "shopping-variant-name", variant);
@@ -530,8 +630,11 @@ export function renderShopping(root, options) {
 
     const actions = node("div", "shopping-card-actions");
     const more = button(t("shoppingActions"), "icon-button", { symbol: "more", iconOnly: true, onClick: () => openMenu(more, action => {
-      action("shoppingOpenProduct", "open-window", () => chrome.tabs.create({ url: digikalaProductUrl(watch.productId, watch.variantId ?? quote?.variantId) }));
+      action("shoppingOpenProduct", "open-window", () => chrome.tabs.create({
+        url: shoppingProductUrl({ ...watch, variantId: watch.variantId ?? quote?.variantId })
+      }));
       action("shoppingEdit", "edit", () => editWatch(watch));
+      action("assistantAsk", "sparkles", () => askAssistant(watch));
       action(watch.paused ? "shoppingResume" : "shoppingPause", watch.paused ? "play" : "pause",
         () => mutate("shopping-pause", { id: watch.id, paused: !watch.paused }));
       action("shoppingRemove", "trash", () => removeWatch(watch, name));
@@ -539,7 +642,10 @@ export function renderShopping(root, options) {
     more.id = `shopping-more-${watch.id}`;
     more.setAttribute("aria-haspopup", "menu");
     if (ready && !job) {
-      const add = button(t("shoppingPrepareCart"), "secondary-button shopping-cart", { symbol: "shopping", onClick: () => cart(watch, add) });
+      const isSnapp = watch.store === "snappshop";
+      const add = button(t(isSnapp ? "shoppingOpenProduct" : "shoppingPrepareCart"), "secondary-button shopping-cart", {
+        symbol: isSnapp ? "open-window" : "shopping", onClick: () => cart(watch, add)
+      });
       add.id = `shopping-cart-${watch.id}`;
       actions.append(add);
     }
@@ -611,7 +717,7 @@ export function renderShopping(root, options) {
     const focus = list.contains(document.activeElement) ? document.activeElement.id : null;
     const rows = watches.map(watch => {
       const status = shoppingWatchStatus(watch, observations[watch.id], purchases.jobs[watch.id]);
-      const needsAccess = !connected && !["shoppingPaused", "shoppingExpired", "shoppingPurchased"].includes(status);
+      const needsAccess = !access.has(storeOf(watch)) && !["shoppingPaused", "shoppingExpired", "shoppingPurchased"].includes(status);
       return renderWatch(watch, needsAccess ? "shoppingConnect" : status);
     });
     rows.sort((left, right) => Number(right.dataset.state === "shoppingReady") - Number(left.dataset.state === "shoppingReady"));
@@ -659,6 +765,7 @@ export function renderShopping(root, options) {
     historyOpen = open;
     watchView.hidden = open;
     historyView.hidden = !open;
+    updateConnection();
     purchaseSettings.hidden = open;
     if (open) notifyButton.hidden = true;
     else void updateAccess().catch(() => {});
@@ -682,6 +789,7 @@ export function renderShopping(root, options) {
   stamp = setInterval(renderWatches, shoppingPollMinutes * 60_000 / 4);
   return {
     fill,
+    openAssistantDraft,
     openSettings() { openPurchaseSettings({ ...options, numberField, readAmount }, purchases); },
     focusWatch(id) {
       if (historyOpen) showHistory(false);
@@ -710,4 +818,20 @@ export function renderShopping(root, options) {
       chrome.permissions.onRemoved?.removeListener(refreshPermissions);
     }
   };
+
+  function openAssistantDraft(proposal) {
+    if (historyOpen) showHistory(false);
+    if (purchases.owner && proposal.owner !== purchases.owner) return reportError("assistantShoppingChanged");
+    if (proposal.watchId) {
+      const watch = watches.find(item => item.id === proposal.watchId);
+      if (!watch) return reportError("shoppingRuleMissing");
+      void reviewDraft(proposal, watch);
+      return;
+    }
+    const value = proposal.product ? shoppingProductUrl(proposal.product) : proposal.query;
+    if (!value) return reportError("shoppingInvalidLink");
+    if (proposal.store) storePicker.value = proposal.store;
+    assistantDraft = { ...proposal, input: value };
+    fill(value);
+  }
 }

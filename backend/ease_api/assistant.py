@@ -13,6 +13,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, ValidationInfo, field_validator
 
 from .assistant_lookups import TOOLS, AssistantLookups, LookupCall
+from .assistant_shopping import SHOPPING_GUIDE, ShoppingAction, ShoppingContext
 from .openrouter import OPENROUTER_ENDPOINT, OpenRouterRejected, OpenRouterUnavailable
 
 
@@ -24,6 +25,7 @@ PRIMARY_FIRST_TEXT_TIMEOUT = 10
 REQUEST_TIMEOUT = 45
 _ACCESS_ERROR_CODES = (401, 402, 403)
 _GUIDE = {"id": "ease-assistant", "version": 5}
+_SHOPPING_VERSION = {"id": "ease-assistant", "version": 6}
 REMINDERS = Literal[0, 5, 10, 15, 30, 60, 1440]
 SourceId = Annotated[str, Field(pattern=r"^s[1-9][0-9]{0,5}$")]
 Day = Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
@@ -41,7 +43,7 @@ class InputModel(BaseModel):
 
 class Source(InputModel):
     id: SourceId
-    kind: Literal["selection", "page", "mail", "tab"]
+    kind: Literal["selection", "page", "mail", "tab", "shopping"]
     label: str = Field(default="", min_length=1, max_length=180, validate_default=True)
     text: str = Field(min_length=1, max_length=SOURCE_LIMIT)
 
@@ -49,7 +51,7 @@ class Source(InputModel):
     @classmethod
     def name_untitled_source(cls, value: object, info: ValidationInfo) -> object:
         if value is None or (isinstance(value, str) and not value.strip()):
-            labels = {"selection": "Selected text", "page": "Current page", "mail": "Email", "tab": "Saved tab"}
+            labels = {"selection": "Selected text", "page": "Current page", "mail": "Email", "tab": "Saved tab", "shopping": "Shopping watch"}
             return labels.get(info.data.get("kind"), "Source")
         return value
 
@@ -81,6 +83,7 @@ class AssistantRequest(InputModel):
     sources: list[Source] = Field(default_factory=list, max_length=4)
     history: list[Turn] = Field(default_factory=list, max_length=2)
     task_labels: list[TaskLabel] = Field(default_factory=list, max_length=64)
+    shopping: ShoppingContext | None = None
     request_id: RequestId | None = None
 
     @field_validator("translation_language", mode="before")
@@ -185,7 +188,7 @@ class FlashcardAction(InputModel):
 
 
 _action = TypeAdapter(Annotated[
-    TaskAction | EventAction | SnippetAction | MailAction | FlashcardAction, Field(discriminator="kind")
+    TaskAction | EventAction | SnippetAction | MailAction | FlashcardAction | ShoppingAction, Field(discriminator="kind")
 ])
 
 _SYSTEM = """You are Ease, a practical browser workspace assistant. Answer the user's current prompt.
@@ -230,7 +233,8 @@ For a flashcard, put the learning language on the front and its meaning on the b
 characters, both sides of a flashcard under 280, and its usage notes under 360. Never supply URLs or recipients
 as action fields. A flashcard's language is a BCP 47 code, such as "es" for Spanish, "en" for English, "fa" for
 Persian or "fr" for French. Use learning_language for an unspecified flashcard language and translation_language
-for an unspecified translation target. If the user only asks a question or the request is unclear, answer with no actions.
+for an unspecified translation target. For a question, include only the applicable read-only lookup result. Leave actions empty
+for other questions or requests for unclear changes.
 Checks before returning your result:
 - Ease will display each action as a draft. The visible answer must explicitly say the action is ready for review
   or suggest the draft. Never claim the activity was performed, saved, scheduled, registered, or sent. Never
@@ -248,7 +252,8 @@ class _OpenRouterAccessError(OpenRouterUnavailable):
     """The primary and fallback share the same OpenRouter credentials and credit."""
 
 
-def read_result(metadata: str, sources: list[Source], task_labels: list[TaskLabel] = ()) -> dict:
+def read_result(metadata: str, sources: list[Source], task_labels: list[TaskLabel] = (),
+                shopping: ShoppingContext | None = None) -> dict:
     known = {source.id: source.kind for source in sources}
     labels = {label.id for label in task_labels}
     citations: list[str] = []
@@ -256,9 +261,9 @@ def read_result(metadata: str, sources: list[Source], task_labels: list[TaskLabe
     try:
         parsed = json.loads(metadata)
     except (ValueError, RecursionError):
-        return {"citations": citations, "actions": actions}
+        parsed = {}
     if not isinstance(parsed, dict):
-        return {"citations": citations, "actions": actions}
+        parsed = {}
 
     references = parsed.get("citations")
     if isinstance(references, list):
@@ -286,7 +291,10 @@ def read_result(metadata: str, sources: list[Source], task_labels: list[TaskLabe
                 (draft.end and not draft.start) or (draft.reminder is not None and not draft.start)
             ):
                 continue
-            data = draft.model_dump(exclude_none=True, exclude_defaults=True)
+            data = (draft.validated_result(shopping) if isinstance(draft, ShoppingAction)
+                    else draft.model_dump(exclude_none=True, exclude_defaults=True))
+            if data is None:
+                continue
             if isinstance(draft, TaskAction) and draft.checklist:
                 data.pop("notes", None)
             if data.get("source") and data["source"] not in known:
@@ -295,6 +303,10 @@ def read_result(metadata: str, sources: list[Source], task_labels: list[TaskLabe
                 actions.append(data)
             if len(actions) == 4:
                 break
+    if shopping is not None and shopping.status_query and not actions:
+        watch_ids = shopping.status_refs()
+        if watch_ids:
+            actions.append({"kind": "shopping", "operation": "status", "watch_ids": watch_ids})
     return {"citations": citations, "actions": actions}
 
 
@@ -321,10 +333,13 @@ async def _completion(client: httpx.AsyncClient, key: str, model: str, payload: 
         "model": model, "stream": True, "max_tokens": min(max_tokens, 1600),
         "provider": {"data_collection": "deny", "zdr": True},
         "messages": [
-            {"role": "system", "content": _SYSTEM},
-            {"role": "user", "content": payload.model_dump_json(exclude={"request_id"})},
+            {"role": "system", "content": _SYSTEM + (SHOPPING_GUIDE if payload.shopping is not None else "")},
+            {"role": "user", "content": payload.model_dump_json(
+                exclude={"request_id"} | ({"shopping"} if payload.shopping is None else set()))},
         ],
     }
+    if payload.shopping is not None:
+        body["temperature"] = 0
     if with_lookups:
         body.update(tools=TOOLS, tool_choice="auto", parallel_tool_calls=False)
     calls: dict[int, LookupCall] = {}
@@ -431,7 +446,7 @@ async def _answer_events(pieces: AsyncIterator[str | list[LookupCall]], payload:
         yield {"type": "delta", "text": buffer}
     if not has_answer:
         raise OpenRouterRejected("Assistant provider returned no answer")
-    yield {"type": "done", **read_result(buffer if in_metadata else "", payload.sources, payload.task_labels)}
+    yield {"type": "done", **read_result(buffer if in_metadata else "", payload.sources, payload.task_labels, payload.shopping)}
 
 
 async def _stream_model(client: httpx.AsyncClient, key: str, model: str, payload: AssistantRequest,
@@ -462,7 +477,8 @@ async def stream_assistant(
         async with asyncio.timeout(REQUEST_TIMEOUT):
             for index, candidate in enumerate(models):
                 can_fallback = index + 1 < len(models)
-                execution = {"guide": _GUIDE, "model": candidate, "fallback": index > 0}
+                execution = {"guide": _SHOPPING_VERSION if payload.shopping is not None else _GUIDE,
+                             "model": candidate, "fallback": index > 0}
                 try:
                     stream = _stream_model(client, key, candidate, payload, max_tokens, execution, with_lookups=lookups is not None)
                     async with aclosing(stream) as events:

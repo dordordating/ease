@@ -60,6 +60,43 @@ class AssistantInputTest(TestCase):
         result = assistant.read_result(json.dumps({"actions": [draft]}), [])
         self.assertEqual(result["actions"], [{"kind": "task", "title": "Ship the extension", "checklist": ["Review the package", "Publish"]}])
 
+    def test_shopping_actions_bind_to_supplied_references_and_require_a_budget(self):
+        context = assistant.ShoppingContext(
+            product={"store": "snappshop", "title": "USB cable"},
+            watches=[{"id": "w1", "title": "USB cable", "store": "snappshop", "status": "shoppingWaitingQuantity"}],
+        )
+        proposed = [
+            {"kind": "shopping", "operation": "create", "use_product": True, "mode": "prepare"},
+            {"kind": "shopping", "operation": "create", "query": "https://example.com/product", "mode": "notify"},
+            {"kind": "shopping", "operation": "create", "use_product": True, "mode": "wallet", "budget_toman": 400000},
+            {"kind": "shopping", "operation": "edit", "watch": "w2", "price_toman": 100000},
+            {"kind": "shopping", "operation": "edit", "watch": "w1", "starts": {"date": "2026-02-30"}},
+            {"kind": "shopping", "operation": "create", "use_product": True, "mode": "prepare", "budget_toman": 250000},
+            {"kind": "shopping", "operation": "edit", "watch": "w1", "price_toman": None},
+            {"kind": "shopping", "operation": "status", "watch_ids": ["w1", "w1"]},
+        ]
+        data = json.dumps({"actions": proposed})
+        self.assertEqual(assistant.read_result(data, [], shopping=context)["actions"],
+                         [proposed[5], proposed[6], {**proposed[7], "watch_ids": ["w1"]}])
+        self.assertEqual(assistant.read_result(data, [])["actions"], [])
+
+    def test_status_cards_use_the_request_references_if_the_model_omits_them(self):
+        watches = [
+            {"id": "w1", "title": "Cable", "store": "snappshop", "status": "shoppingWaitingQuantity"},
+            {"id": "w2", "title": "Charger", "store": "digikala", "status": "shoppingReady"},
+        ]
+        context = assistant.ShoppingContext(watches=watches, status_query="ready")
+        action = {"kind": "shopping", "operation": "status", "watch_ids": ["w2"]}
+        self.assertEqual(assistant.read_result("", [], shopping=context)["actions"], [action])
+        broad = {"actions": [{**action, "watch_ids": ["w1", "w2"]}]}
+        self.assertEqual(assistant.read_result(json.dumps(broad), [], shopping=context)["actions"], [action])
+
+    def test_whole_order_budget_requires_review_even_when_the_model_omits_the_prepare_mode(self):
+        context = assistant.ShoppingContext(product={"store": "snappshop", "title": "Cable"})
+        action = {"kind": "shopping", "operation": "create", "use_product": True, "quantity": 2, "budget_toman": 240000}
+        self.assertEqual(assistant.read_result(json.dumps({"actions": [action]}), [], shopping=context)["actions"],
+                         [{**action, "mode": "prepare"}])
+
 
 def delta(text):
     chunk = {"choices": [{"delta": {"content": text}, "finish_reason": None}]}

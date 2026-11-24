@@ -34,7 +34,7 @@ import { taskAction } from "./todo-store.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
 import { registerTranslationHistoryHandlers } from "./translation-history-store.js";
 import { registerWorkspaceSyncHandlers } from "./workspace-sync.js";
-import { activateWorkspaceAccount } from "./workspace-accounts.js";
+import { activateWorkspaceAccount, workspaceOwnerKey } from "./workspace-accounts.js";
 import {
   configureInlineTranslator, injectInlineTranslatorOnOpenTabs, registerTranslatorSiteHandlers,
   requestInlineTranslatorPermission
@@ -390,6 +390,9 @@ async function updateWorkspace(workspace, action, data, transaction) {
     case "shopping-save":
     case "shopping-remove": {
       if (!moduleAvailable("shopping", workspace.locale)) return "shoppingUnavailable";
+      if (data?.expectedOwner !== undefined && data.expectedOwner !== ((await chrome.storage.local.get(workspaceOwnerKey))[workspaceOwnerKey] ?? null)) {
+        return "assistantShoppingChanged";
+      }
       const previousWatch = workspace.shopping?.find?.(watch => watch.id === data?.id);
       const error = updateShopping(workspace, action, data);
       return error || stageShoppingPurchase(workspace, action, data, transaction, previousWatch);

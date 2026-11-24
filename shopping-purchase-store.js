@@ -27,7 +27,8 @@ export function shoppingPurchaseView(state, payment = null) {
 }
 
 export function purchaseJobApplies(watch, job, policy) {
-  return job?.rule === shoppingWatchKey(watch) && (job.mode === "prepare" || JSON.stringify(job.policy) === JSON.stringify(policy));
+  return job?.rule === shoppingWatchKey(watch) && (job.mode === "prepare" && watch.store !== "snappshop"
+    || JSON.stringify(job.policy) === JSON.stringify(policy));
 }
 
 export function isShoppingCreditMode(mode) {
@@ -50,9 +51,9 @@ export function canRetryShoppingPurchase(watch, job, state) {
   return job?.status === "review" && !state.payment && purchaseJobApplies(watch, job, state.policy);
 }
 
-export function shoppingWatchStatus(watch, observation, job) {
+export function shoppingWatchStatus(watch, observation, job, now) {
   if (job?.status === "paid" && job.rule === shoppingWatchKey(watch)) return "shoppingPurchased";
-  return shoppingStatus(watch, observation);
+  return shoppingStatus(watch, observation, now);
 }
 
 export function shoppingPurchaseStatus(watch, job, policy) {
@@ -62,6 +63,9 @@ export function shoppingPurchaseStatus(watch, job, policy) {
   if (job.status === "paid") return "shoppingPurchasePaid";
   if (job.status === "awaiting") return "shoppingPurchaseCreditAwaiting";
   if (job.status === "unknown") return "shoppingPurchaseUnknown";
+  if (job.status === "prepared" && job.store === "snappshop") {
+    return job.stage === "payment" ? "shoppingSnappReadyReview" : "shoppingSnappSelectDelivery";
+  }
   if (job.status === "prepared") return isShoppingCreditMode(job.mode) ? "shoppingPurchaseCreditPrepared" : "shoppingPurchasePrepared";
   if (job.status === "review") return job.reason ?? "shoppingPurchaseReview";
   return job.status === "armed" ? "shoppingPurchaseArmed" : null;

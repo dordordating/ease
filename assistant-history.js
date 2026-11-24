@@ -14,7 +14,7 @@ const statuses = {
 const categoryLabels = {
   task: "todo", event: "calendar", snippet: "clipboard", reply: "mail", mail: "mail", flashcard: "flashcards",
   tab: "spaces", page: "assistantSourcePage", selection: "assistantSourceSelection", workflow: "assistantHistoryWorkflow",
-  market: "markets", weather: "assistantWeather",
+  market: "markets", weather: "assistantWeather", shopping: "shopping",
 };
 
 export function renderAssistantHistory(options) {

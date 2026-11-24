@@ -2,11 +2,13 @@ import { translate } from "./locales.js";
 import { defaultWorkspace, moduleAvailable, storageKey } from "./workspace-data.js";
 import { workspaceOwnerKey } from "./workspace-accounts.js";
 import {
-  digikalaProductLink, digikalaProductUrl, restoreShopping, shoppingObservationKey, shoppingPollMinutes, shoppingStatus, shoppingWatchKey
+  digikalaProductUrl, restoreShopping, shoppingObservationKey, shoppingPollMinutes, shoppingProductLink, shoppingProductUrl,
+  shoppingStatus, shoppingWatchKey
 } from "./shopping-store.js";
 import {
-  readDigikalaProduct, quoteForWatch, searchDigikala, ShoppingLookupError, shoppingHostPermission, shoppingNotificationPermission
+  quoteForWatch, ShoppingLookupError, shoppingHostPermission, shoppingNotificationPermission
 } from "./shopping-digikala.js";
+import { readShoppingProduct, searchShopping, shoppingPermission, shoppingPermissions } from "./shopping-catalog.js";
 import { prepareDigikalaCart, waitForShopTab } from "./shopping-cart.js";
 import { checkDigikalaOrderStatuses, previewDigikalaInvoice, readDigikalaDeliveryChoices } from "./shopping-checkout-digikala.js";
 import { DigikalaCheckoutError, isDigikalaPage, withDigikalaTab } from "./shopping-digikala-session.js";
@@ -19,6 +21,14 @@ const alarmName = "ease-shopping-check";
 const menuId = "ease-shopping-track-digikala";
 const notificationPrefix = "ease-shopping-watch:";
 const interval = shoppingPollMinutes * 60_000;
+const storeOf = watch => watch.store ?? "digikala";
+const productKey = watch => `${storeOf(watch)}:${watch.productId}`;
+
+async function shoppingAccess() {
+  const stores = await Promise.all(Object.entries(shoppingPermissions).map(async ([store, permission]) =>
+    await chrome.permissions.contains(permission) ? store : null));
+  return new Set(stores.filter(Boolean));
+}
 
 async function currentShopping() {
   const stored = await chrome.storage.local.get([storageKey, workspaceOwnerKey]);
@@ -49,11 +59,12 @@ function nextCheck(watch, observations, now) {
   return Math.max(watch.startAt ?? 0, next);
 }
 
-async function scheduleAlarm(context, observations, purchaseState, permitted) {
+async function scheduleAlarm(context, observations, purchaseState, access) {
   const now = Date.now();
-  const tracking = permitted && context.enabled;
-  const pending = tracking ? context.watches.filter(watch => active(watch, now) && purchaseState.jobs[watch.id]?.status !== "paid") : [];
-  const orders = nextShoppingOrderWork(context.watches, { ...purchaseState, owner: context.owner }, now, tracking);
+  const pending = context.enabled ? context.watches.filter(watch => access.has(storeOf(watch)) && active(watch, now)
+    && purchaseState.jobs[watch.id]?.status !== "paid") : [];
+  const orders = nextShoppingOrderWork(context.watches, { ...purchaseState, owner: context.owner }, now,
+    context.enabled && access.has("digikala"));
   const next = Math.min(orders ?? Infinity, ...pending.map(watch => nextCheck(watch, observations, now)));
   if (Number.isFinite(next)) {
     await chrome.alarms.create(alarmName, { when: Math.max(now + 1000, next) });
@@ -64,11 +75,11 @@ async function scheduleAlarm(context, observations, purchaseState, permitted) {
 
 async function checkProducts(watches) {
   const products = new Map();
-  const ids = [...new Set(watches.map(watch => watch.productId))];
-  for (let offset = 0; offset < ids.length; offset += 4) {
-    await Promise.all(ids.slice(offset, offset + 4).map(async id => {
-      try { products.set(id, { product: await readDigikalaProduct(id), error: null }); }
-      catch (error) { products.set(id, { error: lookupError(error) }); }
+  const unique = [...new Map(watches.map(watch => [productKey(watch), watch]))];
+  for (let offset = 0; offset < unique.length; offset += 4) {
+    await Promise.all(unique.slice(offset, offset + 4).map(async ([key, watch]) => {
+      try { products.set(key, { product: await readShoppingProduct(watch), error: null }); }
+      catch (error) { products.set(key, { error: lookupError(error) }); }
     }));
   }
   return products;
@@ -95,18 +106,18 @@ function showAlert(watch, quote, locale, alertedAt) {
     type: "basic", iconUrl: chrome.runtime.getURL("icons/128.png"),
     title: quote.title || watch.title,
     message: translate(locale, "shoppingNotification", { price }),
-    buttons: [{ title: translate(locale, "shoppingPrepareCart") }]
+    buttons: [{ title: translate(locale, watch.store === "snappshop" ? "shoppingOpenProduct" : "shoppingPrepareCart") }]
   });
 }
 
 async function reconcile(force, queueWorkspace, retry, id, ordersOnly) {
   const context = await currentShopping();
-  const [permitted, observations, initialPurchases] = await Promise.all([
-    chrome.permissions.contains(shoppingHostPermission), readObservations(context.key), readShoppingPurchases(context.owner)
+  const [access, observations, initialPurchases] = await Promise.all([
+    shoppingAccess(), readObservations(context.key), readShoppingPurchases(context.owner)
   ]);
   const now = Date.now();
-  const tracking = permitted && context.enabled;
-  const pending = tracking && !ordersOnly ? context.watches.filter(watch =>
+  const tracking = access.has("digikala") && context.enabled;
+  const pending = context.enabled && !ordersOnly ? context.watches.filter(watch => access.has(storeOf(watch)) &&
     (!id || watch.id === id) && initialPurchases.jobs[watch.id]?.status !== "paid" && active(watch, now)
     && (force || watch.startAt === null || watch.startAt <= now)
     && (force || nextCheck(watch, observations, now) <= now + 1000)) : [];
@@ -114,7 +125,7 @@ async function reconcile(force, queueWorkspace, retry, id, ordersOnly) {
   const orderWork = nextShoppingOrderWork(context.watches, { ...initialPurchases, owner: context.owner }, now, tracking);
   if (!pending.length && !orders.length && (orderWork === null || orderWork > now)
     && Object.keys(observations).every(id => context.watches.some(watch => watch.id === id))) {
-    await scheduleAlarm(context, observations, initialPurchases, permitted);
+    await scheduleAlarm(context, observations, initialPurchases, access);
     return;
   }
 
@@ -122,8 +133,8 @@ async function reconcile(force, queueWorkspace, retry, id, ordersOnly) {
   return queueWorkspace(async () => {
     const latest = await currentShopping();
     if (latest.owner !== context.owner) return;
-    const allowed = await chrome.permissions.contains(shoppingHostPermission);
-    const notify = allowed && await canNotify();
+    const allowed = await shoppingAccess();
+    const notify = allowed.size > 0 && await canNotify();
     const newest = await readObservations(context.key);
     const purchaseState = await readShoppingPurchases(context.owner);
     const { policy } = purchaseState;
@@ -136,11 +147,11 @@ async function reconcile(force, queueWorkspace, retry, id, ordersOnly) {
     const updated = watches.map(watch => {
       const rule = shoppingWatchKey(watch);
       const previous = newest[watch.id]?.rule === rule ? newest[watch.id] : null;
-      if (!latest.enabled || !allowed || jobs[watch.id]?.status === "paid" || !active(watch, checkedAt) || checked.get(watch.id) !== rule) {
+      if (!latest.enabled || !allowed.has(storeOf(watch)) || jobs[watch.id]?.status === "paid" || !active(watch, checkedAt) || checked.get(watch.id) !== rule) {
         if (previous) next[watch.id] = previous;
         return watch;
       }
-      const { product, error } = products.get(watch.productId);
+      const { product, error } = products.get(productKey(watch));
       const quote = product ? quoteForWatch(product, watch) : previous?.quote ?? null;
       const sample = { rule, quote, checkedAt, error, alertedAt: previous?.alertedAt ?? null };
       if (shoppingStatus(watch, sample, checkedAt) === "shoppingReady") {
@@ -181,6 +192,7 @@ function openShopping({ watch, product, issue } = {}) {
   if (watch) route.searchParams.set("watch", watch);
   if (product) {
     route.searchParams.set("product", product.productId);
+    if (product.store) route.searchParams.set("store", product.store);
     if (product.variantId) route.searchParams.set("variant", product.variantId);
     if (product.title) route.searchParams.set("productTitle", product.title);
   }
@@ -207,7 +219,8 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
     menuPending = menuPending.then(async () => {
       const { locale, enabled } = await currentShopping();
       const config = { title: translate(locale, "shoppingTrackHere"), visible: enabled, contexts: ["page"],
-        documentUrlPatterns: ["https://www.digikala.com/product/dkp-*"] };
+        documentUrlPatterns: ["https://www.digikala.com/product/dkp-*", "https://snappshop.ir/product/snp-*",
+          "https://www.snappshop.ir/product/snp-*"] };
       await new Promise(resolve => chrome.contextMenus.update(menuId, config, () => {
         if (!chrome.runtime.lastError) resolve();
         else chrome.contextMenus.create({ id: menuId, ...config }, () => {
@@ -223,12 +236,12 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
     const watch = context.enabled && context.watches.find(watch => watch.id === id);
     if (!watch) return { error: "shoppingRuleMissing" };
     const { payment, jobs } = await readShoppingPurchases(context.owner);
-    if (payment) return { error: "shoppingPurchasePending" };
+    if (payment && watch.store !== "snappshop") return { error: "shoppingPurchasePending" };
     if (jobs[id]) return { error: "shoppingPurchaseUseCheckout" };
-    if (!await chrome.permissions.contains(shoppingHostPermission)) return { error: "shoppingConnect" };
+    if (!await chrome.permissions.contains(shoppingPermission(watch.store))) return { error: "shoppingConnect" };
     const refresh = () => poll(true);
     try {
-      const product = await readDigikalaProduct(watch.productId);
+      const product = await readShoppingProduct(watch);
       const quote = quoteForWatch(product, watch);
       const rule = shoppingWatchKey(watch);
       const checkedAt = Date.now();
@@ -241,6 +254,10 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
       if (!await authorized()) {
         void refresh();
         return { error: "shoppingConditionsChanged" };
+      }
+      if (watch.store === "snappshop") {
+        await chrome.tabs.create({ url: shoppingProductUrl(watch) });
+        return { ok: true, clicked: true };
       }
       if (watch.quantity > 1) {
         const tab = await chrome.tabs.create({ url: digikalaProductUrl(watch.productId, quote.variantId) });
@@ -270,7 +287,7 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
     const { action, id, input, token } = message;
     let result;
     if (action === "connect" || action === "notify") {
-      const permission = action === "connect" ? shoppingHostPermission : shoppingNotificationPermission;
+      const permission = action === "connect" ? shoppingPermission(message.store) : shoppingNotificationPermission;
       result = chrome.permissions.request(permission).then(ok => {
         if (ok) void poll(true);
         return ok ? { ok } : { error: action === "connect" ? "shoppingAccessDenied" : "shoppingNotificationDenied" };
@@ -300,13 +317,14 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
     } else if (action === "lookup") {
       result = (async () => {
         if (!(await currentShopping()).enabled) return { error: "shoppingUnavailable" };
-        const link = digikalaProductLink(input);
+        const link = shoppingProductLink(input);
+        const store = link ? storeOf(link) : message.store === "snappshop" ? "snappshop" : "digikala";
         if (!link && (typeof input !== "string" || !input.trim() || input.length > 140 || /:\/\/|^www\./iu.test(input))) {
           return { error: "shoppingInvalidLink" };
         }
-        if (!await chrome.permissions.contains(shoppingHostPermission)) return { error: "shoppingConnect" };
-        if (link) return { product: await readDigikalaProduct(link.productId), variantId: link.variantId };
-        return { products: await searchDigikala(input.trim()) };
+        if (!await chrome.permissions.contains(shoppingPermission(store))) return { error: "shoppingConnect" };
+        if (link) return { product: await readShoppingProduct(link), variantId: link.variantId };
+        return { products: await searchShopping(store, input.trim()) };
       })();
     } else return;
     result.then(respond, error => respond({ error: lookupError(error) }));
@@ -315,7 +333,7 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
 
   chrome.contextMenus?.onClicked?.addListener(info => {
     if (info.menuItemId !== menuId) return;
-    const product = digikalaProductLink(info.pageUrl);
+    const product = shoppingProductLink(info.pageUrl);
     if (product) currentShopping().then(context => context.enabled && openShopping({ product })).catch(() => {});
   });
   const notificationWatch = async notificationId => {
@@ -373,7 +391,7 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
   });
   const permissionsChanged = ({ origins, permissions }) => {
     if (permissions?.includes("notifications")) registerNotifications();
-    if (origins?.some(origin => shoppingHostPermission.origins.includes(origin))
+    if (origins?.some(origin => Object.values(shoppingPermissions).some(permission => permission.origins.includes(origin)))
       || permissions?.includes("notifications")) return poll(false);
   };
   chrome.permissions.onAdded?.addListener(permissionsChanged);

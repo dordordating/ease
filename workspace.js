@@ -5,6 +5,7 @@ import { renderTodo } from "./todo.js";
 import { renderSpaces } from "./spaces.js";
 import { renderHome } from "./home.js";
 import { findAssistantHistory, watchAssistantHistory } from "./assistant-history-store.js";
+import { activeAssistantProduct, assistantShoppingContext, assistantShoppingQuickSave, assistantWatchRule, shoppingWatchDetails } from "./assistant-shopping.js";
 import { assistantSourceReady, captureAssistantSource, receiveAssistantSource } from "./home-sources.js";
 import { spacesMessage } from "./spaces-browser.js";
 import { spaceColors, spaceLimits, spaceNameTaken } from "./spaces-store.js";
@@ -25,7 +26,9 @@ import { takeTranslatorSelection, translatorSelectionKey } from "./translator-se
 import { renderTranslatorSites } from "./translator-sites-ui.js";
 import { readTranslationHistory, translationHistoryKey, translationHistoryMessage } from "./translation-history-store.js";
 import { renderShopping } from "./shopping.js";
-import { digikalaProductUrl, restoreShopping, shoppingObservationKey, shoppingReadErrors } from "./shopping-store.js";
+import { shoppingMessage } from "./shopping-background.js";
+import { shoppingNotificationPermission } from "./shopping-digikala.js";
+import { restoreShopping, shoppingObservationKey, shoppingProductUrl, shoppingReadErrors } from "./shopping-store.js";
 import { shoppingPaymentKey, shoppingPurchaseKey, shoppingPurchaseView, shoppingWatchStatus } from "./shopping-purchase-store.js";
 import { workspaceOwnerKey } from "./workspace-accounts.js";
 import { renderTranslationHistory } from "./translation-history-view.js";
@@ -225,10 +228,13 @@ function showToast(message, action, error = false, actionLabel = t("undo")) {
   }, action ? 7000 : 2200);
 }
 
-async function mutate(action, data, onError = reportError) {
+async function mutate(action, data, onError = reportError, onWorkspace) {
   try {
     const response = await chrome.runtime.sendMessage({ type: "ease-workspace-update", action, data });
-    if (response?.workspace) return true;
+    if (response?.workspace) {
+      onWorkspace?.(response.workspace);
+      return true;
+    }
     onError(response?.error ?? "saveFailed");
   } catch {
     onError("saveFailed");
@@ -1649,7 +1655,7 @@ function render() {
     shoppingController = renderShopping(body, {
       ...shoppingViewState(), node, glyph, button, t, icon, locale: workspace.locale,
       dateLocale, firstDay: workspace.calendar?.firstDay, editor, openEditor, reportError, showToast, mutate,
-      heading, historyButton, refreshButton, notifyButton, purchaseSettings,
+      heading, historyButton, refreshButton, notifyButton, purchaseSettings, askAssistant: askAboutWatch,
       openMenu: (anchor, populate) => openWorkspaceMenu(anchor, undefined, t("shoppingActions"), populate)
     });
   } else if (activePage === "mail") {
@@ -1723,6 +1729,10 @@ function showHome(dateLocale) {
       chooseTabs: chooseAssistantTabs,
       previewSource: previewHomeSource,
       openSource: openHomeSource,
+      shoppingContext: (prompt, sources) => moduleAvailable("shopping", workspace.locale)
+        ? assistantShoppingContext(prompt, sources, shoppingViewState(), workspace.locale, () => activeAssistantProduct(currentWindowId)) : null,
+      shoppingStatusFor: id => shoppingWatchDetails(shoppingViewState(), id),
+      openShoppingWatch: openHomeWatch,
       onAction: reviewAssistantAction,
       taskLabelFor: assistantTaskLabel,
       onCopy: copyWorkspaceText,
@@ -1750,11 +1760,16 @@ function openHomeHistory(id) {
   homeController?.openHistory(id);
 }
 
-async function openHomeModule(id, replyDraft) {
+async function ensureHomeModule(id) {
   if (!savedTabAvailable(id)) {
     if (!await mutate("toggle-module", { id, enabled: true })) return false;
     await refreshWorkspace();
   }
+  return true;
+}
+
+async function openHomeModule(id, replyDraft) {
+  if (!await ensureHomeModule(id)) return false;
   if (id === "mail") pendingMailReply = replyDraft;
   switchTo(id, false);
   return true;
@@ -1793,7 +1808,17 @@ function askAboutMail(message, body) {
   });
 }
 
+function askAboutWatch(watch) {
+  addHomeSource({ kind: "shopping", label: watch.title, text: watch.title, watchId: watch.id });
+}
+
+async function openHomeWatch(id) {
+  if (!workspace.shopping?.some(item => item.id === id)) return reportError("shoppingRuleMissing");
+  if (await openHomeModule("shopping")) shoppingController?.focusWatch(id);
+}
+
 function openHomeSource(source) {
+  if (source.watchId) return openHomeWatch(source.watchId);
   if (source.message) {
     openHomeMail(source.message);
     return;
@@ -1878,7 +1903,7 @@ function assistantTaskLabel(id) {
   return labels.find(label => label.id === id) ?? labels[0];
 }
 
-async function reviewAssistantAction(action, source, { immediately, labelId, onSaved }) {
+async function reviewAssistantAction(action, source, { immediately, shopping, labelId, onSaved }) {
   if (editor.open) return;
   const message = source?.message;
   const url = taskLink(source?.url);
@@ -1888,6 +1913,9 @@ async function reviewAssistantAction(action, source, { immediately, labelId, onS
     showToast(t("assistantSaved"));
   }
   switch (action.kind) {
+    case "shopping":
+      if (shopping && moduleAvailable("shopping", workspace.locale)) await applyAssistantWatch(shopping, immediately, onSaved);
+      break;
     case "task": {
       const taskLabel = assistantTaskLabel(labelId);
       const task = {
@@ -1929,6 +1957,39 @@ async function reviewAssistantAction(action, source, { immediately, labelId, onS
       });
       break;
   }
+}
+
+async function applyAssistantWatch(draft, immediately, onSaved) {
+  const owner = translatorAccountId;
+  if (!owner) return reportError("assistantSignIn");
+  if (immediately && assistantShoppingQuickSave(draft)) {
+    if (!await ensureHomeModule("shopping")) return;
+    const input = shoppingProductUrl(draft.product);
+    const { product } = await chrome.runtime.sendMessage({
+      type: shoppingMessage, action: "lookup", input, store: draft.store
+    }).catch(() => ({})) ?? {};
+    if (owner !== translatorAccountId) return reportError("assistantShoppingChanged");
+    if (product && (!draft.product.variantId || product.offers?.some(offer => offer.id === draft.product.variantId))) {
+      const base = { productId: product.id, store: product.store, title: product.title, image: product.image,
+        variantId: draft.product.variantId, allSellers: !draft.product.variantId };
+      const rule = assistantWatchRule(product, base, draft.changes, draft.selection, workspace.locale);
+      if (rule) {
+        const saved = await mutate("shopping-save", { ...rule, expectedOwner: owner, purchase: { mode: "notify" } },
+          reportError, next => onSaved(next.shopping?.[0]?.id));
+        if (saved) {
+          const notifications = await chrome.permissions.contains(shoppingNotificationPermission).catch(() => false);
+          const notify = notifications ? undefined : async () => {
+            const response = await chrome.runtime.sendMessage({ type: shoppingMessage, action: "notify" }).catch(() => null);
+            if (!response?.ok) reportError(response?.error ?? "shoppingNotificationDenied");
+          };
+          showToast(t("shoppingSaved"), notify, false, t("shoppingEnableNotifications"));
+        }
+        return;
+      }
+    }
+  }
+  if (owner !== translatorAccountId) return reportError("assistantShoppingChanged");
+  if (await openHomeModule("shopping")) shoppingController?.openAssistantDraft({ ...draft, owner, onSaved });
 }
 
 function sendMail(action, data) {
@@ -3472,7 +3533,8 @@ if (initialTranslationSelection !== null) {
   switchTo("todo", false);
 } else if (workspaceRoute.get("open") === "shopping" && moduleAvailable("shopping", workspace.locale)) {
   switchTo(savedTabAvailable("shopping") ? "shopping" : "library", false);
-  const product = digikalaProductUrl(workspaceRoute.get("product"), workspaceRoute.get("variant"), workspaceRoute.get("productTitle"));
+  const product = shoppingProductUrl({ store: workspaceRoute.get("store"), productId: workspaceRoute.get("product"),
+    variantId: workspaceRoute.get("variant"), title: workspaceRoute.get("productTitle") });
   if (product) shoppingController?.fill(product);
   if (workspaceRoute.has("watch")) shoppingController?.focusWatch(workspaceRoute.get("watch"));
   const issue = workspaceRoute.get("shoppingIssue");

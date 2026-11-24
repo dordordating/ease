@@ -105,6 +105,21 @@ test("choosing a credit plan does not authorize a payment for a new or previousl
   assert.deepEqual(transaction, {});
 });
 
+test("Digikala cart preparation preserves an optional whole-order budget", async t => {
+  const id = "watch";
+  const workspace = { shopping: [{ ...watch, id }] };
+  const key = shoppingPurchaseKey(null);
+  globalThis.chrome = { storage: { local: { get: async () => ({}) } } };
+  t.after(() => { delete globalThis.chrome; });
+  for (const limit of [undefined, 1_000_000]) {
+    const transaction = {};
+    assert.equal(await stageShoppingPurchase(workspace, "shopping-save", { id, purchase: { mode: "prepare", limit } }, transaction), undefined);
+    const job = transaction.storageUpdates[key].jobs[id];
+    assert.equal(job.mode, "prepare");
+    assert.equal(job.limit, limit ?? null);
+  }
+});
+
 test("DigiPay confirmation uses only the approved checkout and only once", () => {
   const job = { mode: "credit-one", creditApproved: true, token: "purchase", tabId: 14,
     cartId: "cart-1", invoiceQuote: { total: 990_000 } };

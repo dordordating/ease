@@ -1,6 +1,11 @@
 import { translate } from "./locales.js";
 import { workspaceOwnerKey } from "./workspace-accounts.js";
 import { addDigikalaTabItem, waitForShopTab } from "./shopping-cart.js";
+import { readShoppingProduct, shoppingPermission } from "./shopping-catalog.js";
+import {
+  checkSnappShopInvoice, listenForSnappDelivery, listenForSnappPayment, prepareSnappShopCheckout,
+  SnappShopCheckoutError, snappShopCartUrl, snappShopQuoteIssue, snappShopStage
+} from "./shopping-checkout-snappshop.js";
 import { digipayCreditControl, isDigiPayCreditPage, shoppingCreditPermission } from "./shopping-checkout-digipay.js";
 import { digikalaCheckoutControl } from "./shopping-checkout-page.js";
 import {
@@ -9,18 +14,19 @@ import {
   setDigikalaCartQuantity, verifyDigikalaDeliveryAddress
 } from "./shopping-checkout-digikala.js";
 import { DigikalaCheckoutError, isDigikalaPage, withDigikalaTab } from "./shopping-digikala-session.js";
-import { readDigikalaProduct, quoteForWatch, shoppingHostPermission, shoppingNotificationPermission } from "./shopping-digikala.js";
+import { quoteForWatch, shoppingHostPermission, shoppingNotificationPermission } from "./shopping-digikala.js";
 import { archiveShoppingOrder } from "./shopping-orders.js";
 import {
   canRetryShoppingPurchase, checkoutAmounts, checkoutCartIssue, checkoutCartsMatch, checkoutCostIssue, checkoutItemsKey,
   isShoppingCreditMode, isShoppingPaymentMode, pendingCreditTotal, purchaseJobApplies, readShoppingPurchases, shoppingPaymentKey,
   shoppingPurchasePolicy, shoppingPurchaseStatus
 } from "./shopping-purchase-store.js";
-import { digikalaPrice, digikalaProductUrl, shoppingStatus, shoppingWatchKey } from "./shopping-store.js";
+import { digikalaPrice, digikalaProductUrl, isSnappShopPage, shoppingProductLink, shoppingStatus, shoppingWatchKey } from "./shopping-store.js";
 
 const noticePrefix = "ease-shopping-purchase:";
 const inProgress = new Set();
-const errorFor = error => error instanceof DigikalaCheckoutError ? error.code : "shoppingPurchaseReview";
+const errorFor = error => error instanceof DigikalaCheckoutError || error instanceof SnappShopCheckoutError
+  ? error.code : "shoppingPurchaseReview";
 const requireCheckout = (condition, code = "shoppingPurchaseReview") => {
   if (!condition) throw new DigikalaCheckoutError(code);
 };
@@ -79,16 +85,20 @@ export async function stageShoppingPurchase(workspace, action, data, transaction
   const paymentMode = isShoppingPaymentMode(mode);
   if (mode !== "prepare" && !paymentMode) return "shoppingInvalidRule";
   const watch = workspace.shopping.find(item => item.id === id);
+  if (!watch) return "shoppingRuleMissing";
+  const snappShop = watch.store === "snappshop";
+  if (snappShop && (paymentMode || data.purchase.address != null)) return "shoppingInvalidRule";
   const rule = shoppingWatchKey(watch);
-  const limit = paymentMode ? digikalaPrice(data.purchase.limit) : null;
-  if (paymentMode && !limit) return "shoppingPurchaseInvalidBudget";
+  const limit = digikalaPrice(data.purchase.limit);
+  if ((paymentMode || snappShop || data.purchase.limit != null) && !limit) return "shoppingPurchaseInvalidBudget";
   const selection = data.purchase.address;
   const sameAddress = selection ? selection.id === previous?.buyer?.addressId
     && selection.key === previous?.buyer?.addressKey && selection.accountId === previous?.buyer?.accountId
     : paymentMode || !previous?.buyer;
   if (previous?.rule === rule && previous.mode === mode && previous.limit === limit && sameAddress
     && purchaseJobApplies(watch, previous, state.policy) && data.purchase.confirm !== true) return;
-  const next = { mode, rule, limit, policy: state.policy, status: "armed", token: crypto.randomUUID() };
+  const next = { mode, rule, limit, policy: state.policy, status: "armed", token: crypto.randomUUID(),
+    ...(snappShop ? { store: watch.store } : {}) };
   if (paymentMode) {
     if (state.payment) return "shoppingPurchasePending";
     const credit = isShoppingCreditMode(mode);
@@ -245,6 +255,61 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
     });
   }
 
+  async function snappJobFor(tabId) {
+    const context = await currentShopping();
+    if (!context.enabled) return null;
+    const state = await readShoppingPurchases(context.owner);
+    const now = Date.now();
+    const watch = context.watches.find(item => {
+      const job = state.jobs[item.id];
+      return item.store === "snappshop" && job?.store === "snappshop" && job.tabId === tabId && job.cartFingerprint
+        && ["prepared", "review"].includes(job.status) && !item.paused
+        && (item.startAt === null || item.startAt <= now) && (item.endAt === null || item.endAt > now)
+        && purchaseJobApplies(item, job, state.policy);
+    });
+    return watch && await chrome.permissions.contains(shoppingPermission(watch.store))
+      ? { context, watch, job: state.jobs[watch.id] } : null;
+  }
+
+  async function snappInvoiceResult(tab, watch, job) {
+    let invoiceQuote = null;
+    let reason;
+    try {
+      const result = await checkSnappShopInvoice(tab.id, job);
+      invoiceQuote = result.invoiceQuote;
+      reason = result.cartChanged ? "shoppingPurchaseCartChanged" : snappShopQuoteIssue(invoiceQuote, job);
+      if (!reason || reason === "shoppingSnappCostChanged") {
+        const product = await readShoppingProduct(watch);
+        const offer = product.offers.find(offer => offer.id === job.offerCheck.offerId);
+        const unchanged = offer?.sellerId === job.offerCheck.sellerId && offer?.price === job.offerCheck.price
+          && shoppingStatus(watch, { rule: job.rule, quote: offer, checkedAt: Date.now() }) === "shoppingReady";
+        if (!unchanged) reason = "shoppingSnappOfferChanged";
+      }
+    } catch (error) { reason = errorFor(error); }
+    await listenForSnappPayment(tab.id, job.token, invoiceQuote);
+    return { stage: "payment", invoiceQuote, status: reason ? "review" : "prepared", reason };
+  }
+
+  async function reviewSnappTab(tab) {
+    const stage = settledTab(tab) && snappShopStage(tab.url);
+    if (stage !== "shipping" && stage !== "payment") return;
+    const current = await snappJobFor(tab.id);
+    if (!current) return;
+    const { context, watch, job } = current;
+    if (stage === "shipping") {
+      await listenForSnappDelivery(tab.id, job.token);
+      if (job.stage !== stage) await setJob(context.owner, watch.id, job.token,
+        { stage, status: "prepared", reason: null, invoiceQuote: null, shippingQuote: null });
+      return;
+    }
+    const updated = await snappInvoiceResult(tab, watch, job);
+    const latest = await snappJobFor(tab.id);
+    const liveTab = await chrome.tabs.get(tab.id).catch(() => null);
+    if (latest?.job.token === job.token && latest.context.owner === context.owner && snappShopStage(liveTab?.url) === "payment") {
+      await setJob(context.owner, watch.id, job.token, updated);
+    }
+  }
+
   async function reviewPending({ tabId, token, owner, id, cartId }, tab) {
     if (!settledTab(tab)) return false;
     const receipt = await readDigikalaReceipt(tab.id, tab.url, cartId).catch(() => null);
@@ -344,7 +409,7 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
     // Read again at each stage. A paused, edited, expired or owner-switched rule cannot pay.
     const authorized = async () => {
       const [latest, state, allowed] = await Promise.all([
-        currentShopping(), readShoppingPurchases(owner), chrome.permissions.contains(shoppingHostPermission)
+        currentShopping(), readShoppingPurchases(owner), chrome.permissions.contains(shoppingPermission(watch.store))
       ]);
       const current = latest.watches.find(item => item.id === id);
       const saved = state.jobs[id];
@@ -363,6 +428,34 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
     try {
       requireCheckout(await authorized(), "shoppingConditionsChanged");
       const oldTab = Number.isInteger(previous?.tabId) ? await chrome.tabs.get(previous.tabId).catch(() => null) : null;
+      if (watch.store === "snappshop") {
+        requireCheckout(job.store === "snappshop" && job.mode === "prepare" && digikalaPrice(job.limit), "shoppingInvalidRule");
+        if (previous?.cartFingerprint && settledTab(oldTab) && snappShopStage(oldTab.url) === "payment") {
+          await setJob(owner, id, job.token, { tabId: oldTab.id, ...await snappInvoiceResult(oldTab, watch, job) });
+          return;
+        }
+        const product = await readShoppingProduct(watch);
+        const quote = quoteForWatch(product, watch);
+        if (shoppingStatus(watch, { rule: job.rule, quote, checkedAt: Date.now() }) !== "shoppingReady") {
+          await setJob(owner, id, job.token, { status: "armed" });
+          return;
+        }
+        requireCheckout(quote.price * (watch.quantity ?? 1) <= job.limit, "shoppingPurchaseOverLimit");
+        requireCheckout(await authorized(), "shoppingConditionsChanged");
+        const offer = product.offers.find(item => item.id === quote.variantId);
+        const reuse = oldTab && !oldTab.active && !oldTab.incognito && snappShopStage(oldTab.url) === "cart";
+        const tab = reuse ? oldTab : await chrome.tabs.create({ active: false, url: snappShopCartUrl });
+        tabId = tab.id;
+        requireCheckout(Number.isInteger(tabId) && !tab.incognito, "shoppingPurchaseConnection");
+        await setJob(owner, id, job.token, { tabId, cartFingerprint: null, cartSubtotal: null, offerCheck: null, shippingQuote: null });
+        requireCheckout(await waitForShopTab(tabId, isSnappShopPage), "shoppingPurchaseConnection");
+        const started = await prepareSnappShopCheckout(tabId, watch, offer, job, authorized);
+        job = { ...job, ...started, quantity: watch.quantity ?? 1, shippingQuote: null };
+        await setJob(owner, id, job.token, { ...started, quantity: job.quantity, status: "prepared" });
+        if (started.stage === "payment") await reviewSnappTab(await chrome.tabs.get(tabId));
+        await notifyOutcome(id, watch, shoppingPurchaseStatus(watch, { ...job, status: "prepared" }, job.policy), context.locale).catch(() => {});
+        return;
+      }
       if ([oldTab?.url, oldTab?.pendingUrl].some(url => digikalaCheckoutStage(url) === "receipt")) {
         const receipt = previous.cartId && !oldTab.incognito && oldTab.status === "complete"
           ? await readDigikalaReceipt(oldTab.id, oldTab.url, previous.cartId).catch(() => null) : null;
@@ -374,7 +467,7 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
         requireCheckout(!(await readShoppingPurchases(owner)).payment, "shoppingPurchasePending");
         requireCheckout(job.buyer?.addressId, "shoppingPurchaseChooseAddress");
       }
-      const offer = quoteForWatch(await readDigikalaProduct(watch.productId), watch);
+      const offer = quoteForWatch(await readShoppingProduct(watch), watch);
       if (shoppingStatus(watch, { rule: job.rule, quote: offer, checkedAt: Date.now() }) !== "shoppingReady") {
         await setJob(owner, id, job.token, { status: "armed" });
         return;
@@ -416,10 +509,19 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
         if (amounts) await setJob(owner, id, job.token, { invoiceQuote: { ...amounts, checkedAt: Date.now() } });
       };
       if (job.mode === "prepare") {
-        if (buyer) {
+        if (buyer || job.limit !== null) {
           const invoice = await loadDigikalaInvoice(tabId);
-          await checkAddress(invoice);
-          if (checkoutCartsMatch(cart, invoice.cart)) await saveQuote(invoice);
+          if (buyer) await checkAddress(invoice);
+          const sameCart = checkoutCartsMatch(cart, invoice.cart);
+          if (sameCart) await saveQuote(invoice);
+          if (job.limit !== null) {
+            requireCheckout(sameCart, "shoppingPurchaseCartChanged");
+            const issue = checkoutCostIssue(invoice, job.limit, { ...job.policy, delivery: "include" });
+            requireCheckout(!issue, issue);
+            if (job.policy.delivery === "max") {
+              requireCheckout(invoice.shipping <= job.policy.shippingLimit, "shoppingPurchaseShippingLimit");
+            }
+          }
         }
         await finish("prepared");
         return;
@@ -547,7 +649,23 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
   }
 
   chrome.tabs.onUpdated?.addListener((id, changes, tab) => {
-    if ((changes.url || changes.status === "complete") && settledTab(tab)) reconcilePaymentTab(id);
+    if ((changes.url || changes.status === "complete") && settledTab(tab)) {
+      if (snappShopStage(tab.url)) void serialize(() => reviewSnappTab(tab)).catch(() => {});
+      else reconcilePaymentTab(id);
+    }
+  });
+  chrome.runtime.onMessage?.addListener((message, sender) => {
+    if (sender.id !== chrome.runtime.id || sender.frameId !== 0 || !Number.isInteger(sender.tab?.id)) return;
+    const shipping = message?.type === "ease-snapp-delivery-quote" && snappShopStage(sender.url) === "shipping";
+    const payment = message?.type === "ease-snapp-payment-quote" && snappShopStage(sender.url) === "payment";
+    if (!shipping && !payment) return;
+    void serialize(async () => {
+      const current = await snappJobFor(sender.tab.id);
+      if (!current || current.job.token !== message.token) return;
+      if (shipping && (message.shipping === 0 || digikalaPrice(message.shipping))) {
+        await setJob(current.context.owner, current.watch.id, current.job.token, { shippingQuote: message.shipping });
+      } else if (payment) await reviewSnappTab(await chrome.tabs.get(sender.tab.id));
+    }).catch(() => {});
   });
   chrome.tabs.onRemoved?.addListener(reconcilePaymentTab);
   chrome.notifications?.onClicked?.addListener(notice => {
@@ -573,11 +691,22 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
       return { ok: true };
     }),
     async open(id) {
-      const { owner, enabled } = await currentShopping();
+      const { owner, enabled, watches } = await currentShopping();
       if (!enabled) return { error: "shoppingUnavailable" };
       const { jobs, payment } = await readShoppingPurchases(owner);
       const job = jobs[id];
       if (!job) return { error: "shoppingRuleMissing" };
+      if (job.store === "snappshop") {
+        if (!await chrome.permissions.contains(shoppingPermission(job.store))) return { error: "shoppingConnect" };
+        const tab = Number.isInteger(job.tabId) ? await chrome.tabs.get(job.tabId).catch(() => null) : null;
+        const watch = watches.find(item => item.id === id);
+        const product = isSnappShopPage(tab?.url) ? shoppingProductLink(tab.url) : null;
+        if (tab && !tab.incognito && (snappShopStage(tab.url) || (product && product.productId === watch?.productId))) {
+          await chrome.tabs.update(tab.id, { active: true });
+          void serialize(() => reviewSnappTab(tab)).catch(() => {});
+        } else await chrome.tabs.create({ url: snappShopCartUrl });
+        return { ok: true };
+      }
       if (job.status === "paid") {
         const url = digikalaOrderUrl(job.orderId);
         const [existing] = await chrome.tabs.query({ url });

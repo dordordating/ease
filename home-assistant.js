@@ -11,7 +11,8 @@ const sourceInfo = {
   page: ["assistantSourcePage", "open-window"],
   selection: ["assistantSourceSelection", "edit"],
   mail: ["assistantSourceMail", "mail"],
-  tab: ["assistantSourceTabs", "spaces"]
+  tab: ["assistantSourceTabs", "spaces"],
+  shopping: ["shopping", "shopping"]
 };
 const errors = new Set([
   "assistantBusy", "assistantLimit", "assistantUnavailable", "assistantInterrupted", "assistantInputError", "assistantSignIn"
@@ -21,7 +22,7 @@ const textLimit = (value, limit) => value.slice(0, limit).toWellFormed().trim();
 
 export function renderHomeAssistant({
   node, glyph, button, t, locale, dateLocale, calendar, navigation, capture, chooseTabs, previewSource, openSource,
-  onAction, onCopy, onSignIn, taskLabelFor, reportError
+  onAction, onCopy, onSignIn, taskLabelFor, reportError, shoppingContext, shoppingStatusFor, openShoppingWatch
 }) {
   const root = node("section", "home-assistant");
   root.setAttribute("aria-label", t("assistantAsk"));
@@ -123,7 +124,8 @@ export function renderHomeAssistant({
       if (!text) continue;
       const excerpt = textLimit(text, Math.min(assistantLimits.source, available));
       if (sources.some(source => source.kind === item.kind && source.url === item.url && source.text === excerpt
-        && source.message?.accountId === item.message?.accountId && source.message?.id === item.message?.id)) continue;
+        && source.message?.accountId === item.message?.accountId && source.message?.id === item.message?.id
+        && source.watchId === item.watchId)) continue;
       if (!remainingSources() || !excerpt) {
         limited = true;
         break;
@@ -202,7 +204,9 @@ export function renderHomeAssistant({
       group.append(items);
       content.push(group);
     }
-    const drafts = renderAssistantDrafts(turn.drafts, { node, button, glyph, t, locale, dateLocale, taskLabelFor, onAction, reportError }, turn.saved);
+    const drafts = renderAssistantDrafts(turn.drafts, {
+      node, button, glyph, t, locale, dateLocale, taskLabelFor, onAction, reportError, shoppingStatusFor, openShoppingWatch
+    }, turn.saved);
     if (drafts) content.push(drafts);
     target.replaceChildren(...content);
     target.hidden = !content.length;
@@ -290,6 +294,7 @@ export function renderHomeAssistant({
       learning_language: languages.learning, translation_language: languages.translation,
       ...(recording && { request_id: turn.id }),
       ...(turn.labels.size && { task_labels: Array.from(turn.labels, ([id, label]) => ({ id, name: label.name.toWellFormed() })) }),
+      ...(turn.shopping && { shopping: turn.shopping.input }),
       sources: turn.sources.map(({ id, kind, label, text }) => ({ id, kind, label, text }))
     });
   }
@@ -310,7 +315,7 @@ export function renderHomeAssistant({
     const labels = taskLabels.toSorted((a, b) => Number(normalized.includes(normalizeLabel(b.name)))
       - Number(normalized.includes(normalizeLabel(a.name)))).slice(0, assistantLimits.taskLabels);
     const turn = {
-      id: crypto.randomUUID(), createdAt: Date.now(), prompt, answer: "", sources: [...sources], saved: new Set(),
+      id: crypto.randomUUID(), createdAt: Date.now(), prompt, answer: "", sources: [...sources], saved: new Map(),
       labels: new Map(labels.map((label, index) => [`l${index + 1}`, label]))
     };
     const owner = account;
@@ -339,7 +344,7 @@ export function renderHomeAssistant({
         } else if (packet.type === "done") {
           const references = Array.isArray(packet.citations) ? packet.citations : [];
           turn.citations = turn.sources.filter(source => references.includes(source.id));
-          turn.drafts = prepareAssistantDrafts(packet.actions, turn.sources, turn.labels);
+          turn.drafts = prepareAssistantDrafts(packet.actions, turn.sources, turn.labels, turn.shopping);
           turn.complete = true;
           turn.execution = packet.execution;
           finish();
@@ -349,7 +354,9 @@ export function renderHomeAssistant({
         void chrome.runtime.lastError;
         finish("assistantInterrupted");
       });
-      history.then(recording => {
+      history.then(async recording => {
+        if (active !== operation) return;
+        turn.shopping = await shoppingContext?.(turn.prompt, turn.sources);
         if (active === operation) sendPayload(turn, port, recording);
       }).catch(() => finish("assistantUnavailable"));
     } catch {

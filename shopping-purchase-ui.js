@@ -167,20 +167,49 @@ function currentInvoicePreview({ node, t, priceText, request }) {
   };
 }
 
-export function purchaseEditor({ node, button, t, numberField, priceText, readAmount, request }, state, job) {
+export function purchaseEditor({ node, button, t, numberField, priceText, readAmount, request, store }, state, job, proposal) {
   const root = node("details", "snippet-advanced shopping-purchase-editor");
-  root.open = Boolean(job);
+  const initialMode = proposal?.mode ?? job?.mode ?? "notify";
+  const initialLimit = proposal?.limit ?? job?.limit ?? null;
+  root.open = Boolean(job || proposal);
   root.append(node("summary", "", t("shoppingPurchaseAction")));
   const fields = node("div", "snippet-advanced-fields");
+  if (store === "snappshop") {
+    const checkout = node("div", "shopping-payment-fields");
+    const limit = numberField(checkout, t("shoppingPurchaseBudget"), initialLimit === null ? null : initialLimit / 10);
+    const terms = node("small", "shopping-field-hint", t(carts[state.policy.cart]));
+    const hint = node("small", "shopping-field-hint", t("shoppingSnappPrepareHint"));
+    checkout.append(hint, terms);
+    if (state.policy.delivery === "max") checkout.append(node("small", "shopping-field-hint",
+      t("shoppingPurchaseShippingAgreed", { price: priceText(state.policy.shippingLimit) })));
+    const mode = choices(node, t, "shoppingPurchaseAction", "shopping-purchase-mode",
+      { notify: modes.notify, prepare: modes.prepare }, initialMode === "prepare" ? "prepare" : "notify",
+      value => { checkout.hidden = value !== "prepare"; });
+    checkout.hidden = mode.read() !== "prepare";
+    fields.append(mode.group, checkout);
+    root.append(fields);
+    return {
+      root,
+      updateOffer(offer) { limit.placeholder = offer?.price && offer.quantity ? String(offer.price * offer.quantity / 10) : ""; },
+      read() {
+        const value = mode.read();
+        if (value === "notify") return { payload: { mode: value } };
+        const budget = readAmount(limit);
+        if (!digikalaPrice(budget)) { limit.focus(); return { error: "shoppingPurchaseInvalidBudget" }; }
+        return { payload: { mode: value, limit: budget } };
+      }
+    };
+  }
   const paymentFields = node("div", "shopping-payment-fields");
   const addressNote = node("small", "shopping-field-hint", t("shoppingPurchaseAddressHint"));
-  const orderLimit = numberField(paymentFields, t("shoppingPurchaseBudget"), job?.limit ? job.limit / 10 : null);
-  orderLimit.placeholder = "";
+  const orderLimit = numberField(paymentFields, t("shoppingPurchaseBudget"), initialLimit === null ? null : initialLimit / 10);
   const terms = node("ul", "shopping-purchase-terms");
   terms.append(node("li", "", t(carts[state.policy.cart])));
-  terms.append(node("li", "", state.policy.delivery === "max"
+  const deliveryTerm = node("li");
+  terms.append(deliveryTerm);
+  const shippingTerm = state.policy.delivery === "max"
     ? t("shoppingPurchaseShippingAgreed", { price: priceText(state.policy.shippingLimit) })
-    : t(deliveries[state.policy.delivery])));
+    : t(deliveries[state.policy.delivery]);
   const consent = confirmation(node, "");
   orderLimit.addEventListener("input", () => { consent.input.checked = false; });
   const quote = currentInvoicePreview({ node, t, priceText, request });
@@ -191,11 +220,16 @@ export function purchaseEditor({ node, button, t, numberField, priceText, readAm
   const walletHint = node("small", "shopping-field-hint", t("shoppingPurchaseWalletHint"));
   paymentFields.append(terms, walletHint, consent.label);
   const hint = node("small", "shopping-field-hint");
-  const mode = choices(node, t, "shoppingPurchaseAction", "shopping-purchase-mode", modes, job?.mode ?? "notify", update);
+  const mode = choices(node, t, "shoppingPurchaseAction", "shopping-purchase-mode", modes, initialMode, update);
   mode.group.classList.add("shopping-purchase-modes");
   function update(value) {
     const credit = isShoppingCreditMode(value);
-    paymentFields.hidden = !isShoppingPaymentMode(value);
+    const paymentMode = isShoppingPaymentMode(value);
+    paymentFields.hidden = value === "notify";
+    consent.label.hidden = !paymentMode;
+    orderLimit.placeholder = paymentMode ? "" : t("shoppingOptional");
+    deliveryTerm.textContent = value === "prepare" && state.policy.delivery !== "max"
+      ? t(deliveries.include) : shippingTerm;
     walletHint.hidden = value !== "wallet";
     const hintKey = value === "prepare" ? "shoppingPurchasePrepareHint" : credit ? "shoppingPurchaseCreditHint" : null;
     hint.hidden = !hintKey;
@@ -218,6 +252,10 @@ export function purchaseEditor({ node, button, t, numberField, priceText, readAm
       const value = mode.read();
       const payload = { mode: value };
       if (value !== "notify") payload.address = address.selection();
+      if (value === "prepare" && orderLimit.value.trim()) {
+        payload.limit = readAmount(orderLimit);
+        if (!digikalaPrice(payload.limit)) { orderLimit.focus(); return { error: "shoppingPurchaseInvalidBudget" }; }
+      }
       if (isShoppingPaymentMode(value)) {
         payload.limit = readAmount(orderLimit);
         if (!digikalaPrice(payload.limit)) { orderLimit.focus(); return { error: "shoppingPurchaseInvalidBudget" }; }

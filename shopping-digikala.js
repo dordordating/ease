@@ -143,7 +143,8 @@ export function quoteForWatch(product, watch) {
   let offer;
   let noEligibleSeller = false;
   let availability = product.unavailable || ((variantId || optionKey) && product.hasVariants) ? false : null;
-  if (variantId) offer = options.find(item => item.id === variantId);
+  if (variantId) offer = options.find(item => item.id === variantId
+    && (watch.store !== "snappshop" || !watch.sellerId || item.sellerId === watch.sellerId));
   else if (!watch.allSellers) {
     offer = !optionKey || product.main?.optionKey === optionKey ? product.main : undefined;
   }

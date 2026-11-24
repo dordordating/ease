@@ -590,6 +590,17 @@ body[data-surface="panel"] .app:has(.home-screen) > :is(header, .workspace) {
   font-weight: 730;
 }
 
+.assistant-shopping-status .shopping-status {
+  display: inline-block;
+  max-inline-size: 100%;
+  margin-block: 3px;
+}
+
+.assistant-shopping-status > .assistant-action-review {
+  grid-column: 2;
+  justify-self: start;
+}
+
 .assistant-action-copy small, .assistant-action-copy p {
   display: block;
   color: var(--muted);
