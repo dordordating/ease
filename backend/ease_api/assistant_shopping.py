@@ -1,7 +1,9 @@
 """Validate the small, request-scoped shopping context and its proposed actions."""
 
+import re
 from datetime import date
 from typing import Annotated, Literal
+from unicodedata import normalize
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -13,6 +15,12 @@ Toman = Annotated[int, Field(gt=0, le=1_000_000_000_000)]
 Quantity = Annotated[int, Field(gt=0, le=999_999)]
 Discount = Annotated[int, Field(ge=1, le=99)]
 Status = Annotated[str, Field(pattern=r"^shopping[A-Z][a-zA-Z]{1,58}$")]
+_WATCH = re.compile(r"رصد|ردیابی|دیده\s*بان|اطلاع\s*بده|خبردار|خبرم\s*کن|تنبيه|مراقبة|ウォッチ|通知|"
+                    r"\b(?:watch|notify|alert|track|suivi|surveiller|rastrear|seguimiento|monitorar|preisalarm)\b")
+_CART = re.compile(r"سبد|تسویه|آماده\s*سازی\s*خرید|السلة|カート|"
+                   r"\b(?:cart|basket|checkout|panier|carrito|carrinho|warenkorb)\b")
+_TOTAL = re.compile(r"\bجمع\b|مجموع|سقف\s*کل|کل\s*(?:سفارش|خرید)|بودجه|با\s*(?:هزینه\s*)?ارسال|إجمالي|ميزانية|合計|予算|"
+                    r"\b(?:total|budget|whole.order|shipping.included|presupuesto|orçamento|gesamtbetrag)\b")
 
 
 class ShoppingModel(BaseModel):
@@ -93,7 +101,7 @@ class ShoppingAction(ShoppingModel):
         nullable = {"price_toman", "discount", "starts", "ends"}
         if any(getattr(self, field) is None for field in fields - nullable):
             raise ValueError("Missing shopping action value")
-        if (self.mode == "prepare" and self.budget_toman is None) or (self.mode == "notify" and self.budget_toman is not None):
+        if self.mode == "prepare" and self.budget_toman is None:
             raise ValueError("Preparation needs the whole-order budget")
         if self.seller and self.exclude_sellers:
             raise ValueError("Choose one seller rule")
@@ -113,7 +121,7 @@ class ShoppingAction(ShoppingModel):
             raise ValueError("A status request only uses watch references")
         return self
 
-    def validated_result(self, context: ShoppingContext | None) -> dict | None:
+    def validated_result(self, context: ShoppingContext | None, prompt: str = "") -> dict | None:
         if context is None or self.use_product and not context.product:
             return None
         known = {watch.id for watch in context.watches}
@@ -121,7 +129,20 @@ class ShoppingAction(ShoppingModel):
             return None
         result = self.model_dump(exclude_unset=True)
         if self.budget_toman is not None:
-            result["mode"] = "prepare"
+            text = normalize("NFKC", prompt).casefold().replace("\u200c", " ").replace("ي", "ی").replace("ك", "ک")
+            wants_cart = bool(_CART.search(text))
+            states_total = bool(_TOTAL.search(text))
+            model_prepares = self.mode == "prepare"
+            verified_budget = states_total and (wants_cart or model_prepares)
+            if _WATCH.search(text) and not wants_cart and not states_total:
+                # A watch's price is per item. Normalize a model's mislabeled amount without arming preparation.
+                result.setdefault("price_toman", self.budget_toman)
+                del result["budget_toman"]
+                result["mode"] = "notify"
+            elif self.mode != "notify" and (verified_budget or not prompt and model_prepares):
+                result["mode"] = "prepare"
+            else:
+                return None
         if self.watch_ids:
             visible = set(context.status_refs())
             result["watch_ids"] = list(dict.fromkeys(ref for ref in self.watch_ids if ref in visible))
@@ -153,9 +174,11 @@ quantity is the number of items, discount is an integer percent. option and sell
 not IDs. Use exclude_sellers instead of seller when filtering named sellers out. Use starts/ends with local
 Gregorian date and optional HH:mm. A date without time means start of day for starts and end of day for ends.
 Use null for price_toman, discount, starts or ends only when the user explicitly wants to clear that condition.
-Use paused true/false to pause/resume. Only use mode "notify" when asked for alerts or mode "prepare" when asked
-to prepare a cart or checkout. For prepare require the user to state a whole-order budget and include budget_toman.
-Ask if that budget is missing. Keep a per-item threshold separate from the whole-order budget. Payment confirmation
+Use paused true/false to pause/resume. Use mode "notify" when asked to monitor a product or send alerts.
+For “همین کالا رو برای دو عدد زیر ۱۲۰ هزار تومان رصد کن”, use quantity 2, price_toman 120000, and mode "notify".
+Quantity never converts an item price into a whole-order budget. Use mode "prepare" only when asked to prepare
+a cart or checkout. For prepare require the user to state a whole-order budget (for example «سقف کل سفارش»)
+and include budget_toman. Ask if that budget is missing. Payment confirmation
 is handled by the shopping editor. Suggest only a reviewable draft; never claim you have bought, paid, or changed
 a watch. When inspecting watches, you can say their verified cards are shown; this is a read, not a proposed change.
 """

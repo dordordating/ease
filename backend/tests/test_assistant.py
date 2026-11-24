@@ -94,8 +94,13 @@ class AssistantInputTest(TestCase):
     def test_whole_order_budget_requires_review_even_when_the_model_omits_the_prepare_mode(self):
         context = assistant.ShoppingContext(product={"store": "snappshop", "title": "Cable"})
         action = {"kind": "shopping", "operation": "create", "use_product": True, "quantity": 2, "budget_toman": 240000}
-        self.assertEqual(assistant.read_result(json.dumps({"actions": [action]}), [], shopping=context)["actions"],
+        data = json.dumps({"actions": [action]})
+        self.assertEqual(assistant.read_result(data, [], shopping=context,
+                         prompt="دو تا از همین کالا رو با سقف کل سفارش ۲۴۰ هزار تومان تو سبد آماده کن")["actions"],
                          [{**action, "mode": "prepare"}])
+        self.assertEqual(assistant.read_result(data, [], shopping=context,
+                         prompt="همین کالا رو تا جمعه دو تا زیر ۲۴۰ هزار تومان رصد کن")["actions"],
+                         [{key: value for key, value in action.items() if key != "budget_toman"} | {"price_toman": 240000, "mode": "notify"}])
 
 
 def delta(text):

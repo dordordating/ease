@@ -25,7 +25,7 @@ PRIMARY_FIRST_TEXT_TIMEOUT = 10
 REQUEST_TIMEOUT = 45
 _ACCESS_ERROR_CODES = (401, 402, 403)
 _GUIDE = {"id": "ease-assistant", "version": 5}
-_SHOPPING_VERSION = {"id": "ease-assistant", "version": 6}
+_SHOPPING_VERSION = {"id": "ease-assistant", "version": 7}
 REMINDERS = Literal[0, 5, 10, 15, 30, 60, 1440]
 SourceId = Annotated[str, Field(pattern=r"^s[1-9][0-9]{0,5}$")]
 Day = Annotated[str, Field(pattern=r"^\d{4}-\d{2}-\d{2}$")]
@@ -253,7 +253,7 @@ class _OpenRouterAccessError(OpenRouterUnavailable):
 
 
 def read_result(metadata: str, sources: list[Source], task_labels: list[TaskLabel] = (),
-                shopping: ShoppingContext | None = None) -> dict:
+                shopping: ShoppingContext | None = None, prompt: str = "") -> dict:
     known = {source.id: source.kind for source in sources}
     labels = {label.id for label in task_labels}
     citations: list[str] = []
@@ -291,7 +291,7 @@ def read_result(metadata: str, sources: list[Source], task_labels: list[TaskLabe
                 (draft.end and not draft.start) or (draft.reminder is not None and not draft.start)
             ):
                 continue
-            data = (draft.validated_result(shopping) if isinstance(draft, ShoppingAction)
+            data = (draft.validated_result(shopping, prompt) if isinstance(draft, ShoppingAction)
                     else draft.model_dump(exclude_none=True, exclude_defaults=True))
             if data is None:
                 continue
@@ -446,7 +446,7 @@ async def _answer_events(pieces: AsyncIterator[str | list[LookupCall]], payload:
         yield {"type": "delta", "text": buffer}
     if not has_answer:
         raise OpenRouterRejected("Assistant provider returned no answer")
-    yield {"type": "done", **read_result(buffer if in_metadata else "", payload.sources, payload.task_labels, payload.shopping)}
+    yield {"type": "done", **read_result(buffer if in_metadata else "", payload.sources, payload.task_labels, payload.shopping, payload.prompt)}
 
 
 async def _stream_model(client: httpx.AsyncClient, key: str, model: str, payload: AssistantRequest,
