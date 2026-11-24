@@ -1,11 +1,14 @@
 import { shoppingMessage } from "./shopping-background.js";
+import { shoppingCreditPermission } from "./shopping-checkout-digipay.js";
 import { shoppingHostPermission, shoppingNotificationPermission } from "./shopping-digikala.js";
 import {
   digikalaPrice, digikalaProductLink, digikalaProductUrl, digikalaSearchUrl, parseShoppingNumber,
   offerFitsQuantity, shoppingNumberDigits, shoppingPollMinutes, shoppingQuantity, shoppingReadErrors, shoppingWatchKey
 } from "./shopping-store.js";
 import { createShoppingSellerPicker } from "./shopping-sellers.js";
-import { canRetryShoppingPurchase, isShoppingCreditMode, shoppingPurchaseStatus, shoppingWatchStatus } from "./shopping-purchase-store.js";
+import {
+  canRetryShoppingPurchase, isShoppingCreditMode, pendingCreditTotal, shoppingPurchaseStatus, shoppingWatchStatus
+} from "./shopping-purchase-store.js";
 import { openPurchaseSettings, purchaseEditor } from "./shopping-purchase-ui.js";
 import { createDatePicker } from "./date-picker.js";
 import { createTimePicker } from "./time-picker.js";
@@ -13,6 +16,7 @@ import { localTaskDay, taskTimestamp } from "./todo-store.js";
 
 const request = (action, data) => chrome.runtime.sendMessage({ type: shoppingMessage, action, ...data })
   .catch(() => ({ error: "shoppingUnavailable" }));
+const requestCreditAccess = () => chrome.permissions.request(shoppingCreditPermission).catch(() => false);
 
 export function renderShopping(root, options) {
   const { node, button, glyph, t, icon, locale, dateLocale, firstDay, refreshButton, notifyButton,
@@ -285,6 +289,7 @@ export function renderShopping(root, options) {
         reportError(checkout.error);
         return false;
       }
+      if (checkout.payload.confirm && isShoppingCreditMode(checkout.payload.mode)) await requestCreditAccess();
       const saved = await mutate("shopping-save", {
         id: watch?.id, productId, title, image, ...picker.selection(), quantity: count, priceLimit: limit, discount, startAt, endAt,
         purchase: checkout.payload
@@ -522,6 +527,20 @@ export function renderShopping(root, options) {
             { symbol: "edit", onClick: () => editWatch(watch) });
           approve.id = `shopping-checkout-approve-${watch.id}`;
           controls.append(approve);
+        }
+        const payment = purchases.payment;
+        if (job.status === "awaiting" && pendingCreditTotal(job, payment)) {
+          const confirm = button(t("shoppingPurchaseConfirmOnDigiPay"), "secondary-button shopping-checkout-link",
+            { symbol: "check", onClick: async () => {
+              confirm.disabled = true;
+              if (await requestCreditAccess()) {
+                const result = await request("confirm-credit", { id: watch.id, token: payment.token });
+                if (result?.error) reportError(result.error);
+              } else reportError("shoppingPurchaseDigiPayAccess");
+              confirm.disabled = false;
+            } });
+          confirm.id = `shopping-checkout-confirm-${watch.id}`;
+          controls.append(confirm);
         }
         const openLabel = job.status === "awaiting" ? "shoppingPurchaseContinuePayment"
           : job.status === "unknown" || job.status === "paid" ? "shoppingPurchaseOpenOrders" : "shoppingPurchaseOpenCheckout";

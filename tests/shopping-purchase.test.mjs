@@ -4,11 +4,12 @@ import {
   checkoutInvoice, invoiceAddressIssue, previewDigikalaInvoice, readCheckoutCart, readDigikalaDeliveryChoices,
   readDigikalaBuyer, selectDigikalaDeliveryAddress
 } from "../shopping-checkout-digikala.js";
+import { isDigiPayCreditPage } from "../shopping-checkout-digipay.js";
 import { readDigikalaFromPage } from "../shopping-digikala-session.js";
 import { quoteForWatch, readDigikalaProduct } from "../shopping-digikala.js";
 import { stageShoppingPurchase } from "../shopping-purchases.js";
 import {
-  canRetryShoppingPurchase, checkoutCartIssue, checkoutCartsMatch, checkoutCostIssue, checkoutItemsKey, purchaseJobApplies,
+  canRetryShoppingPurchase, checkoutCartIssue, checkoutCartsMatch, checkoutCostIssue, checkoutItemsKey, pendingCreditTotal, purchaseJobApplies,
   shoppingPurchaseKey, shoppingPurchasePolicy, shoppingWatchStatus
 } from "../shopping-purchase-store.js";
 import { parseShoppingNumber, shoppingAvailable, shoppingPriceStatus, shoppingWatchKey, updateShopping } from "../shopping-store.js";
@@ -101,6 +102,26 @@ test("choosing a credit plan does not authorize a payment for a new or previousl
     status: "prepared", rule: shoppingWatchKey(watch) } };
   assert.equal(await stageShoppingPurchase(workspace, "shopping-save", { id, purchase }, transaction), undefined);
   assert.deepEqual(transaction, {});
+});
+
+test("DigiPay confirmation uses only the approved checkout and only once", () => {
+  const job = { mode: "credit-one", creditApproved: true, token: "purchase", tabId: 14,
+    cartId: "cart-1", invoiceQuote: { total: 990_000 } };
+  const payment = { mode: job.mode, token: job.token, tabId: job.tabId, cartId: job.cartId };
+  assert.equal(pendingCreditTotal(job, payment), 990_000);
+  assert.equal(pendingCreditTotal(job, { ...payment, creditTotal: 980_000 }), 980_000);
+  assert.equal(pendingCreditTotal({ ...job, creditApproved: false }, payment), null);
+  for (const changed of [{ mode: "credit-four" }, { token: "another" }, { tabId: 15 }, { cartId: "cart-2" },
+    { creditTotal: 0 }, { creditConfirmationAttempted: true }, { needsReview: true }]) {
+    assert.equal(pendingCreditTotal(job, { ...payment, ...changed }), null);
+  }
+
+  assert.equal(isDigiPayCreditPage("https://web.mydigipay.com/credit/bnpl-pay/fixture-ticket"), true);
+  for (const url of ["https://web.mydigipay.com/credit/bnpl-pay", "https://web.mydigipay.com/credit/login",
+    "https://web.mydigipay.com.backshop.example/credit/bnpl-pay/fixture", "http://web.mydigipay.com/credit/bnpl-pay/fixture",
+    "https://other.mydigipay.com/credit/bnpl-pay/fixture", "https://web.mydigipay.com:1234/credit/bnpl-pay/fixture"]) {
+    assert.equal(isDigiPayCreditPage(url), false, url);
+  }
 });
 
 test("cart verification permits a partial quantity during setup and requires the exact quantity for checkout", () => {

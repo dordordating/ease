@@ -38,6 +38,14 @@ export function isShoppingPaymentMode(mode) {
   return mode === "wallet" || isShoppingCreditMode(mode);
 }
 
+export function pendingCreditTotal(job, payment) {
+  if (!payment?.token || !payment.cartId || !Number.isInteger(payment.tabId) || !isShoppingCreditMode(job?.mode)
+    || job.creditApproved !== true || payment.mode !== job.mode
+    || payment.token !== job.token || payment.cartId !== job.cartId || payment.tabId !== job.tabId
+    || payment.creditConfirmationAttempted || payment.needsReview) return null;
+  return digikalaPrice(payment.creditTotal ?? job.invoiceQuote?.total);
+}
+
 export function canRetryShoppingPurchase(watch, job, state) {
   return job?.status === "review" && !state.payment && purchaseJobApplies(watch, job, state.policy);
 }

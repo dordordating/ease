@@ -1,6 +1,7 @@
 import { translate } from "./locales.js";
 import { workspaceOwnerKey } from "./workspace-accounts.js";
 import { addDigikalaTabItem, waitForShopTab } from "./shopping-cart.js";
+import { digipayCreditControl, isDigiPayCreditPage, shoppingCreditPermission } from "./shopping-checkout-digipay.js";
 import { digikalaCheckoutControl } from "./shopping-checkout-page.js";
 import {
   checkoutInvoiceKey, digikalaCartUrl, digikalaCheckoutStage, digikalaOrdersUrl, digikalaShippingUrl, invoiceAddressIssue,
@@ -11,7 +12,7 @@ import { DigikalaCheckoutError, isDigikalaPage, withDigikalaTab } from "./shoppi
 import { readDigikalaProduct, quoteForWatch, shoppingHostPermission, shoppingNotificationPermission } from "./shopping-digikala.js";
 import {
   canRetryShoppingPurchase, checkoutAmounts, checkoutCartIssue, checkoutCartsMatch, checkoutCostIssue, checkoutItemsKey,
-  isShoppingCreditMode, isShoppingPaymentMode, purchaseJobApplies, readShoppingPurchases, shoppingPaymentKey,
+  isShoppingCreditMode, isShoppingPaymentMode, pendingCreditTotal, purchaseJobApplies, readShoppingPurchases, shoppingPaymentKey,
   shoppingPurchasePolicy, shoppingPurchaseStatus
 } from "./shopping-purchase-store.js";
 import { digikalaPrice, digikalaProductUrl, shoppingStatus, shoppingWatchKey } from "./shopping-store.js";
@@ -89,7 +90,10 @@ export async function stageShoppingPurchase(workspace, action, data, transaction
     if (state.payment) return "shoppingPurchasePending";
     const credit = isShoppingCreditMode(mode);
     if (data.purchase.confirm !== true) return credit ? "shoppingPurchaseCreditConsentRequired" : "shoppingPurchaseConsentRequired";
-    if (credit) next.creditApproved = true;
+    if (credit) {
+      next.creditApproved = true;
+      next.creditCompletionApproved = await chrome.permissions.contains(shoppingCreditPermission);
+    }
     // Bind the payment method to the policy shown in the watch editor.
     if (JSON.stringify(shoppingPurchasePolicy(data.purchase.policy)) !== JSON.stringify(state.policy)) return "shoppingPurchaseRearm";
   }
@@ -249,6 +253,53 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
       const values = job?.token === token ? changeJob(state, id, { ...job, ...receipt, status: "paid" }) : {};
       await chrome.storage.local.set({ ...values, [shoppingPaymentKey]: null });
       return true;
+    });
+  }
+
+  async function waitForReceipt(payment) {
+    const tab = await waitForTab(payment.tabId, tab =>
+      settledTab(tab) && digikalaCheckoutStage(tab.url) === "receipt" ? tab : null);
+    return Boolean(tab && await reviewPending(payment, tab));
+  }
+
+  async function confirmOnDigiPay(payment, tab) {
+    const { owner, id, token, tabId } = payment;
+    if (!settledTab(tab) || !isDigiPayCreditPage(tab.url) || !await chrome.permissions.contains(shoppingCreditPermission)) return false;
+    const original = await readShoppingPurchases(owner);
+    const expected = { url: tab.url, total: pendingCreditTotal(original.jobs[id], original.payment) };
+    if (original.payment?.token !== token || !expected.total) return false;
+    const ready = await waitForTab(tabId, async current => {
+      if (current.url !== expected.url || current.incognito) return false;
+      if (!settledTab(current)) return null;
+      const [probe] = await chrome.scripting.executeScript({
+        target: { tabId }, func: digipayCreditControl, args: [false, expected]
+      }).catch(() => []);
+      return probe?.result === true && probe.documentId ? probe : null;
+    }, 8000);
+    if (!ready) return false;
+
+    return queueWorkspace(async () => {
+      const [context, state, current, allowed] = await Promise.all([
+        currentShopping(), readShoppingPurchases(owner), chrome.tabs.get(tabId).catch(() => null),
+        chrome.permissions.contains(shoppingCreditPermission)
+      ]);
+      const watch = context.watches.find(item => item.id === id);
+      const job = state.jobs[id];
+      const now = Date.now();
+      if (!allowed || context.owner !== owner || !context.enabled || !watch || watch.paused
+        || (watch.startAt !== null && now < watch.startAt) || (watch.endAt !== null && now >= watch.endAt)
+        || !settledTab(current) || current.url !== expected.url || state.payment?.token !== token
+        || !purchaseJobApplies(watch, job, state.policy) || pendingCreditTotal(job, state.payment) !== expected.total) return false;
+
+      // Reserve this confirmation before clicking. A lost response can still mean the payment went through.
+      await chrome.storage.local.set({ [shoppingPaymentKey]: { ...state.payment, creditConfirmationAttempted: true } });
+      const result = await chrome.scripting.executeScript({
+        target: { tabId, documentIds: [ready.documentId] }, func: digipayCreditControl,
+        args: [true, { ...expected, deadline: watch.endAt }]
+      }).then(answers => answers[0]?.result, () => undefined);
+      if (result !== false) return true;
+      await chrome.storage.local.set({ [shoppingPaymentKey]: state.payment });
+      return false;
     });
   }
 
@@ -417,7 +468,8 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
         return;
       }
 
-      const payment = { owner, id, tabId, cartId: cart.id, token: job.token, mode: job.mode };
+      const payment = { owner, id, tabId, cartId: cart.id, token: job.token, mode: job.mode,
+        ...(credit ? { creditTotal: invoice.total } : {}) };
       let sent = false;
       await queueWorkspace(async () => {
         requireCheckout(await authorized(), "shoppingConditionsChanged");
@@ -436,11 +488,16 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
       }
       const destination = await waitForTab(tabId, tab => settledTab(tab)
         && (digikalaCheckoutStage(tab.url) === "receipt" || (credit && creditHandoff(tab))) ? tab : null);
-      if (destination && await reviewPending(payment, destination)) {
-        await notifyOutcome(id, watch, "shoppingPurchasePaid", context.locale).catch(() => {});
-      } else if (credit && creditHandoff(destination)) {
-        await finish("awaiting");
-      } else {
+      let paid = destination && await reviewPending(payment, destination);
+      if (!paid && credit && creditHandoff(destination)) {
+        paid = job.creditCompletionApproved === true && await confirmOnDigiPay(payment, destination) && await waitForReceipt(payment);
+        if (!paid) {
+          await finish("awaiting");
+          return;
+        }
+      }
+      if (paid) await notifyOutcome(id, watch, "shoppingPurchasePaid", context.locale).catch(() => {});
+      else {
         await finish("unknown", null, { ...payment, needsReview: true });
       }
     } catch (error) {
@@ -498,6 +555,18 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
     recover: () => serialize(recover),
     run: (owner, attempts) => serialize(async () => {
       for (const attempt of attempts) await runPurchase(owner, attempt);
+    }),
+    confirmCredit: (id, token) => serialize(async () => {
+      const { owner, enabled } = await currentShopping();
+      const { jobs, payment } = await readShoppingPurchases(owner);
+      const job = jobs[id];
+      if (!enabled || !payment || payment.id !== id || payment.owner !== owner || payment.token !== token
+        || job?.status !== "awaiting" || !pendingCreditTotal(job, payment)) return { error: "shoppingPurchaseDigiPayCheck" };
+      const tab = await chrome.tabs.get(payment.tabId).catch(() => null);
+      if (await reviewPending(payment, tab)) return { ok: true };
+      if (!await confirmOnDigiPay(payment, tab)) return { error: "shoppingPurchaseDigiPayCheck" };
+      await waitForReceipt(payment);
+      return { ok: true };
     }),
     async open(id) {
       const { owner, enabled } = await currentShopping();

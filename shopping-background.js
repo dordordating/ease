@@ -254,7 +254,7 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
 
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (message?.type !== shoppingMessage || !fromWorkspacePage(sender)) return;
-    const { action, id, input } = message;
+    const { action, id, input, token } = message;
     let result;
     if (action === "connect" || action === "notify") {
       const permission = action === "connect" ? shoppingHostPermission : shoppingNotificationPermission;
@@ -268,6 +268,8 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
       result = requestCart(id);
     } else if (action === "open-checkout") {
       result = purchases.open(id);
+    } else if (action === "confirm-credit") {
+      result = purchases.confirmCredit(id, token);
     } else if (action === "addresses") {
       result = (async () => {
         if (!(await currentShopping()).enabled) return { error: "shoppingUnavailable" };
