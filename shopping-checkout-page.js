@@ -7,7 +7,7 @@ export function digikalaCheckoutControl(intent, expected = {}) {
   const usable = el => visible(el) && !el.disabled && !el.hasAttribute("disabled") && el.getAttribute("aria-disabled") !== "true";
   const control = name => [...document.querySelectorAll(`button[data-cro-id="${name}"], dds-button[data-cro-id="${name}"]`)].find(usable);
   const dialogs = [...document.querySelectorAll('dialog[open], [role="dialog"][aria-modal="true"]')].filter(visible);
-  const normalize = value => (value ?? "").replace(/[\s\u200c\u200f\u200e]/gu, "").replace(/ي/gu, "ی").replace(/ك/gu, "ک");
+  const normalize = value => (value ?? "").replace(/[\s\p{Cf}\p{M}]/gu, "").replace(/ي/gu, "ی").replace(/ك/gu, "ک");
 
   if (intent.startsWith("shipping")) {
     if (path !== "/checkout/shipping") return null;
@@ -38,26 +38,31 @@ export function digikalaCheckoutControl(intent, expected = {}) {
 
   if (path !== "/checkout/payment" || dialogs.length) return null;
   const walletName = "کیفپولدیجیپی";
-  const rows = [...document.querySelectorAll('dds-selectable-row[aria-label], label[data-cro-id="payment-pay-by-wallet"]')];
+  const modernRows = [...document.querySelectorAll("dds-selectable-row[aria-label]")].filter(visible);
+  const rows = [...modernRows, ...document.querySelectorAll('label[data-cro-id="payment-pay-by-wallet"]')];
   const options = rows.filter(row => usable(row) && (normalize(row.getAttribute("aria-label")) === walletName
     || [...row.querySelectorAll("p")].some(label => normalize(label.textContent) === walletName)));
   if (options.length !== 1) return null;
   const [wallet] = options;
+  const modern = wallet.matches("dds-selectable-row");
   const radio = wallet.querySelector('input[type="radio"]');
-  if (radio?.disabled) return null;
-  const selected = radio ? radio.checked
-    : wallet.selected === true || (wallet.hasAttribute("selected") && wallet.getAttribute("selected") !== "false")
-      || wallet.getAttribute("aria-selected") === "true";
+  if (!modern && (!radio || radio.disabled)) return null;
+  const rowSelected = row => row.selected === true || (row.hasAttribute("selected") && row.getAttribute("selected") !== "false")
+    || row.getAttribute("aria-pressed") === "true" || row.getAttribute("aria-selected") === "true";
+  // The modern card contains a read-only radio. Its native handler runs on the card itself.
+  const selected = modern ? rowSelected(wallet) && !modernRows.some(row => row !== wallet && rowSelected(row)) : radio.checked;
   if (intent === "select-wallet") {
-    if (!selected) (radio ?? wallet).click();
+    if (!selected) (modern ? wallet : radio).click();
     return { selected };
   }
+  if (intent === "wallet-selected") return selected ? { selected } : null;
   const pay = control("payment-final-pay");
   if (!selected || !pay) return null;
+  if (expected.walletButton && normalize(pay.textContent) !== normalize(expected.walletButton)) return null;
 
   function parseToman(value) {
     const digits = normalize(value).replace(/[٠-٩۰-۹]/gu, digit => String(digit.codePointAt(0) & 15))
-      .replace(/[,٬]/gu, "").replace(/تومان$/u, "");
+      .replace(/[,٬]/gu, "").replace(/^تومان|تومان$/u, "");
     return /^\d+$/u.test(digits) ? Number(digits) * 10 : null;
   }
   const totals = new Set();

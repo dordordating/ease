@@ -57,7 +57,15 @@ export const purchaseMessages = {
     shoppingPurchaseNoAddresses: "Add a delivery address in Digikala, then refresh.",
     shoppingPurchaseConnection: "Couldn’t connect to your Digikala session. Open Digikala and try again.",
     shoppingPurchaseAddressChanged: "The selected address changed. Refresh and confirm your address again.",
-    shoppingPurchaseAddressHint: "When checking out, Digikala makes the selected address your active delivery address."
+    shoppingPurchaseAddressHint: "When checking out, Digikala makes the selected address your active delivery address.",
+    shoppingPurchaseInvoice: "Ease could not verify the Digikala checkout invoice.",
+    shoppingPurchaseWalletControl: "Ease could not confirm DigiPay wallet selection on the checkout page.",
+    shoppingPurchaseCartExtras: "Review the extra services or credits in the Digikala cart.",
+    shoppingQuoteItems: "Items",
+    shoppingQuoteShipping: "Shipping",
+    shoppingQuoteTotal: "Final amount now",
+    shoppingQuotePending: "Shipping and the final amount appear when Digikala has a matching checkout invoice.",
+    shoppingQuoteBreakdown: "Checkout total {total} · Shipping {shipping}"
   },
   fa: {
     shoppingPurchaseSettings: "تنظیمات خرید",
@@ -117,7 +125,15 @@ export const purchaseMessages = {
     shoppingPurchaseNoAddresses: "در دیجی‌کالا یک نشانی ارسال اضافه کنید و دوباره نشانی‌ها را بررسی کنید.",
     shoppingPurchaseConnection: "اتصال به نشست دیجی‌کالا برقرار نشد. دیجی‌کالا را باز کنید و دوباره تلاش کنید.",
     shoppingPurchaseAddressChanged: "نشانی انتخاب‌شده تغییر کرده است. نشانی‌ها را دوباره دریافت کنید و انتخابتان را تأیید کنید.",
-    shoppingPurchaseAddressHint: "هنگام خرید، دیجی‌کالا نشانی انتخاب‌شده را به عنوان نشانی فعال ارسال تنظیم می‌کند."
+    shoppingPurchaseAddressHint: "هنگام خرید، دیجی‌کالا نشانی انتخاب‌شده را به عنوان نشانی فعال ارسال تنظیم می‌کند.",
+    shoppingPurchaseInvoice: "Ease نتوانست فاکتور پرداخت دیجی‌کالا را تأیید کند.",
+    shoppingPurchaseWalletControl: "انتخاب کیف پول دیجی‌پی در صفحهٔ پرداخت تأیید نشد.",
+    shoppingPurchaseCartExtras: "خدمات اضافه یا اعتبارهای سبد دیجی‌کالا را بررسی کنید.",
+    shoppingQuoteItems: "مبلغ کالاها",
+    shoppingQuoteShipping: "هزینهٔ ارسال",
+    shoppingQuoteTotal: "مبلغ نهایی فعلی",
+    shoppingQuotePending: "هزینهٔ ارسال و مبلغ نهایی پس از آماده‌شدن فاکتور همین سبد و نشانی نمایش داده می‌شوند.",
+    shoppingQuoteBreakdown: "جمع فاکتور {total} · ارسال {shipping}"
   },
   es: {
     shoppingPurchaseSettings: "Ajustes de compra",
@@ -177,7 +193,15 @@ export const purchaseMessages = {
     shoppingPurchaseNoAddresses: "Añade una dirección de entrega en Digikala y actualiza la lista.",
     shoppingPurchaseConnection: "No se pudo conectar con tu sesión de Digikala. Abre Digikala e inténtalo de nuevo.",
     shoppingPurchaseAddressChanged: "La dirección elegida cambió. Actualiza la lista y confirma la dirección otra vez.",
-    shoppingPurchaseAddressHint: "Al preparar el pago, Digikala establece la dirección elegida como dirección de entrega activa."
+    shoppingPurchaseAddressHint: "Al preparar el pago, Digikala establece la dirección elegida como dirección de entrega activa.",
+    shoppingPurchaseInvoice: "Ease no pudo verificar la factura de Digikala.",
+    shoppingPurchaseWalletControl: "Ease no pudo confirmar la selección de la billetera DigiPay en el pago.",
+    shoppingPurchaseCartExtras: "Revisa los servicios extra o créditos del carrito de Digikala.",
+    shoppingQuoteItems: "Productos",
+    shoppingQuoteShipping: "Envío",
+    shoppingQuoteTotal: "Importe final actual",
+    shoppingQuotePending: "El envío y el importe final aparecen cuando Digikala tiene una factura que coincide.",
+    shoppingQuoteBreakdown: "Total del pedido {total} · Envío {shipping}"
   },
   fr: {
     shoppingPurchaseSettings: "Paramètres d’achat",
@@ -237,7 +261,15 @@ export const purchaseMessages = {
     shoppingPurchaseNoAddresses: "Ajoutez une adresse de livraison sur Digikala, puis actualisez la liste.",
     shoppingPurchaseConnection: "Connexion à votre session Digikala impossible. Ouvrez Digikala et réessayez.",
     shoppingPurchaseAddressChanged: "L’adresse choisie a changé. Actualisez la liste et confirmez votre adresse.",
-    shoppingPurchaseAddressHint: "Lors de l’achat, l’adresse choisie devient l’adresse de livraison active sur Digikala."
+    shoppingPurchaseAddressHint: "Lors de l’achat, l’adresse choisie devient l’adresse de livraison active sur Digikala.",
+    shoppingPurchaseInvoice: "Ease n’a pas pu vérifier la facture Digikala.",
+    shoppingPurchaseWalletControl: "Ease n’a pas pu confirmer la sélection du portefeuille DigiPay sur la page de paiement.",
+    shoppingPurchaseCartExtras: "Vérifiez les services supplémentaires ou les crédits du panier Digikala.",
+    shoppingQuoteItems: "Articles",
+    shoppingQuoteShipping: "Livraison",
+    shoppingQuoteTotal: "Montant final actuel",
+    shoppingQuotePending: "La livraison et le montant final s’affichent dès que Digikala dispose d’une facture correspondante.",
+    shoppingQuoteBreakdown: "Total de la commande {total} · Livraison {shipping}"
   },
   "pt-BR": {
     shoppingPurchaseSettings: "Configurações de compra",
@@ -297,7 +329,15 @@ export const purchaseMessages = {
     shoppingPurchaseNoAddresses: "Adicione um endereço de entrega no Digikala e atualize a lista.",
     shoppingPurchaseConnection: "Não foi possível conectar à sessão do Digikala. Abra o Digikala e tente novamente.",
     shoppingPurchaseAddressChanged: "O endereço selecionado mudou. Atualize a lista e confirme o endereço novamente.",
-    shoppingPurchaseAddressHint: "Na finalização da compra, o Digikala define o endereço escolhido como endereço de entrega ativo."
+    shoppingPurchaseAddressHint: "Na finalização da compra, o Digikala define o endereço escolhido como endereço de entrega ativo.",
+    shoppingPurchaseInvoice: "O Ease não conseguiu verificar a fatura do Digikala.",
+    shoppingPurchaseWalletControl: "O Ease não conseguiu confirmar a carteira DigiPay na tela de pagamento.",
+    shoppingPurchaseCartExtras: "Confira os serviços extras ou créditos no carrinho do Digikala.",
+    shoppingQuoteItems: "Produtos",
+    shoppingQuoteShipping: "Frete",
+    shoppingQuoteTotal: "Valor final atual",
+    shoppingQuotePending: "O frete e o valor final aparecem quando houver uma fatura correspondente no Digikala.",
+    shoppingQuoteBreakdown: "Total do pedido {total} · Frete {shipping}"
   },
   ar: {
     shoppingPurchaseSettings: "إعدادات الشراء",
@@ -357,7 +397,15 @@ export const purchaseMessages = {
     shoppingPurchaseNoAddresses: "أضف عنوان توصيل في ديجي‌كالا ثم حدّث القائمة.",
     shoppingPurchaseConnection: "تعذر الاتصال بجلسة ديجي‌كالا. افتح ديجي‌كالا وحاول مجددًا.",
     shoppingPurchaseAddressChanged: "تغيّر العنوان المحدد. حدّث القائمة وأكّد عنوانك مجددًا.",
-    shoppingPurchaseAddressHint: "عند إتمام الشراء، يعتمد ديجي‌كالا العنوان المحدد عنوانًا نشطًا للتوصيل."
+    shoppingPurchaseAddressHint: "عند إتمام الشراء، يعتمد ديجي‌كالا العنوان المحدد عنوانًا نشطًا للتوصيل.",
+    shoppingPurchaseInvoice: "تعذر على Ease التحقق من فاتورة ديجي‌كالا.",
+    shoppingPurchaseWalletControl: "تعذر على Ease تأكيد اختيار محفظة DigiPay في صفحة الدفع.",
+    shoppingPurchaseCartExtras: "راجع الخدمات الإضافية أو الأرصدة في سلة ديجي‌كالا.",
+    shoppingQuoteItems: "قيمة المنتجات",
+    shoppingQuoteShipping: "الشحن",
+    shoppingQuoteTotal: "المبلغ النهائي الحالي",
+    shoppingQuotePending: "يظهر الشحن والمبلغ النهائي عندما تتوفر فاتورة مطابقة في ديجي‌كالا.",
+    shoppingQuoteBreakdown: "إجمالي الطلب {total} · الشحن {shipping}"
   },
   de: {
     shoppingPurchaseSettings: "Kaufeinstellungen",
@@ -417,7 +465,15 @@ export const purchaseMessages = {
     shoppingPurchaseNoAddresses: "Füge auf Digikala eine Lieferadresse hinzu und aktualisiere die Liste.",
     shoppingPurchaseConnection: "Deine Digikala-Sitzung ist nicht erreichbar. Öffne Digikala und versuche es erneut.",
     shoppingPurchaseAddressChanged: "Die ausgewählte Adresse hat sich geändert. Aktualisiere die Liste und bestätige deine Adresse erneut.",
-    shoppingPurchaseAddressHint: "Beim Kauf verwendet Digikala die ausgewählte Adresse als aktive Lieferadresse."
+    shoppingPurchaseAddressHint: "Beim Kauf verwendet Digikala die ausgewählte Adresse als aktive Lieferadresse.",
+    shoppingPurchaseInvoice: "Ease konnte die Digikala-Rechnung nicht überprüfen.",
+    shoppingPurchaseWalletControl: "Ease konnte die Auswahl des DigiPay-Guthabens auf der Zahlungsseite nicht bestätigen.",
+    shoppingPurchaseCartExtras: "Prüfe Zusatzleistungen oder Guthaben im Digikala-Warenkorb.",
+    shoppingQuoteItems: "Artikel",
+    shoppingQuoteShipping: "Versand",
+    shoppingQuoteTotal: "Aktueller Endbetrag",
+    shoppingQuotePending: "Versand und Endbetrag werden angezeigt, sobald Digikala eine passende Rechnung hat.",
+    shoppingQuoteBreakdown: "Bestellsumme {total} · Versand {shipping}"
   },
   ja: {
     shoppingPurchaseSettings: "購入設定",
@@ -477,6 +533,14 @@ export const purchaseMessages = {
     shoppingPurchaseNoAddresses: "Digikala で配送先を追加してから、一覧を更新してください。",
     shoppingPurchaseConnection: "Digikala のセッションに接続できませんでした。Digikala を開いてから再試行してください。",
     shoppingPurchaseAddressChanged: "選択した配送先が変更されました。更新してから配送先をもう一度確認してください。",
-    shoppingPurchaseAddressHint: "購入手続き時に、選択した住所が Digikala の使用中の配送先に設定されます。"
+    shoppingPurchaseAddressHint: "購入手続き時に、選択した住所が Digikala の使用中の配送先に設定されます。",
+    shoppingPurchaseInvoice: "Ease で Digikala の請求内容を確認できませんでした。",
+    shoppingPurchaseWalletControl: "支払い画面で DigiPay ウォレットの選択を確認できませんでした。",
+    shoppingPurchaseCartExtras: "Digikala のカートで追加サービスやクレジットを確認してください。",
+    shoppingQuoteItems: "商品代金",
+    shoppingQuoteShipping: "配送料",
+    shoppingQuoteTotal: "現在の最終金額",
+    shoppingQuotePending: "Digikala に一致する請求内容がある場合に、配送料と最終金額を表示します。",
+    shoppingQuoteBreakdown: "注文合計 {total} · 配送料 {shipping}"
   }
 };

@@ -1,6 +1,6 @@
-import { digikalaId, digikalaPrice } from "./shopping-store.js";
-import { checkoutItemsKey } from "./shopping-purchase-store.js";
-import { DigikalaCheckoutError, digikalaStorefront as storefront, readDigikalaInTab } from "./shopping-digikala-session.js";
+import { digikalaId, digikalaPrice, shoppingQuantity } from "./shopping-store.js";
+import { checkoutAmounts, checkoutCartIssue, checkoutCartsMatch, checkoutItemsKey, defaultShoppingPurchasePolicy } from "./shopping-purchase-store.js";
+import { DigikalaCheckoutError, digikalaStorefront as storefront, isDigikalaPage, readDigikalaInTab } from "./shopping-digikala-session.js";
 
 export const digikalaCartUrl = storefront + "/checkout/cart/";
 export const digikalaShippingUrl = storefront + "/checkout/shipping/";
@@ -12,44 +12,59 @@ function opaqueId(value) {
   return typeof id === "string" && /^[a-z\d][a-z\d_-]{0,79}$/iu.test(id) ? id : null;
 }
 
+function integer(value) {
+  const number = typeof value === "string" && /^\d+$/u.test(value) ? Number(value) : value;
+  return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
+
 function amount(value) {
-  return value === 0 ? 0 : digikalaPrice(value);
+  const number = integer(value);
+  return number === 0 ? 0 : digikalaPrice(number);
+}
+
+function applied(value) {
+  return integer(value) !== 0 && Boolean(value) && (typeof value !== "object" || Object.keys(value).length > 0);
 }
 
 function isDigiPayWallet(label) {
-  return typeof label === "string" && label.replace(/[\s\u200c\u200f\u200e]/gu, "").replace(/ي/gu, "ی").replace(/ك/gu, "ک") === "کیفپولدیجیپی";
+  return typeof label === "string" && label.replace(/[\s\p{Cf}\p{M}]/gu, "").replace(/ي/gu, "ی").replace(/ك/gu, "ک") === "کیفپولدیجیپی";
 }
 
 // Only the cart identities, quantities and rials needed by the purchase rule leave this adapter.
-export function readCheckoutCart(data, raw = data?.cart_data ?? data?.cart, rawItems = data?.cart_items) {
-  if (!raw || !Number.isSafeInteger(raw.total_quantity) || raw.total_quantity < 0) return null;
+export function readCheckoutCart(data, raw = data?.cart_data ?? data?.cart, rawItems = data?.cart_items, { invoice = false } = {}) {
+  if (!raw) return null;
+  const totalQuantity = integer(raw.total_quantity);
+  if (totalQuantity === null && (!invoice || raw.total_quantity != null)) return null;
   const packages = data?.packages;
   if (rawItems === undefined && Array.isArray(packages) && packages.every(part => Array.isArray(part.cart_items))) {
     rawItems = packages.flatMap(part => part.cart_items);
   }
   if (!Array.isArray(rawItems)) {
-    if (raw.total_quantity !== 0) return null;
+    if (totalQuantity !== 0) return null;
     rawItems = [];
   }
   const items = rawItems.map(row => {
     const id = opaqueId(row?.id);
-    const unit = digikalaPrice(row?.variant?.price?.selling_price);
-    const amount = digikalaPrice(row?.price?.selling_price);
-    const price = unit && amount === unit * row.quantity ? unit : amount ?? unit;
+    const unit = digikalaPrice(integer(row?.variant?.price?.selling_price));
+    const line = digikalaPrice(integer(row?.price?.selling_price));
+    const quantity = integer(row?.quantity);
+    const price = unit && line === unit * quantity ? unit : line ?? unit;
     return {
       ...(id ? { id } : {}),
       variantId: digikalaId(row?.variant_id ?? row?.variant?.id),
       productId: digikalaId(row?.product?.id),
       sellerId: digikalaId(row?.variant?.seller?.id),
-      quantity: row?.quantity,
+      quantity,
       price
     };
   });
-  const id = opaqueId(raw.id);
-  if ((items.length && !id) || items.some(row => !row.variantId || !Number.isSafeInteger(row.quantity) || row.quantity < 1)
-    || items.reduce((sum, row) => sum + row.quantity, 0) !== raw.total_quantity) return null;
-  const extraServices = Boolean(raw.temporary_plus_subscription?.payable_price || raw.gift_card_amount
-    || raw.delivery_package_box?.selected_package || raw.insurance?.amount
+  const references = new Set(rawItems.map(item => opaqueId(item?.cart_id)).filter(Boolean));
+  const id = opaqueId(raw.id ?? raw.cart_id) ?? (invoice && references.size === 1 ? [...references][0] : null);
+  if ((items.length && !id) || (invoice && references.size && (references.size !== 1 || !references.has(id)))
+    || items.some(row => !row.variantId || !row.quantity)
+    || (totalQuantity !== null && items.reduce((sum, row) => sum + row.quantity, 0) !== totalQuantity)) return null;
+  const extraServices = Boolean(applied(raw.temporary_plus_subscription?.payable_price) || applied(raw.gift_card_amount)
+    || applied(raw.delivery_package_box?.selected_package) || applied(raw.insurance?.amount)
     || data?.fresh?.cart_items?.length || data?.invalid_items?.stock_invalid_items?.cart_items?.length
     || rawItems.some(item => item.has_insurance || item.dk_service?.checked || item.e_gift_card_properties?.receiver_phone_number));
   return { id, items, extraServices };
@@ -154,40 +169,91 @@ export async function selectDigikalaDeliveryAddress(tabId, addressId, authorize)
 }
 
 export function checkoutInvoice(data, walletOnly = false) {
-  const sources = Array.isArray(data?.payment_types)
-    ? data.payment_types.flatMap(group => Array.isArray(group?.sources) ? group.sources : [])
-      .filter(source => isDigiPayWallet(source?.title))
-    : [];
+  if (!data || data.order?.id) return null;
+  const modern = Array.isArray(data.payment_types);
+  const sources = modern ? data.payment_types.flatMap(group => Array.isArray(group?.sources) ? group.sources : [])
+    .filter(source => isDigiPayWallet(source?.title)) : [];
   const wallet = sources.length === 1 ? sources[0] : null;
-  const walletData = data?.balance_data?.wallet;
-  const walletBalance = walletData?.activation_url ? null : amount(wallet?.balance ?? walletData?.credit);
-  const base = data?.cart_data ?? data?.cart;
-  const methodPrice = walletOnly && wallet?.price_type != null ? data.price_types_cart_data?.[wallet.price_type] : null;
+  const walletData = data.balance_data?.wallet;
+  const walletBalance = modern ? amount(wallet?.balance ?? (wallet && !walletData?.activation_url ? walletData?.credit : null))
+    : walletData?.activation_url ? null : amount(walletData?.credit);
+  const cartId = opaqueId(data.cart?.id ?? data.cart?.cart_id);
+  const summaryId = opaqueId(data.cart_data?.id ?? data.cart_data?.cart_id);
+  if (cartId && summaryId && cartId !== summaryId) return null;
+  const base = data.cart_data && data.cart ? { ...data.cart, ...data.cart_data } : data.cart_data ?? data.cart;
+  const methodType = wallet?.price_type;
+  const methodPrice = walletOnly && methodType != null
+    ? data.price_types_cart_data?.[methodType] ?? data.price_type_cart?.[methodType] : null;
+  const baseId = opaqueId(base?.id ?? base?.cart_id);
+  const methodId = opaqueId(methodPrice?.id ?? methodPrice?.cart_id);
+  if (!base && !methodPrice || (baseId && methodId && baseId !== methodId)) return null;
   const raw = methodPrice ? { ...base, ...methodPrice } : base;
-  const cart = readCheckoutCart(data, raw, methodPrice?.items ?? data?.cart_items);
-  if (!cart || !data || raw?.id == null || data.order?.id) return null;
+  const shipments = Array.isArray(data.cart_shipments) ? data.cart_shipments : [];
+  const shipmentItems = shipments.length && shipments.every(part => Array.isArray(part?.cart_items))
+    ? shipments.flatMap(part => part.cart_items) : null;
+  const rows = [methodPrice?.items, data.cart_items, raw.items, shipmentItems];
+  const rawItems = rows.find(items => Array.isArray(items) && items.length) ?? rows.find(Array.isArray);
+  const cart = readCheckoutCart(data, raw, rawItems, { invoice: true });
+  if (!cart?.id || !cart.items.length) return null;
   const shipping = raw.shipping_cost === "رایگان" ? 0 : amount(raw.shipping_cost);
-  const shipments = data.cart_shipments;
-  const addressIds = Array.isArray(shipments) ? shipments.map(part => opaqueId(part?.address?.id)) : [];
+  const addressId = opaqueId(data.address?.id ?? raw.address?.id ?? data.address_id);
+  const addressIds = shipments.length ? shipments.map(part => {
+    const id = part?.address?.id ?? part?.address_id;
+    return part?.is_drop_off ? null : id == null ? addressId : opaqueId(id);
+  })
+    : addressId ? [addressId] : [];
   const deliveryKnown = shipping !== null && !(typeof raw.shipping_cost_hint === "string" && /پس\s*[‌-]?\s*کرایه/u.test(raw.shipping_cost_hint))
-    && !(Array.isArray(shipments) && shipments.some(part => part?.is_cash_on_delivery));
+    && !shipments.some(part => part?.is_cash_on_delivery);
   return { cart, total: amount(raw.payable_price), shipping: deliveryKnown ? shipping : null, walletBalance,
-    walletSelectable: wallet ? wallet.is_clickable === true && !wallet.info : walletBalance !== null,
+    walletSelectable: modern ? wallet?.is_clickable === true && !wallet.info : walletBalance !== null,
+    walletMethod: wallet ? [wallet.method_id ?? null, wallet.source_id ?? null, methodType ?? null] : null,
+    walletButton: typeof wallet?.purchase_button_text === "string" ? wallet.purchase_button_text.trim() : "",
     addressIds };
 }
 
 export async function loadDigikalaInvoice(tabId, walletOnly = false) {
-  // Digikala serves both its current and previous payment screens.
-  for (const kind of ["invoice", "legacy-invoice"]) {
+  const results = [];
+  for (const kind of ["invoice", "legacy-invoice", "legacy-plus-invoice"]) {
     const result = await readDigikalaInTab(tabId, kind).catch(() => null);
+    results.push(result?.status);
     const invoice = result?.status === 200 && checkoutInvoice(result.data, walletOnly);
     if (invoice) return invoice;
   }
-  throw new DigikalaCheckoutError("shoppingPurchaseReview");
+  const error = results.includes(200) ? "shoppingPurchaseInvoice"
+    : results.includes(401) ? "shoppingPurchaseSignIn" : "shoppingPurchaseConnection";
+  throw new DigikalaCheckoutError(error);
+}
+
+export async function previewDigikalaInvoice(input) {
+  const productId = digikalaId(input?.productId);
+  const variantId = digikalaId(input?.variantId);
+  const sellerId = digikalaId(input?.sellerId);
+  const price = digikalaPrice(input?.price);
+  const quantity = shoppingQuantity(input?.quantity);
+  const addressId = opaqueId(input?.address?.id);
+  if (!productId || !variantId || !sellerId || !price || !quantity || !addressId) return null;
+  const tabs = (await chrome.tabs.query({ url: `${storefront}/*` })).filter(tab =>
+    Number.isInteger(tab.id) && !tab.incognito && tab.status === "complete" && !tab.pendingUrl && isDigikalaPage(tab.url));
+  const tab = tabs.find(tab => digikalaCheckoutStage(tab.url) === "payment") ?? tabs.find(tab => tab.active) ?? tabs[0];
+  if (!tab) return null;
+
+  // A preview only reads the shopper's current checkout when the invoice already matches the draft.
+  const watch = { productId, quantity };
+  const offer = { variantId, sellerId, price };
+  const invoice = await loadDigikalaInvoice(tab.id, input.wallet === true).catch(() => null);
+  if (!invoice || !invoice.addressIds.length || !invoice.addressIds.every(id => id === addressId)
+    || checkoutCartIssue(invoice.cart, watch, offer, defaultShoppingPurchasePolicy)) return null;
+  const amounts = checkoutAmounts(invoice);
+  if (!amounts) return null;
+  const [buyer, cart] = await Promise.all([readDigikalaBuyer(tab.id, addressId), loadDigikalaCart(tab.id)]);
+  if (buyer.accountId !== input.address.accountId || buyer.addressKey !== input.address.key
+    || checkoutCartIssue(cart, watch, offer, defaultShoppingPurchasePolicy) || !checkoutCartsMatch(cart, invoice.cart)) return null;
+  return amounts;
 }
 
 export function checkoutInvoiceKey(invoice) {
-  return JSON.stringify([invoice.cart.id, checkoutItemsKey(invoice.cart), invoice.total, invoice.shipping, invoice.addressIds]);
+  return JSON.stringify([invoice.cart.id, checkoutItemsKey(invoice.cart), invoice.total, invoice.shipping,
+    invoice.addressIds, invoice.walletMethod, invoice.walletButton]);
 }
 
 export function digikalaCheckoutStage(input) {

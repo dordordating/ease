@@ -449,6 +449,22 @@
 .shopping-address-feedback { color: var(--muted); }
 .shopping-address-open { justify-self: start; color: var(--accent); font-size: .92em; }
 
+.shopping-invoice-preview {
+  display: grid;
+  gap: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--stroke);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.shopping-invoice-preview[hidden] { display: none; }
+.shopping-invoice-amounts { display: grid; gap: 3px; margin: 0; }
+.shopping-invoice-amounts > div { display: flex; justify-content: space-between; gap: 6px; }
+.shopping-invoice-amounts dd { margin: 0; font-variant-numeric: tabular-nums; }
+.shopping-invoice-total { padding-block-start: 4px; border-block-start: 1px solid var(--stroke); color: var(--accent); font-weight: 650; }
+.shopping-last-invoice { flex-basis: 100%; color: var(--muted); }
+
 .shopping-purchase-terms {
   margin: 0;
   padding-inline-start: 18px;

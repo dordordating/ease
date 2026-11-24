@@ -257,6 +257,7 @@ export function renderShopping(root, options) {
     let image = product?.image ?? currentQuote?.image ?? watch?.image;
     const pickers = [];
     let action;
+    let invoiceOffer;
     const changed = () => action?.invalidateConsent();
     const fields = openEditor(t(watch ? "shoppingEdit" : "shoppingNew"), t("save"), async () => {
       const limit = cap.value.trim() ? readAmount(cap) : null;
@@ -317,6 +318,9 @@ export function renderShopping(root, options) {
       onChange(offer, catalogReady) {
         const observed = (offer ? liveQuote?.variantId === offer.id : !catalogReady) ? liveQuote : null;
         const value = offer?.price ?? (offer?.available === false ? null : observed?.price);
+        invoiceOffer = { productId, variantId: offer?.id ?? observed?.variantId,
+          sellerId: offer?.sellerId ?? observed?.sellerId, price: value, quantity: readQuantity() };
+        action?.updateOffer(invoiceOffer);
         if (!customCap) cap.value = value ? amounts.format(Math.ceil(value / 10)) : "";
         const labels = [];
         const model = offer?.optionLabel || offer?.label || observed?.optionLabel || observed?.variantLabel;
@@ -380,6 +384,7 @@ export function renderShopping(root, options) {
     const starts = dateTime("shoppingStarts", watch?.startAt, true, suggestEnd);
     const ends = dateTime("shoppingEnds", watch?.endAt, false, () => { customEnd = true; });
     action = purchaseEditor({ node, button, t, numberField, priceText, readAmount, request }, purchases, purchases.jobs[watch?.id]);
+    action.updateOffer(invoiceOffer);
     fields.append(heading, picker.root, thresholds, ruleHint, schedule, action.root);
     editor.showModal();
     if (focusSeller) picker.focus();
@@ -488,6 +493,13 @@ export function renderShopping(root, options) {
       const statusText = node("span", "", job.orderId ? t("shoppingPurchaseOrder", { order: job.orderId }) : t(purchaseStatus));
       if (job.status === "running" || job.status === "submitting") checkout.setAttribute("role", "status");
       checkout.append(statusText);
+      if (job.invoiceQuote && purchaseStatus !== "shoppingPurchaseRearm") {
+        const lastQuote = node("small", "shopping-last-invoice", t("shoppingQuoteBreakdown", {
+          total: priceText(job.invoiceQuote.total), shipping: priceText(job.invoiceQuote.shipping)
+        }));
+        lastQuote.title = t("shoppingCheckedAt", { date: dates.format(job.invoiceQuote.checkedAt) });
+        checkout.append(lastQuote);
+      }
       if (purchaseStatus === "shoppingPurchaseRearm") {
         const edit = button(t("shoppingEdit"), "secondary-button shopping-checkout-link", { symbol: "edit", onClick: () => editWatch(watch) });
         edit.id = `shopping-checkout-${watch.id}`;

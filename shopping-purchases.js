@@ -9,7 +9,7 @@ import {
 import { DigikalaCheckoutError, isDigikalaPage, withDigikalaTab } from "./shopping-digikala-session.js";
 import { readDigikalaProduct, quoteForWatch, shoppingHostPermission, shoppingNotificationPermission } from "./shopping-digikala.js";
 import {
-  canRetryShoppingPurchase, checkoutCartIssue, checkoutCostIssue, checkoutItemsKey, purchaseJobApplies, readShoppingPurchases,
+  canRetryShoppingPurchase, checkoutAmounts, checkoutCartIssue, checkoutCartsMatch, checkoutCostIssue, checkoutItemsKey, purchaseJobApplies, readShoppingPurchases,
   shoppingPaymentKey, shoppingPurchasePolicy
 } from "./shopping-purchase-store.js";
 import { digikalaPrice, digikalaProductUrl, shoppingStatus, shoppingWatchKey } from "./shopping-store.js";
@@ -239,7 +239,7 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
         if (retryToken !== job.token || !canRetryShoppingPurchase(watch, job, state)) return false;
         previous = job;
       } else if (job.status !== "armed") return false;
-      job = { ...job, policy: state.policy, status: "running", reason: null, tabId: null, cartId: null,
+      job = { ...job, policy: state.policy, status: "running", reason: null, tabId: null, cartId: null, invoiceQuote: null,
         token: retryToken ? crypto.randomUUID() : job.token };
       inProgress.add(job.token);
       await chrome.storage.local.set(changeJob(state, id, job));
@@ -306,36 +306,53 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
       requireCheckout(await openShipping(tabId, authorized), "shoppingPurchaseDelivery");
       const checkAddress = invoice => requireCheckout(invoice.addressIds.length
         && invoice.addressIds.every(value => value === job.buyer.addressId), "shoppingPurchaseAddress");
+      const saveQuote = async invoice => {
+        const amounts = checkoutAmounts(invoice);
+        if (amounts) await setJob(owner, id, job.token, { invoiceQuote: { ...amounts, checkedAt: Date.now() } });
+      };
       if (job.mode === "prepare") {
-        if (job.buyer) checkAddress(await loadDigikalaInvoice(tabId));
+        if (job.buyer) {
+          const invoice = await loadDigikalaInvoice(tabId);
+          checkAddress(invoice);
+          if (checkoutCartsMatch(cart, invoice.cart)) await saveQuote(invoice);
+        }
         await finish("prepared");
         return;
       }
 
-      const checkInvoice = invoice => {
-        requireCheckout(invoice.cart.id === cart.id && checkoutItemsKey(invoice.cart) === checkoutItemsKey(cart)
+      const checkInvoice = async (invoice, record = false) => {
+        requireCheckout(checkoutCartsMatch(cart, invoice.cart)
           && !checkoutCartIssue(invoice.cart, watch, offer, job.policy), "shoppingPurchaseCartChanged");
         checkAddress(invoice);
+        if (record) await saveQuote(invoice);
         const issue = checkoutCostIssue(invoice, job.limit, job.policy);
         requireCheckout(!issue, issue);
         requireCheckout(invoice.walletSelectable && invoice.walletBalance >= invoice.total, "shoppingPurchaseWalletBalance");
       };
-      checkInvoice(await loadDigikalaInvoice(tabId, true));
+      await checkInvoice(await loadDigikalaInvoice(tabId, true), true);
       const attempted = await waitForTab(tabId, tab => digikalaCheckoutStage(tab.url) === "payment"
         ? script(tabId, "select-wallet").catch(() => null) : false, 7000);
-      requireCheckout(attempted, "shoppingPurchaseWalletBalance");
+      requireCheckout(attempted, "shoppingPurchaseWalletControl");
+      const selected = attempted.selected || await waitForTab(tabId, tab => digikalaCheckoutStage(tab.url) === "payment"
+        ? script(tabId, "wallet-selected").catch(() => null) : false, 5500);
+      requireCheckout(selected, "shoppingPurchaseWalletControl");
       const invoice = await loadDigikalaInvoice(tabId, true);
-      checkInvoice(invoice);
-      const expected = { total: invoice.total, deadline: watch.endAt };
+      await checkInvoice(invoice, true);
+      const expected = { total: invoice.total, deadline: watch.endAt, walletButton: invoice.walletButton };
       const visibleTotal = await waitForTab(tabId, tab => digikalaCheckoutStage(tab.url) === "payment"
         ? script(tabId, "verify", expected).catch(() => null) : false, 6500);
       requireCheckout(visibleTotal, "shoppingPurchaseDeliveryUnknown");
       const [confirmed, buyer] = await Promise.all([
         loadDigikalaInvoice(tabId, true), readDigikalaBuyer(tabId, job.buyer.addressId)
       ]);
-      checkInvoice(confirmed);
+      await checkInvoice(confirmed);
       requireCheckout(buyer.accountId === job.buyer.accountId && buyer.addressKey === job.buyer.addressKey, "shoppingPurchaseAddress");
       requireCheckout(checkoutInvoiceKey(invoice) === checkoutInvoiceKey(confirmed), "shoppingPurchaseCartChanged");
+      if (checkoutItemsKey(cart) !== checkoutItemsKey(confirmed.cart)) {
+        const fresh = await loadDigikalaCart(tabId);
+        requireCheckout(fresh.id === cart.id && checkoutItemsKey(fresh) === checkoutItemsKey(cart) && !fresh.extraServices,
+          "shoppingPurchaseCartChanged");
+      }
 
       const payment = { owner, id, tabId, cartId: cart.id, token: job.token };
       let sent = false;

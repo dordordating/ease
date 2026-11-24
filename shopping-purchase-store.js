@@ -46,7 +46,8 @@ export function shoppingPurchaseStatus(watch, job, policy) {
 }
 
 export function checkoutCartIssue(cart, watch, offer, policy, { requireTarget = true, allowFewer = false } = {}) {
-  if (!cart || cart.extraServices) return "shoppingPurchaseReview";
+  if (!cart) return "shoppingPurchaseCartChanged";
+  if (cart.extraServices) return "shoppingPurchaseCartExtras";
   const matching = cart.items.filter(item => item.variantId === offer.variantId);
   if (matching.length > 1 || (requireTarget && matching.length !== 1)) return "shoppingPurchaseCartChanged";
   const target = matching[0];
@@ -74,4 +75,20 @@ export function checkoutCostIssue(invoice, limit, policy) {
 export function checkoutItemsKey(cart) {
   return JSON.stringify(cart.items.map(item => [item.variantId, item.quantity, item.price, item.sellerId, item.productId])
     .sort((a, b) => a[0].localeCompare(b[0])));
+}
+
+export function checkoutCartsMatch(verified, invoice) {
+  if (verified.id !== invoice.id || verified.items.length !== invoice.items.length) return false;
+  const rows = new Map(invoice.items.map(item => [item.variantId, item]));
+  if (rows.size !== invoice.items.length || new Set(verified.items.map(item => item.variantId)).size !== verified.items.length) return false;
+  return verified.items.every(item => {
+    const actual = rows.get(item.variantId);
+    return actual && item.quantity === actual.quantity
+      && ["price", "sellerId", "productId"].every(key => item[key] == null || actual[key] == null || item[key] === actual[key]);
+  });
+}
+
+export function checkoutAmounts(invoice) {
+  return !checkoutCostIssue(invoice, null, defaultShoppingPurchasePolicy)
+    ? { total: invoice.total, shipping: invoice.shipping } : null;
 }

@@ -32,7 +32,7 @@ function confirmation(node, text) {
   return { label, input };
 }
 
-function deliveryAddressField({ node, button, t, request }, initialId, onChange) {
+function deliveryAddressField({ node, button, t, request }, initialId, onChange, onSelection) {
   const root = node("div", "shopping-delivery-address");
   const line = node("div", "shopping-address-line");
   const field = node("label", "field");
@@ -76,6 +76,7 @@ function deliveryAddressField({ node, button, t, request }, initialId, onChange)
     feedback.textContent = issue ? t(issue) : "";
     feedback.hidden = !issue;
     open.hidden = pending || Boolean(choices.length);
+    onSelection();
   }
 
   async function load() {
@@ -96,6 +97,7 @@ function deliveryAddressField({ node, button, t, request }, initialId, onChange)
     const selected = response?.choices?.find(choice => choice.id === id);
     detail.textContent = selected?.title ? selected.detail : "";
     detail.hidden = !detail.textContent;
+    onSelection();
   };
 
   return {
@@ -116,6 +118,51 @@ function deliveryAddressField({ node, button, t, request }, initialId, onChange)
   };
 }
 
+function currentInvoicePreview({ node, t, priceText, request }) {
+  const root = node("div", "shopping-invoice-preview");
+  const amounts = node("dl", "shopping-invoice-amounts");
+  const status = node("small", "shopping-field-hint");
+  root.setAttribute("aria-live", "polite");
+  root.append(amounts, status);
+  let version = 0;
+  let timeout;
+
+  function show(subtotal, quote) {
+    const figures = quote ? [
+      ["shoppingQuoteItems", quote.total - quote.shipping],
+      ["shoppingQuoteShipping", quote.shipping],
+      ["shoppingQuoteTotal", quote.total]
+    ] : [["shoppingQuoteItems", subtotal]];
+    amounts.replaceChildren(...figures.map(([label, value]) => {
+      const row = node("div", label === "shoppingQuoteTotal" ? "shopping-invoice-total" : "");
+      const amount = node("dd");
+      amount.append(node("bdi", "", priceText(value)));
+      row.append(node("dt", "", t(label)), amount);
+      return row;
+    }));
+    status.hidden = Boolean(quote);
+    status.textContent = quote ? "" : t("shoppingQuotePending");
+  }
+
+  return {
+    root,
+    update(offer, address, wallet) {
+      clearTimeout(timeout);
+      const stamp = ++version;
+      const subtotal = digikalaPrice(offer?.price * offer?.quantity);
+      root.hidden = !address || !subtotal;
+      if (root.hidden) return;
+      show(subtotal);
+      if (!offer.variantId || !offer.sellerId) return;
+      timeout = setTimeout(async () => {
+        if (!root.isConnected || !root.closest("dialog")?.open) return;
+        const result = await request("invoice-preview", { input: { ...offer, address, wallet } });
+        if (stamp === version && root.isConnected && result?.quote) show(subtotal, result.quote);
+      }, 180);
+    }
+  };
+}
+
 export function purchaseEditor({ node, button, t, numberField, priceText, readAmount, request }, state, job) {
   const root = node("details", "snippet-advanced shopping-purchase-editor");
   root.open = Boolean(job);
@@ -132,7 +179,11 @@ export function purchaseEditor({ node, button, t, numberField, priceText, readAm
     : t(deliveries[state.policy.delivery])));
   const consent = confirmation(node, t(job?.status === "paid" ? "shoppingPurchaseConsentAgain" : "shoppingPurchaseConsent"));
   orderLimit.addEventListener("input", () => { consent.input.checked = false; });
-  const address = deliveryAddressField({ node, button, t, request }, job?.buyer?.addressId, () => { consent.input.checked = false; });
+  const quote = currentInvoicePreview({ node, t, priceText, request });
+  let offer;
+  const updateQuote = () => quote.update(offer, mode.read() === "notify" ? null : address.selection(), mode.read() === "wallet");
+  const address = deliveryAddressField({ node, button, t, request }, job?.buyer?.addressId,
+    () => { consent.input.checked = false; }, updateQuote);
   wallet.append(terms, node("small", "shopping-field-hint", t("shoppingPurchaseWalletHint")), consent.label);
   const hint = node("small", "shopping-field-hint");
   const mode = choices(node, t, "shoppingPurchaseAction", "shopping-purchase-mode", modes, job?.mode ?? "notify", update);
@@ -146,10 +197,11 @@ export function purchaseEditor({ node, button, t, numberField, priceText, readAm
     address.update(value);
   }
   update(mode.read());
-  fields.append(mode.group, hint, address.root, addressNote, wallet);
+  fields.append(mode.group, hint, address.root, quote.root, addressNote, wallet);
   root.append(fields);
   return {
     root,
+    updateOffer(value) { offer = value; updateQuote(); },
     invalidateConsent() { consent.input.checked = false; },
     read() {
       const value = mode.read();

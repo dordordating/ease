@@ -8,7 +8,7 @@ import {
   readDigikalaProduct, quoteForWatch, searchDigikala, ShoppingLookupError, shoppingHostPermission, shoppingNotificationPermission
 } from "./shopping-digikala.js";
 import { prepareDigikalaCart, waitForShopTab } from "./shopping-cart.js";
-import { readDigikalaDeliveryChoices } from "./shopping-checkout-digikala.js";
+import { previewDigikalaInvoice, readDigikalaDeliveryChoices } from "./shopping-checkout-digikala.js";
 import { DigikalaCheckoutError, isDigikalaPage, withDigikalaTab } from "./shopping-digikala-session.js";
 import { canRetryShoppingPurchase, purchaseJobApplies, readShoppingPurchases, shoppingPurchasePrefix } from "./shopping-purchase-store.js";
 import { fillDigikalaCart, shoppingPurchases } from "./shopping-purchases.js";
@@ -273,6 +273,12 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
         if (!(await currentShopping()).enabled) return { error: "shoppingUnavailable" };
         if (!await chrome.permissions.contains(shoppingHostPermission)) return { error: "shoppingConnect" };
         return withDigikalaTab(readDigikalaDeliveryChoices);
+      })();
+    } else if (action === "invoice-preview") {
+      result = (async () => {
+        const context = await currentShopping();
+        if (!context.enabled || !await chrome.permissions.contains(shoppingHostPermission)) return { quote: null };
+        return { quote: await previewDigikalaInvoice(input).catch(() => null) };
       })();
     } else if (action === "lookup") {
       result = (async () => {

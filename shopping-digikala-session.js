@@ -73,6 +73,7 @@ export async function readDigikalaFromPage(kind, option) {
   }
   if (kind === "invoice") return request("/checkout/v1/payments", gateway);
   if (kind === "legacy-invoice") return request("/v3/payment/", gateway);
+  if (kind === "legacy-plus-invoice") return request("/v2/payment/", gateway);
   if (kind === "receipt" && validId(option?.id) && validId(option?.code)) {
     return request(`/v1/thank-you/payment/${option.id}/${option.code}/`);
   }
