@@ -1,10 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { checkoutInvoice, readCheckoutCart } from "../shopping-checkout-digikala.js";
+import {
+  checkoutInvoice, readCheckoutCart, readDigikalaDeliveryChoices, readDigikalaBuyer, selectDigikalaDeliveryAddress
+} from "../shopping-checkout-digikala.js";
+import { readDigikalaFromPage } from "../shopping-digikala-session.js";
 import {
   checkoutCartIssue, checkoutCostIssue, checkoutItemsKey, purchaseJobApplies, shoppingPurchasePolicy
 } from "../shopping-purchase-store.js";
-import { shoppingWatchKey } from "../shopping-store.js";
+import { parseShoppingNumber, shoppingAvailable, shoppingWatchKey } from "../shopping-store.js";
 
 const watch = {
   productId: "123", variantId: "216", priceLimit: 890_000, discount: 10,
@@ -73,4 +76,76 @@ test("wallet invoices require a consistent cart and identifiable shipping", () =
   assert.equal(invoice.walletBalance, 1_000_000);
   assert.deepEqual(invoice.addressIds, ["28"]);
   assert.equal(checkoutInvoice({ ...data, cart_shipments: [{ is_cash_on_delivery: true }] }, true).shipping, null);
+});
+
+test("Iran-region visibility and grouped amounts use local settings", () => {
+  const abroad = { timeZone: "Europe/Berlin", languages: ["de-DE", "fa-AF"] };
+  assert.equal(shoppingAvailable("en", abroad), false);
+  assert.equal(shoppingAvailable("fa", abroad), true);
+  assert.equal(shoppingAvailable("en", { ...abroad, timeZone: "Asia/Tehran" }), true);
+  assert.equal(shoppingAvailable("es", { ...abroad, languages: ["en-IR"] }), true);
+  assert.equal(parseShoppingNumber("۱٬۲۳۴٬۰۰۰"), 1_234_000);
+  assert.equal(parseShoppingNumber("1.234.000", "."), 1_234_000);
+  assert.equal(parseShoppingNumber("1 234 000", " "), 1_234_000);
+  assert.ok(Number.isNaN(parseShoppingNumber("-1,234")));
+});
+
+test("Digikala session reads recognize a bare profile and use the store's renewal for an expired session", async t => {
+  globalThis.location = { origin: "https://www.digikala.com" };
+  t.after(() => { delete globalThis.location; });
+  let profile = { id: 321, national_identity_number: "private" };
+  const requests = [];
+  t.mock.method(globalThis, "fetch", async (url, params) => {
+    requests.push({ url, method: params.method, credentials: params.credentials });
+    if (params.method === "POST") {
+      assert.equal(url, "https://api.digikala.com/v1/user/token/");
+      profile = { data: { id: 321 } };
+      return new Response(null, { status: 204 });
+    }
+    return Response.json(profile);
+  });
+  assert.deepEqual(await readDigikalaFromPage("profile"), { status: 200, data: { id: 321 } });
+  assert.deepEqual(requests.map(item => item.method), ["GET"]);
+  requests.length = 0;
+  profile = {};
+  assert.deepEqual(await readDigikalaFromPage("profile"), { status: 200, data: { id: 321 } });
+  assert.deepEqual(requests.map(item => item.method), ["GET", "GET", "POST", "GET"]);
+  assert.ok(requests.every(item => item.credentials === "include"));
+  globalThis.location.origin = "https://example.com";
+  assert.equal(await readDigikalaFromPage("profile"), null);
+  assert.equal(requests.length, 4);
+});
+
+test("checkout can bind and verify a non-default saved address from the next page", async t => {
+  const home = { id: 1, name: "Home", address: "First street", postCode: "123" };
+  const office = { id: 2, name: "Office", address: "Second street", postCode: "456" };
+  let current = home;
+  let changes = 0;
+  globalThis.chrome = { scripting: { executeScript: async ({ target, args: [kind, option] }) => {
+    assert.equal(target.tabId, 27);
+    const responses = {
+      profile: { id: 99 },
+      addresses: { addresses: { items: option === 1 ? [home] : [office], totalPages: 2 },
+        location: { id: 3, address: "Nearby location" } },
+      "default-address": current
+    };
+    if (kind === "select-address") {
+      assert.equal(option, "2");
+      current = office;
+      changes += 1;
+    }
+    return [{ result: { status: 200, data: responses[kind] ?? null } }];
+  }}};
+  t.after(() => { delete globalThis.chrome; });
+  const { choices, defaultId } = await readDigikalaDeliveryChoices(27);
+  assert.equal(defaultId, "1");
+  assert.deepEqual(choices.map(({ id, title }) => [id, title]), [["1", "Home"], ["2", "Office"]]);
+  const buyer = await readDigikalaBuyer(27, "2");
+  assert.deepEqual(buyer, { accountId: "99", addressId: "2", addressKey: choices[1].key });
+  assert.equal(changes, 0);
+  await assert.rejects(selectDigikalaDeliveryAddress(27, "2", async () => false), /shoppingConditionsChanged/u);
+  assert.equal(changes, 0);
+  await selectDigikalaDeliveryAddress(27, "2", async () => true);
+  await selectDigikalaDeliveryAddress(27, "2", async () => true);
+  assert.equal(changes, 1);
 });

@@ -417,6 +417,26 @@
 .shopping-wallet-fields, .shopping-payment-review { display: grid; gap: 7px; }
 .shopping-wallet-fields[hidden] { display: none; }
 
+.shopping-delivery-address {
+  display: grid;
+  gap: 5px;
+  min-inline-size: 0;
+}
+
+.shopping-delivery-address[hidden] { display: none; }
+
+.shopping-address-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 6px;
+}
+
+.shopping-address-line select { inline-size: 100%; min-inline-size: 0; text-overflow: ellipsis; }
+.shopping-address-line .icon-button { block-size: var(--control-height); }
+.shopping-address-feedback { color: var(--muted); }
+.shopping-address-open { justify-self: start; color: var(--accent); font-size: .92em; }
+
 .shopping-purchase-terms {
   margin: 0;
   padding-inline-start: 18px;

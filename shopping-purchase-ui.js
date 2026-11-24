@@ -1,5 +1,5 @@
-import { digikalaOrdersUrl } from "./shopping-checkout-digikala.js";
-import { digikalaPrice, parseShoppingNumber } from "./shopping-store.js";
+import { digikalaAddressesUrl, digikalaOrdersUrl } from "./shopping-checkout-digikala.js";
+import { digikalaPrice } from "./shopping-store.js";
 
 const modes = { notify: "shoppingPurchaseNotifyMode", prepare: "shoppingPurchasePrepareMode", wallet: "shoppingPurchaseWalletMode" };
 const carts = { review: "shoppingPurchaseCartReview", include: "shoppingPurchaseCartInclude" };
@@ -32,12 +32,97 @@ function confirmation(node, text) {
   return { label, input };
 }
 
-export function purchaseEditor({ node, t, numberField, priceText }, state, job) {
+function deliveryAddressField({ node, button, t, request }, initialId, onChange) {
+  const root = node("div", "shopping-delivery-address");
+  const line = node("div", "shopping-address-line");
+  const field = node("label", "field");
+  const select = node("select");
+  select.dir = "auto";
+  field.append(node("span", "", t("shoppingPurchaseDeliveryAddress")), select);
+  const refresh = button(t("shoppingPurchaseReloadAddresses"), "icon-button", { symbol: "refresh", iconOnly: true, onClick: load });
+  line.append(field, refresh);
+  const detail = node("small", "shopping-field-hint");
+  detail.dir = "auto";
+  const feedback = node("small", "shopping-field-hint shopping-address-feedback");
+  feedback.setAttribute("role", "status");
+  const open = node("a", "shopping-address-open", t("shoppingPurchaseManageAddresses"));
+  open.href = digikalaAddressesUrl;
+  open.target = "_blank";
+  open.rel = "noopener noreferrer";
+  root.append(line, detail, feedback, open);
+  let mode, response, pending = false, id = initialId ?? "";
+
+  function render() {
+    const choices = response?.choices ?? [];
+    if (!id && !initialId && mode === "wallet" && choices.some(choice => choice.id === response?.defaultId)) {
+      id = response.defaultId;
+    }
+    const selected = choices.find(choice => choice.id === id);
+    const placeholder = node("option", "", t(mode === "prepare" ? "shoppingPurchaseUseDefaultAddress" : "shoppingPurchaseChooseAddress"));
+    placeholder.value = "";
+    select.replaceChildren(placeholder, ...choices.map(choice => {
+      const option = node("option", "", choice.title || choice.detail);
+      option.value = choice.id;
+      return option;
+    }));
+    select.value = selected?.id ?? "";
+    select.disabled = pending || !choices.length;
+    refresh.disabled = pending;
+    refresh.dataset.busy = String(pending);
+    detail.textContent = selected?.title ? selected.detail : "";
+    detail.hidden = !detail.textContent;
+    const issue = pending ? "shoppingPurchaseAddressesLoading" : response?.error
+      ?? (response && !choices.length ? "shoppingPurchaseNoAddresses" : null);
+    feedback.textContent = issue ? t(issue) : "";
+    feedback.hidden = !issue;
+    open.hidden = pending || Boolean(choices.length);
+  }
+
+  async function load() {
+    if (pending) return;
+    pending = true;
+    render();
+    const result = await request("addresses");
+    pending = false;
+    if (response && result?.accountId !== response.accountId) onChange();
+    if (response?.choices?.find(choice => choice.id === id)?.key !== result?.choices?.find(choice => choice.id === id)?.key) onChange();
+    response = result;
+    render();
+  }
+
+  select.onchange = () => {
+    id = select.value;
+    onChange();
+    const selected = response?.choices?.find(choice => choice.id === id);
+    detail.textContent = selected?.title ? selected.detail : "";
+    detail.hidden = !detail.textContent;
+  };
+
+  return {
+    root,
+    update(value) {
+      mode = value;
+      root.hidden = value === "notify";
+      if (!root.hidden && response === undefined) void load();
+      else render();
+    },
+    selection() {
+      if (pending) return null;
+      const choice = response?.choices?.find(choice => choice.id === select.value);
+      return choice ? { id: choice.id, key: choice.key, accountId: response.accountId } : null;
+    },
+    error() { return pending ? "shoppingPurchaseAddressesLoading" : response?.error || "shoppingPurchaseChooseAddress"; },
+    focus() { (select.disabled ? refresh : select).focus(); }
+  };
+}
+
+export function purchaseEditor({ node, button, t, numberField, priceText, readAmount, request }, state, job) {
   const root = node("details", "snippet-advanced shopping-purchase-editor");
   root.open = Boolean(job);
   root.append(node("summary", "", t("shoppingPurchaseAction")));
   const fields = node("div", "snippet-advanced-fields");
   const wallet = node("div", "shopping-wallet-fields");
+  const addressNote = node("small", "shopping-field-hint", t("shoppingPurchaseAddressHint"));
   const orderLimit = numberField(wallet, t("shoppingPurchaseBudget"), job?.limit ? job.limit / 10 : null);
   orderLimit.placeholder = "";
   const terms = node("ul", "shopping-purchase-terms");
@@ -46,6 +131,7 @@ export function purchaseEditor({ node, t, numberField, priceText }, state, job) 
     ? t("shoppingPurchaseShippingAgreed", { price: priceText(state.policy.shippingLimit) })
     : t(deliveries[state.policy.delivery])));
   const consent = confirmation(node, t(job?.status === "paid" ? "shoppingPurchaseConsentAgain" : "shoppingPurchaseConsent"));
+  const address = deliveryAddressField({ node, button, t, request }, job?.buyer?.addressId, () => { consent.input.checked = false; });
   wallet.append(terms, node("small", "shopping-field-hint", t("shoppingPurchaseWalletHint")), consent.label);
   const hint = node("small", "shopping-field-hint");
   const mode = choices(node, t, "shoppingPurchaseAction", "shopping-purchase-mode", modes, job?.mode ?? "notify", update);
@@ -55,18 +141,25 @@ export function purchaseEditor({ node, t, numberField, priceText }, state, job) 
     hint.hidden = value !== "prepare";
     hint.textContent = value === "prepare" ? t("shoppingPurchasePrepareHint") : "";
     consent.input.checked = false;
+    addressNote.hidden = value === "notify";
+    address.update(value);
   }
   update(mode.read());
-  fields.append(mode.group, hint, wallet);
+  fields.append(mode.group, hint, address.root, addressNote, wallet);
   root.append(fields);
   return {
     root,
     read() {
       const value = mode.read();
       const payload = { mode: value };
+      if (value !== "notify") payload.address = address.selection();
       if (value === "wallet") {
-        payload.limit = parseShoppingNumber(orderLimit.value) * 10;
+        payload.limit = readAmount(orderLimit);
         if (!digikalaPrice(payload.limit)) { orderLimit.focus(); return { error: "shoppingPurchaseInvalidBudget" }; }
+        if (!payload.address && (!job?.buyer || consent.input.checked)) {
+          address.focus();
+          return { error: address.error() };
+        }
         payload.confirm = consent.input.checked;
         payload.policy = state.policy;
       }
@@ -75,11 +168,11 @@ export function purchaseEditor({ node, t, numberField, priceText }, state, job) 
   };
 }
 
-export function openPurchaseSettings({ node, button, t, editor, openEditor, numberField, mutate, reportError, showToast }, state) {
+export function openPurchaseSettings({ node, button, t, editor, openEditor, numberField, readAmount, mutate, reportError, showToast }, state) {
   if (editor.open) return;
   const fields = openEditor(t("shoppingPurchaseSettings"), t("save"), async () => {
     const delivery = shipping.read();
-    const value = delivery === "max" ? parseShoppingNumber(limit.value) * 10 : null;
+    const value = delivery === "max" ? readAmount(limit) : null;
     if (delivery === "max" && value !== 0 && !digikalaPrice(value)) {
       limit.focus();
       reportError("shoppingPurchaseInvalidShipping");

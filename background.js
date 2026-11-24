@@ -1,5 +1,5 @@
 import {
-  defaultTranslator, densities, modules, palettes, readWorkspace, reorderModule, shortcutSlots, sizes, storageKey,
+  defaultTranslator, densities, moduleAvailable, modules, palettes, readWorkspace, reorderModule, shortcutSlots, sizes, storageKey,
   themes, translatorEngines, workspaceZoomLevels
 } from "./workspace-data.js";
 import { localeNames, translate } from "./locales.js";
@@ -386,13 +386,16 @@ async function updateWorkspace(workspace, action, data, transaction) {
       return updateSpaces(workspace, action, data);
     case "shopping-save":
     case "shopping-remove": {
+      if (!moduleAvailable("shopping", workspace.locale)) return "shoppingUnavailable";
       const error = updateShopping(workspace, action, data);
       return error || stageShoppingPurchase(workspace, action, data, transaction);
     }
     case "shopping-pause":
+      if (!moduleAvailable("shopping", workspace.locale)) return "shoppingUnavailable";
       return updateShopping(workspace, action, data);
     case "shopping-purchase-settings":
     case "shopping-purchase-release":
+      if (!moduleAvailable("shopping", workspace.locale)) return "shoppingUnavailable";
       return stageShoppingPurchase(workspace, action, data, transaction);
     case "todo-preferences":
     case "save-todo-label":
@@ -435,7 +438,7 @@ async function updateWorkspace(workspace, action, data, transaction) {
       break;
     case "toggle-module": {
       const module = modules.find(({ id, released }) => released && id === data.id);
-      if (!module || module.id === "clipboard") throw new Error("Invalid module");
+      if (!module || module.id === "clipboard" || !moduleAvailable(module.id, workspace.locale)) throw new Error("Invalid module");
       const tabs = workspace.tabs.filter((id) => id !== module.id);
       workspace.tabs = data.enabled ? [...tabs, module.id] : tabs;
       break;

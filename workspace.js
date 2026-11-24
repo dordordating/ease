@@ -43,7 +43,7 @@ import { icon } from "./icons.js";
 import { deviceUnlockAvailable, readDeviceUnlock, registerDeviceUnlock } from "./vault-device.js";
 import { vaultPinAttemptsStorageKey, vaultPolicyFor, vaultSessionStorageKey } from "./vault-session.js";
 import { isRtl, localeNames, translate } from "./locales.js";
-import { calendarSystemFor, defaultCalendar, defaultTranslator, defaultWorkspace, densities, folderIcons, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes, visibleModules } from "./workspace-data.js";
+import { calendarSystemFor, defaultCalendar, defaultTranslator, defaultWorkspace, densities, folderIcons, moduleAvailable, modules, palettes, readWorkspace, shortcutSlots, sizes, storageKey, themes, visibleModules } from "./workspace-data.js";
 
 const view = document.querySelector("#workspace");
 const editor = document.querySelector("#editor");
@@ -237,7 +237,7 @@ async function mutate(action, data, onError = reportError) {
 
 function savedTabAvailable(page, state = workspace) {
   return page === home.id || page === clipboard.id
-    || (state.tabs.includes(page) && modules.some(module => module.released && module.id === page));
+    || (state.tabs.includes(page) && moduleAvailable(page, state.locale) && modules.some(module => module.released && module.id === page));
 }
 
 function rememberWorkspaceTab(page) {
@@ -984,7 +984,7 @@ ${t("folderContextHint")}`;
 function renderLibrary() {
   const body = node("div");
   const switcher = renderModuleLibrary(body, {
-    t, icon, modules, tabs: workspace.tabs, layout: workspace.libraryLayout,
+    t, icon, modules: modules.filter(({ id }) => moduleAvailable(id, workspace.locale)), tabs: workspace.tabs, layout: workspace.libraryLayout,
     onLayout: (libraryLayout) => mutate("preferences", { libraryLayout }),
     async onToggle(id) {
       const enabled = !workspace.tabs.includes(id);
@@ -1267,9 +1267,9 @@ function renderSearchGroup({ id, label, icon: symbol, entries, render: renderEnt
 
 function renderSearch() {
   section(t("searchResults"));
-  const sources = modules.filter(({ id, released }) => released && Object.hasOwn(moduleSearchSources, id))
+  const sources = modules.filter(({ id, released }) => released && moduleAvailable(id, workspace.locale) && Object.hasOwn(moduleSearchSources, id))
     .map(({ id, icon }) => ({ id, icon, ...moduleSearchSources[id]() }));
-  const commands = destinations.filter((page) => [home, library, settings].includes(page) || workspace.tabs.includes(page.id))
+  const commands = destinations.filter((page) => [home, library, settings].includes(page) || savedTabAvailable(page.id))
     .map((page) => ({ title: t(page.id), icon: page.icon, keywords: [t(page.id), translate("en", page.id)], open: () => switchTo(page.id) }));
   commands.push(
     {
@@ -1354,7 +1354,10 @@ function render() {
   labelButton(settingsButton, t("settings"), "settings");
   settingsButton.setAttribute("aria-pressed", String(activePage === "settings" && !query));
   if (![home.id, library.id, settings.id].includes(activePage)
-    && !modules.some(({ id, released }) => released && id === activePage)) activePage = clipboard.id;
+    && (!moduleAvailable(activePage, workspace.locale) || !modules.some(({ id, released }) => released && id === activePage))) {
+    if (activePage === "shopping" && editor.open) editor.close();
+    activePage = clipboard.id;
+  }
   renderTabs();
   if (!query && activePage === home.id && homeController?.root.isConnected && homeLocale === dateLocale) {
     refreshHome();
@@ -3429,7 +3432,7 @@ if (initialTranslationSelection !== null) {
   await focusQuickTask();
 } else if (workspaceRoute.get("open") === "todo" && savedTabAvailable("todo")) {
   switchTo("todo", false);
-} else if (workspaceRoute.get("open") === "shopping") {
+} else if (workspaceRoute.get("open") === "shopping" && moduleAvailable("shopping", workspace.locale)) {
   switchTo(savedTabAvailable("shopping") ? "shopping" : "library", false);
   const product = digikalaProductUrl(workspaceRoute.get("product"), workspaceRoute.get("variant"), workspaceRoute.get("productTitle"));
   if (product) shoppingController?.fill(product);

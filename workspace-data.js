@@ -2,7 +2,7 @@ import { defaultFlashcards } from "./flashcard-store.js";
 import { defaultMarkets } from "./markets-store.js";
 import { defaultTodo } from "./todo-store.js";
 import { defaultHome, normalizeHome } from "./home-store.js";
-import { defaultShopping } from "./shopping-store.js";
+import { defaultShopping, shoppingAvailable } from "./shopping-store.js";
 
 export const storageKey = "easeWorkspace";
 
@@ -26,10 +26,14 @@ export function normalizeModuleOrder(order) {
   return [...new Set([...recorded, ...defaultModuleOrder])];
 }
 
-export function visibleModules({ tabs, moduleOrder }) {
+export function moduleAvailable(id, locale) {
+  return id !== "shopping" || shoppingAvailable(locale);
+}
+
+export function visibleModules({ tabs, moduleOrder, locale }) {
   const enabled = Array.isArray(tabs) ? tabs : defaultWorkspace.tabs;
   return normalizeModuleOrder(moduleOrder)
-    .filter((id) => id === "clipboard" || enabled.includes(id))
+    .filter((id) => id === "clipboard" || (enabled.includes(id) && moduleAvailable(id, locale)))
     .map((id) => releasedModulesById.get(id));
 }
 

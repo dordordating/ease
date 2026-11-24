@@ -1,6 +1,6 @@
 import { digikalaProductLink, digikalaProductUrl } from "./shopping-store.js";
 
-function waitForProductTab(tabId, productId) {
+export function waitForShopTab(tabId, matches) {
   return new Promise(resolve => {
     const finish = value => {
       clearTimeout(timeout);
@@ -9,7 +9,7 @@ function waitForProductTab(tabId, productId) {
       resolve(value);
     };
     const check = tab => {
-      if (tab.status === "complete") finish(digikalaProductLink(tab.url)?.productId === productId);
+      if (tab?.status === "complete" && !tab.pendingUrl) finish(matches(tab.url));
     };
     const updated = (id, changes, tab) => { if (id === tabId && changes.status === "complete") check(tab); };
     const removed = id => { if (id === tabId) finish(false); };
@@ -47,7 +47,7 @@ export async function clickDigikalaAdd({ productId, variantId, price, deadline }
 
 export async function addDigikalaTabItem(tab, watch, quote, authorize) {
   if (!quote.singleItem || !quote.variantId || !Number.isInteger(tab.id) || !chrome.tabs.onUpdated?.removeListener) return false;
-  if (!await waitForProductTab(tab.id, watch.productId) || !await authorize()) return false;
+  if (!await waitForShopTab(tab.id, url => digikalaProductLink(url)?.productId === watch.productId) || !await authorize()) return false;
   try {
     const [result] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },

@@ -2,7 +2,7 @@ import { shoppingMessage } from "./shopping-background.js";
 import { shoppingHostPermission, shoppingNotificationPermission } from "./shopping-digikala.js";
 import {
   digikalaPrice, digikalaProductLink, digikalaProductUrl, digikalaSearchUrl, parseShoppingNumber,
-  shoppingPollMinutes, shoppingReadErrors, shoppingStatus, shoppingWatchKey
+  shoppingNumberDigits, shoppingPollMinutes, shoppingReadErrors, shoppingStatus, shoppingWatchKey
 } from "./shopping-store.js";
 import { createShoppingSellerPicker } from "./shopping-sellers.js";
 import { shoppingPurchaseStatus } from "./shopping-purchase-store.js";
@@ -18,6 +18,8 @@ export function renderShopping(root, options) {
   const { node, button, glyph, t, icon, locale, dateLocale, firstDay, refreshButton, notifyButton,
     editor, openEditor, reportError, showToast, mutate, openMenu } = options;
   const numbers = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
+  const amounts = new Intl.NumberFormat(locale, { useGrouping: "always", maximumFractionDigits: 0 });
+  const group = amounts.formatToParts(1000).find(part => part.type === "group").value;
   const percentages = new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 0 });
   const dates = new Intl.DateTimeFormat(dateLocale, { dateStyle: "medium", timeStyle: "short" });
   const priceText = rials => t("shoppingTomanPrice", { amount: numbers.format(rials / 10) });
@@ -208,16 +210,39 @@ export function renderShopping(root, options) {
     else await updateAccess();
   };
 
-  function numberField(parent, label, value) {
+  const readAmount = input => parseShoppingNumber(input.value, group) * 10;
+
+  function numberField(parent, label, value, grouped = true) {
     const field = node("label", "field");
     const control = node("input");
     control.inputMode = "numeric";
     control.maxLength = 24;
     control.dir = "auto";
-    control.value = value === null || value === undefined ? "" : numbers.format(value);
+    control.value = value == null ? "" : (grouped ? amounts : numbers).format(value);
     control.placeholder = t("shoppingOptional");
     field.append(node("span", "", label), control);
     parent.append(field);
+    if (grouped) {
+      function format(inputType) {
+        const previous = control.value;
+        const digits = shoppingNumberDigits(previous, group);
+        if (!digits) { control.value = ""; return; }
+        if (!/^\d+$/u.test(digits)) return;
+        const formatted = amounts.format(BigInt(digits));
+        if (formatted === previous) return;
+        let right = shoppingNumberDigits(previous.slice(control.selectionStart ?? previous.length), group).length;
+        let caret = formatted.length;
+        while (caret > 0 && right > 0) {
+          caret -= 1;
+          if (/\p{Nd}/u.test(formatted[caret])) right -= 1;
+        }
+        if (inputType === "deleteContentBackward" && formatted.slice(0, caret).endsWith(group)) caret -= group.length;
+        control.value = formatted;
+        control.setSelectionRange(caret, caret);
+      }
+      control.addEventListener("input", event => { if (!event.isComposing) format(event.inputType); });
+      control.addEventListener("compositionend", () => format());
+    }
     return control;
   }
 
@@ -231,7 +256,7 @@ export function renderShopping(root, options) {
     let image = product?.image ?? currentQuote?.image ?? watch?.image;
     const pickers = [];
     const fields = openEditor(t(watch ? "shoppingEdit" : "shoppingNew"), t("save"), async () => {
-      const limit = cap.value.trim() ? parseShoppingNumber(cap.value) * 10 : null;
+      const limit = cap.value.trim() ? readAmount(cap) : null;
       const discount = percent.value.trim() ? parseShoppingNumber(percent.value) : null;
       const startAt = starts();
       const endAt = ends();
@@ -280,7 +305,7 @@ export function renderShopping(root, options) {
     });
     const thresholds = node("div", "shopping-field-row");
     const cap = numberField(thresholds, t("shoppingCeiling"), watch?.priceLimit ? watch.priceLimit / 10 : null);
-    const percent = numberField(thresholds, t("shoppingDiscount"), watch?.discount);
+    const percent = numberField(thresholds, t("shoppingDiscount"), watch?.discount, false);
     const ruleHint = node("small", "shopping-field-hint", t("shoppingRuleHint"));
     ruleHint.id = "shopping-rule-hint";
     cap.setAttribute("aria-describedby", ruleHint.id);
@@ -309,7 +334,7 @@ export function renderShopping(root, options) {
     }
     const starts = dateTime("shoppingStarts", watch?.startAt, "00:00");
     const ends = dateTime("shoppingEnds", watch?.endAt, "23:59");
-    const action = purchaseEditor({ node, t, numberField, priceText }, purchases, purchases.jobs[watch?.id]);
+    const action = purchaseEditor({ node, button, t, numberField, priceText, readAmount, request }, purchases, purchases.jobs[watch?.id]);
     fields.append(heading, picker.root, thresholds, ruleHint, schedule, action.root);
     editor.showModal();
     if (focusSeller) picker.focus();
@@ -457,7 +482,7 @@ export function renderShopping(root, options) {
   stamp = setInterval(renderWatches, shoppingPollMinutes * 60_000 / 4);
   return {
     fill,
-    openSettings() { openPurchaseSettings({ ...options, numberField }, purchases); },
+    openSettings() { openPurchaseSettings({ ...options, numberField, readAmount }, purchases); },
     focusWatch(id) {
       const card = document.getElementById(`shopping-watch-${id}`);
       card?.scrollIntoView({ block: "nearest" });

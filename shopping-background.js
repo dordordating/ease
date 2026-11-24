@@ -1,5 +1,5 @@
 import { translate } from "./locales.js";
-import { defaultWorkspace, storageKey } from "./workspace-data.js";
+import { defaultWorkspace, moduleAvailable, storageKey } from "./workspace-data.js";
 import { workspaceOwnerKey } from "./workspace-accounts.js";
 import {
   digikalaProductLink, restoreShopping, shoppingObservationKey, shoppingPollMinutes, shoppingStatus, shoppingWatchKey
@@ -8,6 +8,8 @@ import {
   readDigikalaProduct, quoteForWatch, searchDigikala, ShoppingLookupError, shoppingHostPermission, shoppingNotificationPermission
 } from "./shopping-digikala.js";
 import { prepareDigikalaCart } from "./shopping-cart.js";
+import { readDigikalaDeliveryChoices } from "./shopping-checkout-digikala.js";
+import { DigikalaCheckoutError, withDigikalaTab } from "./shopping-digikala-session.js";
 import { purchaseJobApplies, readShoppingPurchases, shoppingPurchasePrefix } from "./shopping-purchase-store.js";
 import { shoppingPurchases } from "./shopping-purchases.js";
 
@@ -21,7 +23,8 @@ async function currentShopping() {
   const stored = await chrome.storage.local.get([storageKey, workspaceOwnerKey]);
   const workspace = { ...defaultWorkspace, ...stored[storageKey] };
   const owner = stored[workspaceOwnerKey] ?? null;
-  return { workspace, owner, key: shoppingObservationKey(owner), locale: workspace.locale, enabled: workspace.tabs.includes("shopping"),
+  const enabled = workspace.tabs.includes("shopping") && moduleAvailable("shopping", workspace.locale);
+  return { workspace, owner, key: shoppingObservationKey(owner), locale: workspace.locale, enabled,
     watches: restoreShopping(workspace.shopping) ?? [] };
 }
 
@@ -69,7 +72,7 @@ async function checkProducts(watches) {
 }
 
 function lookupError(error) {
-  return error instanceof ShoppingLookupError ? error.code : "shoppingUnavailable";
+  return error instanceof ShoppingLookupError || error instanceof DigikalaCheckoutError ? error.code : "shoppingUnavailable";
 }
 
 function updateWatchDetails(watch, quote) {
@@ -253,8 +256,15 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
       result = requestCart(id);
     } else if (action === "open-checkout") {
       result = purchases.open(id);
+    } else if (action === "addresses") {
+      result = (async () => {
+        if (!(await currentShopping()).enabled) return { error: "shoppingUnavailable" };
+        if (!await chrome.permissions.contains(shoppingHostPermission)) return { error: "shoppingConnect" };
+        return withDigikalaTab(readDigikalaDeliveryChoices);
+      })();
     } else if (action === "lookup") {
       result = (async () => {
+        if (!(await currentShopping()).enabled) return { error: "shoppingUnavailable" };
         const link = digikalaProductLink(input);
         if (!link && (typeof input !== "string" || !input.trim() || input.length > 140 || /:\/\/|^www\./iu.test(input))) {
           return { error: "shoppingInvalidLink" };
@@ -317,8 +327,10 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
     const before = change.oldValue;
     const after = change.newValue;
     const toggled = before?.tabs?.includes("shopping") !== after?.tabs?.includes("shopping");
+    const visibilityChanged = moduleAvailable("shopping", before?.locale) !== moduleAvailable("shopping", after?.locale);
     if (toggled || before?.locale !== after?.locale) updateMenu();
-    if (toggled || JSON.stringify(before?.shopping) !== JSON.stringify(after?.shopping) || changes[workspaceOwnerKey]) return poll(false);
+    if (toggled || visibilityChanged || JSON.stringify(before?.shopping) !== JSON.stringify(after?.shopping)
+      || changes[workspaceOwnerKey]) return poll(visibilityChanged);
   });
   const permissionsChanged = ({ origins, permissions }) => {
     if (permissions?.includes("notifications")) registerNotifications();

@@ -81,11 +81,11 @@ function searchProducts(payload) {
   return Array.isArray(list) ? list.filter(widget => widget?.type === "product").map(widget => widget.data) : [];
 }
 
-export async function readDigikalaJson(url, { product = false, headers = {} } = {}) {
+async function readDigikalaJson(url, { product = false } = {}) {
   if (new URL(url).origin !== api) throw new ShoppingLookupError("shoppingUnavailable");
   const options = {
     credentials: "include", cache: "no-store", redirect: "manual",
-    headers: { Accept: "application/json", ...headers }, signal: AbortSignal.timeout(9000)
+    headers: { Accept: "application/json" }, signal: AbortSignal.timeout(9000)
   };
   const redirected = response => response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400);
   let response = await fetch(url, options);

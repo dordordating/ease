@@ -71,9 +71,25 @@ export function digikalaPrice(value) {
   return Number.isSafeInteger(value) && value > 0 && value <= maxPriceRials ? value : null;
 }
 
-export function parseShoppingNumber(value) {
-  const digits = value.trim().replace(/[٠-٩۰-۹]/gu, digit => String(digit.codePointAt(0) & 15));
-  const number = digits.replace(/[\s,٬]/gu, "");
+export function shoppingAvailable(locale, {
+  timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone,
+  languages = [...(globalThis.navigator?.languages ?? []), globalThis.chrome?.i18n?.getUILanguage?.()]
+} = {}) {
+  if (locale === "fa" || timeZone === "Asia/Tehran" || timeZone === "Iran") return true;
+  return languages.some(language => {
+    if (!language) return false;
+    try { return new Intl.Locale(language).region === "IR"; }
+    catch { return false; }
+  });
+}
+
+export function shoppingNumberDigits(value, group = ",") {
+  return value.trim().replaceAll(group, "").replace(/[\s,٬\u061c\u200e\u200f]/gu, "")
+    .replace(/[٠-٩۰-۹]/gu, digit => String(digit.codePointAt(0) & 15));
+}
+
+export function parseShoppingNumber(value, group) {
+  const number = shoppingNumberDigits(value, group);
   return number && /^\d+$/u.test(number) ? Number(number) : NaN;
 }
 

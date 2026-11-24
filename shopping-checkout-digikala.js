@@ -1,20 +1,11 @@
-import { readDigikalaJson } from "./shopping-digikala.js";
 import { digikalaId, digikalaPrice } from "./shopping-store.js";
 import { checkoutItemsKey } from "./shopping-purchase-store.js";
+import { DigikalaCheckoutError, digikalaStorefront as storefront, readDigikalaInTab } from "./shopping-digikala-session.js";
 
-const storefront = "https://www.digikala.com";
-const api = "https://api.digikala.com";
-const webCheckout = { headers: { "x-site": "DIGIKALA", "x-source": "WEB" } };
 export const digikalaCartUrl = storefront + "/checkout/cart/";
 export const digikalaShippingUrl = storefront + "/checkout/shipping/";
 export const digikalaOrdersUrl = storefront + "/profile/orders/";
-
-export class DigikalaCheckoutError extends Error {
-  constructor(code) {
-    super(code);
-    this.code = code;
-  }
-}
+export const digikalaAddressesUrl = storefront + "/profile/addresses/";
 
 function opaqueId(value) {
   const id = Number.isSafeInteger(value) ? String(value) : value;
@@ -57,33 +48,94 @@ export function readCheckoutCart(data, raw = data?.cart_data ?? data?.cart, rawI
   return { id, items, extraServices };
 }
 
-export async function loadDigikalaCart() {
-  const { data } = await readDigikalaJson(api + "/checkout/v1/carts", webCheckout);
+function requireResponse(result, allowMissing = false) {
+  if (result.status >= 200 && result.status < 300) return result.data;
+  if (allowMissing && result.status === 404) return null;
+  throw new DigikalaCheckoutError(result.status === 401 ? "shoppingPurchaseSignIn" : "shoppingPurchaseConnection");
+}
+
+export async function loadDigikalaCart(tabId) {
+  const data = requireResponse(await readDigikalaInTab(tabId, "cart"));
   const cart = readCheckoutCart(data);
   if (!cart) throw new DigikalaCheckoutError("shoppingPurchaseReview");
   return cart;
 }
 
-export async function readDigikalaBuyer() {
-  let profile, saved;
-  try {
-    [profile, saved] = await Promise.all([
-      readDigikalaJson(api + "/account/v1/user/profile/info/"),
-      readDigikalaJson(api + "/address/v2/addresses?page=1&size=20", {
-        headers: { ...webCheckout.headers, "X-Client": "web", "Accept-Language": "fa" }
-      })
-    ]);
-  } catch { throw new DigikalaCheckoutError("shoppingPurchaseSignIn"); }
-  const accountId = opaqueId(profile?.data?.id);
+async function readDigikalaAccount(tabId) {
+  const profile = requireResponse(await readDigikalaInTab(tabId, "profile"));
+  const accountId = opaqueId(profile?.id);
   if (!accountId) throw new DigikalaCheckoutError("shoppingPurchaseSignIn");
-  const address = saved?.data?.location;
+  return accountId;
+}
+
+async function buyerForAddress(accountId, address) {
   const addressId = opaqueId(address?.id);
-  if (!addressId) throw new DigikalaCheckoutError("shoppingPurchaseAddress");
-  // Bind a wallet authorization to the saved address, including edits made under the same address ID.
+  if (!addressId || typeof address.address !== "string" || !address.address.trim() || address.isUsable === false
+    || address.isAccurate === false || address.dropOffAddressId) return null;
+  // Preserve the address fingerprint used by saved wallet authorizations.
   const fields = [addressId, address.type, address.address, address.recipientName, address.recipientMobilePhone,
     address.postCode, address.buildingNumber, address.unit, address.latitude, address.longitude];
   const sha = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(fields)));
   return { accountId, addressId, addressKey: Array.from(new Uint8Array(sha), byte => byte.toString(16).padStart(2, "0")).join("") };
+}
+
+function addressItems(data) {
+  const items = data?.addresses?.items;
+  return Array.isArray(items) ? items : [];
+}
+
+async function savedDigikalaAddresses(tabId, targetId) {
+  const [first, current] = await Promise.all([
+    readDigikalaInTab(tabId, "addresses", 1).then(requireResponse),
+    readDigikalaInTab(tabId, "default-address").then(result => requireResponse(result, true))
+  ]);
+  const rows = [...addressItems(first)];
+  const defaultAddress = opaqueId(current?.id) ? current : rows.find(address => address?.isDefault)
+    ?? (!rows.length ? first?.location : null);
+  if (defaultAddress && !rows.some(address => opaqueId(address?.id) === opaqueId(defaultAddress.id))) rows.unshift(defaultAddress);
+  if (targetId && opaqueId(first?.location?.id) === targetId && !rows.some(address => opaqueId(address?.id) === targetId)) {
+    rows.push(first.location);
+  }
+  const pages = first?.addresses?.totalPages;
+  for (let page = 2; Number.isSafeInteger(pages) && page <= pages && page <= 100; page += 1) {
+    if (targetId && rows.some(address => opaqueId(address?.id) === targetId)) break;
+    const result = requireResponse(await readDigikalaInTab(tabId, "addresses", page));
+    rows.push(...addressItems(result));
+  }
+  return { rows, defaultId: opaqueId(defaultAddress?.id) };
+}
+
+export async function readDigikalaDeliveryChoices(tabId) {
+  const accountId = await readDigikalaAccount(tabId);
+  const { rows, defaultId } = await savedDigikalaAddresses(tabId);
+  const choices = new Map();
+  for (const address of rows) {
+    const buyer = await buyerForAddress(accountId, address);
+    if (!buyer || choices.has(buyer.addressId)) continue;
+    const city = typeof address.city === "string" ? address.city : address.city?.name;
+    choices.set(buyer.addressId, { id: buyer.addressId, key: buyer.addressKey,
+      title: typeof address.name === "string" ? address.name.trim().slice(0, 100) : "",
+      detail: [city, address.address].filter(Boolean).join("، ").slice(0, 420) });
+  }
+  return { accountId, defaultId, choices: [...choices.values()] };
+}
+
+export async function readDigikalaBuyer(tabId, addressId) {
+  const accountId = await readDigikalaAccount(tabId);
+  const { rows, defaultId } = await savedDigikalaAddresses(tabId, addressId);
+  const buyer = await buyerForAddress(accountId, rows.find(address => opaqueId(address?.id) === (addressId ?? defaultId)));
+  if (!buyer) throw new DigikalaCheckoutError("shoppingPurchaseAddress");
+  return buyer;
+}
+
+export async function selectDigikalaDeliveryAddress(tabId, addressId, authorize) {
+  const current = requireResponse(await readDigikalaInTab(tabId, "default-address"), true);
+  if (opaqueId(current?.id) === addressId) return;
+  if (!await authorize()) throw new DigikalaCheckoutError("shoppingConditionsChanged");
+  // This is the selection used by Digikala's shipping screen. Saved address details are never edited.
+  requireResponse(await readDigikalaInTab(tabId, "select-address", addressId));
+  const selected = requireResponse(await readDigikalaInTab(tabId, "default-address"));
+  if (opaqueId(selected?.id) !== addressId) throw new DigikalaCheckoutError("shoppingPurchaseAddress");
 }
 
 export function checkoutInvoice(data, walletOnly = false) {
@@ -109,11 +161,11 @@ export function checkoutInvoice(data, walletOnly = false) {
     addressIds };
 }
 
-export async function loadDigikalaInvoice(walletOnly = false) {
+export async function loadDigikalaInvoice(tabId, walletOnly = false) {
   // Digikala serves both its current and previous payment screens.
-  for (const path of ["/checkout/v1/payments", "/v3/payment/"]) {
-    const result = await readDigikalaJson(api + path, webCheckout).catch(() => null);
-    const invoice = checkoutInvoice(result?.data, walletOnly);
+  for (const kind of ["invoice", "legacy-invoice"]) {
+    const result = await readDigikalaInTab(tabId, kind).catch(() => null);
+    const invoice = result?.status === 200 && checkoutInvoice(result.data, walletOnly);
     if (invoice) return invoice;
   }
   throw new DigikalaCheckoutError("shoppingPurchaseReview");
@@ -136,11 +188,11 @@ export function digikalaCheckoutStage(input) {
   return "other";
 }
 
-export async function readDigikalaReceipt(input, cartId) {
+export async function readDigikalaReceipt(tabId, input, cartId) {
   if (digikalaCheckoutStage(input) !== "receipt") return null;
   const [id, code] = new URL(input).pathname.replace(/\/$/u, "").split("/").slice(-2);
   if (!opaqueId(id) || !opaqueId(code)) return null;
-  const { data } = await readDigikalaJson(`${api}/v1/thank-you/payment/${id}/${code}/`);
+  const data = requireResponse(await readDigikalaInTab(tabId, "receipt", { id, code }));
   const order = data?.order;
   const orderId = opaqueId(order?.id);
   if (data?.status !== "success" || !orderId || opaqueId(order.cart_id) !== cartId
