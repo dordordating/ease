@@ -25,7 +25,7 @@ import { takeTranslatorSelection, translatorSelectionKey } from "./translator-se
 import { renderTranslatorSites } from "./translator-sites-ui.js";
 import { readTranslationHistory, translationHistoryKey, translationHistoryMessage } from "./translation-history-store.js";
 import { renderShopping } from "./shopping.js";
-import { digikalaProductUrl, restoreShopping, shoppingObservationKey, shoppingStatus } from "./shopping-store.js";
+import { digikalaProductUrl, restoreShopping, shoppingObservationKey, shoppingReadErrors, shoppingStatus } from "./shopping-store.js";
 import { workspaceOwnerKey } from "./workspace-accounts.js";
 import { renderTranslationHistory } from "./translation-history-view.js";
 import { clipboardHistoryKey, clipboardHistoryMessage, loadClipboardHistory } from "./clipboard-history-store.js";
@@ -1169,7 +1169,7 @@ const moduleSearchSources = {
     entries: workspace.tabs.includes("shopping") ? shoppingViewState().watches.map(watch => {
       const quote = shoppingObservations[watch.id]?.quote;
       const title = quote?.title ?? watch.title;
-      const detail = watch.variantLabel || quote?.variantLabel;
+      const detail = [quote?.sellerName || watch.sellerName, watch.variantLabel || quote?.variantLabel].filter(Boolean).join(" · ");
       return { id: `shopping-result-${watch.id}`, title, detail,
         keywords: [title, detail, watch.title, `DKP-${watch.productId}`, "Digikala", "دیجی‌کالا"],
         open() {
@@ -3414,11 +3414,13 @@ if (initialTranslationSelection !== null) {
   switchTo("todo", false);
 } else if (workspaceRoute.get("open") === "shopping") {
   switchTo(savedTabAvailable("shopping") ? "shopping" : "library", false);
-  const product = digikalaProductUrl(workspaceRoute.get("product"), workspaceRoute.get("variant"));
+  const product = digikalaProductUrl(workspaceRoute.get("product"), workspaceRoute.get("variant"), workspaceRoute.get("productTitle"));
   if (product) shoppingController?.fill(product);
   if (workspaceRoute.has("watch")) shoppingController?.focusWatch(workspaceRoute.get("watch"));
   const issue = workspaceRoute.get("shoppingIssue");
-  if (["shoppingConditionsChanged", "shoppingUnavailable", "shoppingConnect", "shoppingRuleMissing"].includes(issue)) reportError(issue);
+  if (shoppingReadErrors.has(issue) || ["shoppingConditionsChanged", "shoppingConnect", "shoppingRuleMissing"].includes(issue)) {
+    reportError(issue);
+  }
 } else if (workspaceRoute.get("open") === home.id) {
   switchTo(home.id, false);
 } else if (workspaceRoute.get("open") === "spaces") {

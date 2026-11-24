@@ -2,8 +2,9 @@ import { shoppingMessage } from "./shopping-background.js";
 import { shoppingHostPermission, shoppingNotificationPermission } from "./shopping-digikala.js";
 import {
   digikalaPrice, digikalaProductLink, digikalaProductUrl, digikalaSearchUrl, parseShoppingNumber,
-  shoppingPollMinutes, shoppingStatus, shoppingWatchKey
+  shoppingPollMinutes, shoppingReadErrors, shoppingStatus, shoppingWatchKey
 } from "./shopping-store.js";
+import { createShoppingSellerPicker } from "./shopping-sellers.js";
 import { createDatePicker } from "./date-picker.js";
 import { createTimePicker } from "./time-picker.js";
 import { localTaskDay } from "./todo-store.js";
@@ -55,7 +56,7 @@ export function renderShopping(root, options) {
     const product = digikalaProductLink(tab?.url);
     if (!live || !product) return;
     activeProduct.hidden = false;
-    activeProduct.onclick = () => fill(digikalaProductUrl(product.productId, product.variantId));
+    activeProduct.onclick = () => fill(digikalaProductUrl(product.productId, product.variantId, product.title));
   }).catch(() => {});
 
   const result = node("div", "shopping-lookup-results");
@@ -133,17 +134,20 @@ export function renderShopping(root, options) {
     find.disabled = false;
     form.removeAttribute("aria-busy");
     setFeedback(response?.error);
+    const legacy = link && watches.filter(watch => watch.productId === link.productId && watch.variantId === link.variantId
+      && watch.title === `DKP-${link.productId}`);
+    const existing = legacy?.length === 1 ? legacy[0] : undefined;
     if (response?.product) {
-      editWatch(undefined, response.product, response.variantId);
+      editWatch(existing, response.product, response.variantId);
       return;
     }
     if (response?.error) {
       if (link && response.error !== "shoppingProductMissing") {
-        const draft = { id: link.productId, title: `DKP-${link.productId}`, offers: [] };
+        const draft = { id: link.productId, title: link.title || `DKP-${link.productId}`, fromLink: true };
         result.append(button(t("shoppingSaveLink"), "secondary-button", {
-          symbol: "plus", onClick: () => editWatch(undefined, draft, link.variantId)
-        }), linkTo(digikalaProductUrl(link.productId, link.variantId), t("shoppingOpenProduct")));
-      } else if (response.error === "shoppingUnavailable") {
+          symbol: "plus", onClick: () => editWatch(existing, draft, link.variantId)
+        }), linkTo(digikalaProductUrl(link.productId, link.variantId, link.title), t("shoppingOpenProduct")));
+      } else if (shoppingReadErrors.has(response.error)) {
         result.append(linkTo(digikalaSearchUrl(value), t("shoppingOpenSearch")));
       }
       return;
@@ -215,13 +219,14 @@ export function renderShopping(root, options) {
     return control;
   }
 
-  function editWatch(watch, product, variantId) {
+  function editWatch(watch, product, variantId, focusSeller = false) {
     if (editor.open) return;
     const selected = watch?.variantId ?? variantId;
     const productId = watch?.productId ?? product.id;
-    const currentQuote = watch && observations[watch.id]?.quote;
-    const title = product?.title ?? currentQuote?.title ?? watch?.title;
-    const image = product?.image ?? currentQuote?.image ?? watch?.image;
+    const sample = watch && observations[watch.id];
+    const currentQuote = sample && sample.rule === shoppingWatchKey(watch) ? sample.quote : null;
+    let title = product?.title ?? currentQuote?.title ?? watch?.title;
+    let image = product?.image ?? currentQuote?.image ?? watch?.image;
     const pickers = [];
     const fields = openEditor(t(watch ? "shoppingEdit" : "shoppingNew"), t("save"), async () => {
       const limit = cap.value.trim() ? parseShoppingNumber(cap.value) * 10 : null;
@@ -238,9 +243,7 @@ export function renderShopping(root, options) {
         return false;
       }
       const saved = await mutate("shopping-save", {
-        id: watch?.id, productId, title, image, variantId: variants.value || null,
-        variantLabel: variants.value ? variants.selectedOptions[0].dataset.label : "",
-        priceLimit: limit, discount, startAt, endAt
+        id: watch?.id, productId, title, image, ...picker.selection(), priceLimit: limit, discount, startAt, endAt
       });
       if (saved) {
         if (!watch) {
@@ -255,40 +258,17 @@ export function renderShopping(root, options) {
     const heading = node("div", "shopping-editor-product");
     const offerCopy = node("div", "shopping-result-copy");
     const preview = node("div", "shopping-offer-preview");
-    offerCopy.append(titleOf(title, "shopping-product-title"), preview);
+    const headingName = titleOf(title, "shopping-product-title");
+    offerCopy.append(headingName, preview);
     heading.append(thumb(image), offerCopy);
-    const optionField = node("label", "field");
-    const variants = node("select", "shopping-variants");
-    const variantChoices = new Map();
     let main = product?.main ?? product;
-    function populateOffers(offers, desired) {
-      variants.replaceChildren(new Option(t("shoppingDefaultOffer"), ""));
-      variantChoices.clear();
-      for (const option of offers) {
-        variantChoices.set(option.id, option);
-        const label = option.label || t("shoppingVariantCode", { id: option.id });
-        const item = new Option(option.available === false ? `${label} · ${t("shoppingOutOfStock")}` : label, option.id);
-        item.dataset.label = label;
-        variants.append(item);
+    const picker = createShoppingSellerPicker({ node, t, locale, watch, variantId: selected, offers: product?.offers,
+      onChange(offer, mode) {
+        const observed = offer && currentQuote?.variantId === offer.id ? currentQuote : null;
+        const value = offer?.price ?? observed?.price ?? (mode === "default" ? main?.price : null);
+        preview.replaceChildren(...(value ? [price(value)] : []));
       }
-      if (desired && !variantChoices.has(desired)) {
-        const label = watch?.variantLabel || t("shoppingVariantCode", { id: desired });
-        const item = new Option(label, desired);
-        item.dataset.label = label;
-        variants.append(item);
-      }
-      variants.value = desired ?? "";
-      updateOffer();
-    }
-    function updateOffer() {
-      const offer = variants.value ? variantChoices.get(variants.value) : main;
-      const observed = !offer && currentQuote?.variantId === variants.value ? currentQuote : null;
-      const value = (offer ?? observed)?.price;
-      preview.replaceChildren(...(value ? [price(value)] : []));
-    }
-    populateOffers(product?.offers ?? [], selected);
-    variants.addEventListener("change", updateOffer);
-    optionField.append(node("span", "", t("shoppingOffer")), variants);
+    });
     const thresholds = node("div", "shopping-field-row");
     const cap = numberField(thresholds, t("shoppingCeiling"), watch?.priceLimit ? watch.priceLimit / 10 : null);
     const percent = numberField(thresholds, t("shoppingDiscount"), watch?.discount);
@@ -320,13 +300,20 @@ export function renderShopping(root, options) {
     }
     const starts = dateTime("shoppingStarts", watch?.startAt, "00:00");
     const ends = dateTime("shoppingEnds", watch?.endAt, "23:59");
-    fields.append(heading, optionField, thresholds, ruleHint, schedule);
+    fields.append(heading, picker.root, thresholds, ruleHint, schedule);
     editor.showModal();
-    cap.focus();
-    if (connected && (watch || !product?.offers)) request("lookup", { input: digikalaProductUrl(productId, selected) }).then(response => {
+    if (focusSeller) picker.focus();
+    else cap.focus();
+    if (connected && !product?.offers && !product?.fromLink) request("lookup", { input: digikalaProductUrl(productId, selected) }).then(response => {
       if (editor.open && fields.isConnected && response?.product) {
         main = response.product.main;
-        populateOffers(response.product.offers, variants.value);
+        title = response.product.title;
+        headingName.textContent = title;
+        if (response.product.image) {
+          image = response.product.image;
+          heading.firstElementChild.replaceWith(thumb(image));
+        }
+        picker.update(response.product.offers);
       }
     });
   }
@@ -363,11 +350,17 @@ export function renderShopping(root, options) {
     const labels = node("div", "shopping-card-title");
     const variant = watch.variantLabel || quote?.variantLabel;
     labels.append(titleOf(name, "shopping-product-title"));
+    const sellerName = quote?.sellerName || watch.sellerName;
     if (variant) {
       const label = node("span", "shopping-variant-name", variant);
       label.dir = "auto";
       labels.append(label);
     }
+    const sellerButton = button(sellerName || t(watch.allSellers ? "shoppingAllowedSellers" : "shoppingChooseSeller"),
+      "shopping-card-seller", { symbol: "chevron-down", onClick: () => editWatch(watch, undefined, undefined, true) });
+    sellerButton.id = `shopping-seller-${watch.id}`;
+    sellerButton.setAttribute("aria-label", sellerName ? `${t("shoppingChooseSeller")} · ${sellerName}` : t("shoppingChooseSeller"));
+    labels.append(sellerButton);
     const badge = node("span", "shopping-status", t(status));
     head.append(thumb(quote?.image ?? watch.image), labels, badge);
 
@@ -376,7 +369,7 @@ export function renderShopping(root, options) {
     if (quote?.price) {
       const last = node("div", "shopping-price-row");
       last.append(price(quote.price));
-      if (status === "shoppingUnavailable" || status === "shoppingConnect") last.append(node("small", "", t("shoppingLastPrice")));
+      if (shoppingReadErrors.has(status) || status === "shoppingConnect") last.append(node("small", "", t("shoppingLastPrice")));
       else if (quote.discount > 0) {
         last.append(node("del", "", priceText(quote.reference)), node("small", "shopping-discount", percentages.format(quote.discount / 100)));
       }

@@ -198,7 +198,7 @@
   color: var(--positive);
 }
 
-.shopping-card[data-state="shoppingUnavailable"] .shopping-status {
+.shopping-card:is([data-state="shoppingUnavailable"], [data-state="shoppingStoreBlocked"], [data-state="shoppingStoreConnection"]) .shopping-status {
   background: color-mix(in srgb, var(--danger) 10%, var(--surface));
   color: var(--danger);
 }
@@ -280,6 +280,93 @@
 
 .shopping-variants {
   text-overflow: ellipsis;
+}
+
+.shopping-card-seller {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  justify-self: start;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  text-align: start;
+}
+
+.shopping-card-seller:hover {
+  background: var(--accent-wash);
+}
+
+.shopping-card-seller span:first-child {
+  display: grid;
+  place-items: center;
+}
+
+.shopping-card-seller span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shopping-card-seller svg {
+  inline-size: 13px;
+  block-size: 13px;
+}
+
+.shopping-seller-picker {
+  display: grid;
+  gap: 6px;
+  min-inline-size: 0;
+}
+
+.shopping-seller-count {
+  margin-inline-start: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.shopping-seller-filter > summary::after {
+  margin-inline-start: 4px;
+}
+
+.shopping-seller-filter input[type="search"] {
+  inline-size: 100%;
+  min-block-size: var(--control-height);
+  padding-inline: 6px;
+  border: 1px solid var(--stroke);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.shopping-seller-list {
+  display: grid;
+  gap: 2px;
+  max-block-size: 133px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.shopping-seller-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-block-size: 26px;
+  padding-inline: 5px;
+  border-radius: 6px;
+}
+
+.shopping-seller-option:hover {
+  background: var(--hover);
+}
+
+.shopping-seller-option input {
+  accent-color: var(--accent);
 }
 
 @media (max-width: 325px) {

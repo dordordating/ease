@@ -19,7 +19,7 @@ async function currentShopping() {
   const stored = await chrome.storage.local.get([storageKey, workspaceOwnerKey]);
   const workspace = { ...defaultWorkspace, ...stored[storageKey] };
   const owner = stored[workspaceOwnerKey] ?? null;
-  return { owner, key: shoppingObservationKey(owner), locale: workspace.locale, enabled: workspace.tabs.includes("shopping"),
+  return { workspace, owner, key: shoppingObservationKey(owner), locale: workspace.locale, enabled: workspace.tabs.includes("shopping"),
     watches: restoreShopping(workspace.shopping) ?? [] };
 }
 
@@ -59,11 +59,25 @@ async function checkProducts(watches) {
   const ids = [...new Set(watches.map(watch => watch.productId))];
   for (let offset = 0; offset < ids.length; offset += 4) {
     await Promise.all(ids.slice(offset, offset + 4).map(async id => {
-      try { products.set(id, await readDigikalaProduct(id)); }
-      catch { products.set(id, null); }
+      try { products.set(id, { product: await readDigikalaProduct(id), error: null }); }
+      catch (error) { products.set(id, { error: lookupError(error) }); }
     }));
   }
   return products;
+}
+
+function lookupError(error) {
+  return error instanceof ShoppingLookupError ? error.code : "shoppingUnavailable";
+}
+
+function updateWatchDetails(watch, quote) {
+  const changes = { title: quote.title, image: quote.image || watch.image };
+  if (watch.variantId && quote.sellerName) {
+    changes.variantLabel = quote.variantLabel;
+    if (quote.sellerId) changes.sellerId = quote.sellerId;
+    changes.sellerName = quote.sellerName;
+  }
+  return Object.entries(changes).some(([key, value]) => watch[key] !== value) ? { ...watch, ...changes } : watch;
 }
 
 function showAlert(watch, quote, locale, alertedAt) {
@@ -83,7 +97,7 @@ async function reconcile(force, queueWorkspace) {
   const observations = await readObservations(context.key);
   const now = Date.now();
   const pending = permitted && context.enabled ? context.watches.filter(watch =>
-    active(watch, now) && (watch.startAt === null || watch.startAt <= now)
+    active(watch, now) && (force || watch.startAt === null || watch.startAt <= now)
     && (force || nextCheck(watch, observations, now) <= now + 1000)) : [];
   if (!pending.length) {
     await scheduleAlarm(context, observations, permitted);
@@ -101,23 +115,29 @@ async function reconcile(force, queueWorkspace) {
     const checked = new Map(pending.map(watch => [watch.id, shoppingWatchKey(watch)]));
     const checkedAt = Date.now();
     const notices = [];
-    for (const watch of latest.watches) {
+    const updated = latest.watches.map(watch => {
       const rule = shoppingWatchKey(watch);
       const previous = newest[watch.id]?.rule === rule ? newest[watch.id] : null;
       if (!latest.enabled || !allowed || !active(watch, checkedAt) || checked.get(watch.id) !== rule) {
         if (previous) next[watch.id] = previous;
-        continue;
+        return watch;
       }
-      const product = products.get(watch.productId);
-      const quote = product ? quoteForWatch(product, watch.variantId) : previous?.quote ?? null;
-      const sample = { rule, quote, checkedAt, error: !product, alertedAt: previous?.alertedAt ?? null };
+      const { product, error } = products.get(watch.productId);
+      const quote = product ? quoteForWatch(product, watch) : previous?.quote ?? null;
+      const sample = { rule, quote, checkedAt, error, alertedAt: previous?.alertedAt ?? null };
       if (notify && !sample.alertedAt && shoppingStatus(watch, sample, checkedAt) === "shoppingReady") {
         sample.alertedAt = checkedAt;
         notices.push({ watch, quote });
       }
       next[watch.id] = sample;
+      return product ? updateWatchDetails(watch, quote) : watch;
+    });
+    const changes = {};
+    if (JSON.stringify(next) !== JSON.stringify(newest)) changes[context.key] = next;
+    if (updated.some((watch, index) => watch !== latest.watches[index])) {
+      changes[storageKey] = { ...latest.workspace, shopping: updated };
     }
-    if (JSON.stringify(next) !== JSON.stringify(newest)) await chrome.storage.local.set({ [context.key]: next });
+    if (Object.keys(changes).length) await chrome.storage.local.set(changes);
     await scheduleAlarm(latest, next, allowed);
     await Promise.allSettled(notices.map(({ watch, quote }) => showAlert(watch, quote, latest.locale, checkedAt)));
   });
@@ -131,6 +151,7 @@ function openShopping({ watch, product, issue } = {}) {
   if (product) {
     route.searchParams.set("product", product.productId);
     if (product.variantId) route.searchParams.set("variant", product.variantId);
+    if (product.title) route.searchParams.set("productTitle", product.title);
   }
   if (issue) route.searchParams.set("shoppingIssue", issue);
   return chrome.tabs.create({ url: route.href });
@@ -171,7 +192,7 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
     const refresh = () => poll(true);
     try {
       const product = await readDigikalaProduct(watch.productId);
-      const quote = quoteForWatch(product, watch.variantId);
+      const quote = quoteForWatch(product, watch);
       const rule = shoppingWatchKey(watch);
       const checkedAt = Date.now();
       const authorized = async () => {
@@ -186,9 +207,9 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
       }
       const clicked = await prepareDigikalaCart(watch, quote, authorized);
       return { ok: true, clicked };
-    } catch {
+    } catch (error) {
       void refresh();
-      return { error: "shoppingUnavailable" };
+      return { error: lookupError(error) };
     }
   }
 
@@ -224,7 +245,7 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
         return { products: await searchDigikala(input.trim()) };
       })();
     } else return;
-    result.then(respond, error => respond({ error: error instanceof ShoppingLookupError ? error.code : "shoppingUnavailable" }));
+    result.then(respond, error => respond({ error: lookupError(error) }));
     return true;
   });
 
@@ -259,7 +280,7 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
   }
   registerNotifications();
   chrome.alarms.onAlarm.addListener(({ name }) => { if (name === alarmName) return poll(false); });
-  chrome.runtime.onInstalled?.addListener(() => { updateMenu(); return poll(false); });
+  chrome.runtime.onInstalled?.addListener(() => { updateMenu(); return poll(true); });
   chrome.runtime.onStartup?.addListener(() => { updateMenu(); return poll(false); });
   chrome.storage.onChanged.addListener((changes, area) => {
     const change = changes[storageKey];

@@ -6,6 +6,9 @@ const maxPriceRials = 10_000_000_000_000;
 
 export const shoppingPollMinutes = 2;
 export const defaultShopping = Object.freeze([]);
+export const shoppingReadErrors = new Set([
+  "shoppingUnavailable", "shoppingProductMissing", "shoppingStoreBlocked", "shoppingStoreConnection"
+]);
 
 export function digikalaId(value) {
   const id = typeof value === "number" && Number.isSafeInteger(value) ? String(value) : value;
@@ -21,16 +24,25 @@ export function digikalaProductLink(input) {
     const url = new URL(/^(?:www\.)?digikala\.com\//iu.test(value) ? `https://${value}` : value);
     const match = url.pathname.match(productPath);
     if (url.protocol !== "https:" || !productHosts.has(url.host) || url.username || url.password || !match) return null;
-    return { productId: match[1], variantId: digikalaId(url.searchParams.get("variant_id")) };
+    const slug = url.pathname.slice(match[0].length).split("/")[0];
+    let title;
+    try {
+      if (slug) title = shoppingTitle(decodeURIComponent(slug).replace(/[-_]+/gu, " "));
+    } catch {
+      // The product code still identifies a link with a malformed slug.
+    }
+    return { productId: match[1], variantId: digikalaId(url.searchParams.get("variant_id")), ...(title ? { title } : {}) };
   } catch {
     return null;
   }
 }
 
-export function digikalaProductUrl(productId, variantId) {
+export function digikalaProductUrl(productId, variantId, productTitle) {
   const id = digikalaId(productId);
   if (!id) return null;
   const url = new URL(`https://www.digikala.com/product/dkp-${id}/`);
+  const slug = shoppingTitle(productTitle).replace(/\s+/gu, "-");
+  if (slug) url.pathname += `${encodeURIComponent(slug)}/`;
   const variant = digikalaId(variantId);
   if (variant) url.searchParams.set("variant_id", variant);
   return url.href;
@@ -69,6 +81,10 @@ function watchText(value, limit) {
   return typeof value === "string" ? value.trim().slice(0, limit) : "";
 }
 
+export function shoppingTitle(value) {
+  return watchText(typeof value === "string" ? value.replace(/[\p{Cc}\u202a-\u202e\u2066-\u2069]/gu, "") : "", 240);
+}
+
 function timestamp(value) {
   return Number.isSafeInteger(value) && value > 0 && value <= 8.64e15;
 }
@@ -81,16 +97,24 @@ function normalizeWatch(source) {
   const discount = source.discount ?? null;
   const startAt = source.startAt ?? null;
   const endAt = source.endAt ?? null;
+  const sellerId = variantId && digikalaId(source.sellerId);
+  const sellerName = variantId ? watchText(source.sellerName, 120) : "";
+  const allSellers = !variantId && source.allSellers === true;
+  const exclusions = allSellers ? source.excludedSellers ?? [] : [];
+  if (!Array.isArray(exclusions) || exclusions.length > 500 || exclusions.some(id => !digikalaId(id))) return null;
   if ((source.variantId != null && !variantId) || (source.priceLimit != null && !priceLimit)
     || (discount !== null && (!Number.isInteger(discount) || discount < 1 || discount > 99))
     || (startAt !== null && !timestamp(startAt)) || (endAt !== null && !timestamp(endAt))
     || (startAt !== null && endAt !== null && endAt <= startAt)) return null;
   return {
     productId, variantId, priceLimit, discount, startAt, endAt,
-    title: watchText(source.title, 240) || `DKP-${productId}`,
+    title: shoppingTitle(source.title) || `DKP-${productId}`,
     variantLabel: variantId ? watchText(source.variantLabel, 180) : "",
     image: digikalaImage(source.image),
-    paused: source.paused === true
+    paused: source.paused === true,
+    ...(sellerId ? { sellerId } : {}),
+    ...(sellerName ? { sellerName } : {}),
+    ...(allSellers ? { allSellers, excludedSellers: [...new Set(exclusions.map(digikalaId))].sort() } : {})
   };
 }
 
@@ -109,7 +133,9 @@ export function restoreShopping(value) {
 }
 
 export function shoppingWatchKey(watch) {
-  return JSON.stringify([watch.productId, watch.variantId, watch.priceLimit, watch.discount, watch.startAt, watch.endAt]);
+  const terms = [watch.productId, watch.variantId, watch.priceLimit, watch.discount, watch.startAt, watch.endAt];
+  if (watch.allSellers) terms.push(watch.excludedSellers);
+  return JSON.stringify(terms);
 }
 
 export function updateShopping(workspace, action, data) {
@@ -143,10 +169,16 @@ export function shoppingStatus(watch, observation, now = Date.now()) {
   if (watch.endAt !== null && now >= watch.endAt) return "shoppingExpired";
   if (watch.startAt !== null && now < watch.startAt) return "shoppingScheduled";
   if (!observation || observation.rule !== shoppingWatchKey(watch)) return "shoppingWaitingCheck";
-  if (observation.error || now - observation.checkedAt > 3 * shoppingPollMinutes * 60_000) return "shoppingUnavailable";
+  if (observation.error) return shoppingReadErrors.has(observation.error) ? observation.error : "shoppingUnavailable";
+  if (now - observation.checkedAt > 3 * shoppingPollMinutes * 60_000) return "shoppingUnavailable";
   const quote = observation.quote;
+  if (quote?.noEligibleSeller) return "shoppingNoEligibleSeller";
   if (quote?.available == null) return "shoppingUnavailable";
   if (!quote.available) return "shoppingOutOfStock";
+  return shoppingPriceStatus(watch, quote);
+}
+
+export function shoppingPriceStatus(watch, quote) {
   if (watch.priceLimit !== null && quote.price > watch.priceLimit) return "shoppingWaitingPrice";
   if (watch.discount !== null && (quote.discount === null || quote.discount < watch.discount)) {
     return "shoppingWaitingDiscount";
