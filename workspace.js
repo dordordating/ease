@@ -25,8 +25,8 @@ import { takeTranslatorSelection, translatorSelectionKey } from "./translator-se
 import { renderTranslatorSites } from "./translator-sites-ui.js";
 import { readTranslationHistory, translationHistoryKey, translationHistoryMessage } from "./translation-history-store.js";
 import { renderShopping } from "./shopping.js";
-import { digikalaProductUrl, restoreShopping, shoppingObservationKey, shoppingReadErrors, shoppingStatus } from "./shopping-store.js";
-import { shoppingPaymentKey, shoppingPurchaseKey, shoppingPurchaseView } from "./shopping-purchase-store.js";
+import { digikalaProductUrl, restoreShopping, shoppingObservationKey, shoppingReadErrors } from "./shopping-store.js";
+import { shoppingPaymentKey, shoppingPurchaseKey, shoppingPurchaseView, shoppingWatchStatus } from "./shopping-purchase-store.js";
 import { workspaceOwnerKey } from "./workspace-accounts.js";
 import { renderTranslationHistory } from "./translation-history-view.js";
 import { clipboardHistoryKey, clipboardHistoryMessage, loadClipboardHistory } from "./clipboard-history-store.js";
@@ -336,8 +336,8 @@ function shoppingViewState() {
 
 function updateShoppingBadge(tab) {
   if (!tab) return;
-  const { watches, observations } = shoppingViewState();
-  const ready = watches.filter(watch => shoppingStatus(watch, observations[watch.id]) === "shoppingReady").length;
+  const { watches, observations, purchases } = shoppingViewState();
+  const ready = watches.filter(watch => shoppingWatchStatus(watch, observations[watch.id], purchases.jobs[watch.id]) === "shoppingReady").length;
   updateModuleBadge(tab, ready, new Intl.NumberFormat(workspace.locale, { useGrouping: false }));
 }
 

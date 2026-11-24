@@ -366,6 +366,6 @@ export async function readDigikalaReceipt(tabId, input, cartId) {
   const order = data?.order;
   const orderId = opaqueId(order?.id);
   if (data?.status !== "success" || !orderId || opaqueId(order.cart_id) !== cartId
-    || (order.remaining_amount != null && order.remaining_amount !== 0)) return null;
+    || (order.remaining_amount != null && integer(order.remaining_amount) !== 0)) return null;
   return { orderId };
 }

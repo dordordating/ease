@@ -181,7 +181,7 @@ export function purchaseEditor({ node, button, t, numberField, priceText, readAm
   terms.append(node("li", "", state.policy.delivery === "max"
     ? t("shoppingPurchaseShippingAgreed", { price: priceText(state.policy.shippingLimit) })
     : t(deliveries[state.policy.delivery])));
-  const consent = confirmation(node, t(job?.status === "paid" ? "shoppingPurchaseConsentAgain" : "shoppingPurchaseConsent"));
+  const consent = confirmation(node, "");
   orderLimit.addEventListener("input", () => { consent.input.checked = false; });
   const quote = currentInvoicePreview({ node, t, priceText, request });
   let offer;
@@ -194,11 +194,15 @@ export function purchaseEditor({ node, button, t, numberField, priceText, readAm
   const mode = choices(node, t, "shoppingPurchaseAction", "shopping-purchase-mode", modes, job?.mode ?? "notify", update);
   mode.group.classList.add("shopping-purchase-modes");
   function update(value) {
+    const credit = isShoppingCreditMode(value);
     paymentFields.hidden = !isShoppingPaymentMode(value);
-    walletHint.hidden = consent.label.hidden = value !== "wallet";
-    const hintKey = value === "prepare" ? "shoppingPurchasePrepareHint" : isShoppingCreditMode(value) ? "shoppingPurchaseCreditHint" : null;
+    walletHint.hidden = value !== "wallet";
+    const hintKey = value === "prepare" ? "shoppingPurchasePrepareHint" : credit ? "shoppingPurchaseCreditHint" : null;
     hint.hidden = !hintKey;
     hint.textContent = hintKey ? t(hintKey) : "";
+    const consentKey = credit ? "shoppingPurchaseCreditConsent"
+      : job?.status === "paid" ? "shoppingPurchaseConsentAgain" : "shoppingPurchaseConsent";
+    consent.label.lastElementChild.textContent = t(consentKey);
     consent.input.checked = false;
     addressNote.hidden = value === "notify";
     address.update(value);
@@ -221,7 +225,7 @@ export function purchaseEditor({ node, button, t, numberField, priceText, readAm
           address.focus();
           return { error: address.error() };
         }
-        if (value === "wallet") payload.confirm = consent.input.checked;
+        payload.confirm = consent.input.checked;
         payload.policy = state.policy;
       }
       return { payload };

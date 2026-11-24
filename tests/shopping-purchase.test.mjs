@@ -6,8 +6,10 @@ import {
 } from "../shopping-checkout-digikala.js";
 import { readDigikalaFromPage } from "../shopping-digikala-session.js";
 import { quoteForWatch, readDigikalaProduct } from "../shopping-digikala.js";
+import { stageShoppingPurchase } from "../shopping-purchases.js";
 import {
-  canRetryShoppingPurchase, checkoutCartIssue, checkoutCartsMatch, checkoutCostIssue, checkoutItemsKey, purchaseJobApplies, shoppingPurchasePolicy
+  canRetryShoppingPurchase, checkoutCartIssue, checkoutCartsMatch, checkoutCostIssue, checkoutItemsKey, purchaseJobApplies,
+  shoppingPurchaseKey, shoppingPurchasePolicy, shoppingWatchStatus
 } from "../shopping-purchase-store.js";
 import { parseShoppingNumber, shoppingAvailable, shoppingPriceStatus, shoppingWatchKey, updateShopping } from "../shopping-store.js";
 
@@ -65,9 +67,40 @@ test("a refreshed checkout can retry an eligible review before payment", () => {
   assert.equal(canRetryShoppingPurchase(watch, job, state), true);
   assert.equal(canRetryShoppingPurchase(watch, job, { ...state, payment: { token: "pending" } }), false);
   assert.equal(canRetryShoppingPurchase(watch, job, { policy: policy("include") }), false);
-  for (const status of ["paid", "unknown", "prepared", "submitting", "armed"]) {
+  for (const status of ["paid", "unknown", "prepared", "submitting", "armed", "awaiting"]) {
     assert.equal(canRetryShoppingPurchase(watch, { ...job, status }, state), false);
   }
+});
+
+test("a confirmed watch stays completed independently of live product status", () => {
+  const rule = shoppingWatchKey(watch);
+  const sample = { rule, quote: { ...offer, available: true, discount: 12 }, checkedAt: Date.now() };
+  const job = { status: "paid", rule };
+  assert.equal(shoppingWatchStatus(watch, sample), "shoppingReady");
+  assert.equal(shoppingWatchStatus(watch, sample, job), "shoppingPurchased");
+  assert.equal(shoppingWatchStatus({ ...watch, paused: true }, null, job), "shoppingPurchased");
+  assert.equal(shoppingWatchStatus({ ...watch, quantity: 2 }, null, job), "shoppingWaitingCheck");
+  assert.equal(shoppingWatchStatus(watch, sample, { ...job, status: "awaiting" }), "shoppingReady");
+});
+
+test("choosing a credit plan does not authorize a payment for a new or previously prepared watch", async t => {
+  const id = "watch";
+  const workspace = { shopping: [{ ...watch, id }] };
+  const approved = policy("review");
+  const purchase = { mode: "credit-one", policy: approved, limit: 950_000, confirm: false };
+  const key = shoppingPurchaseKey(null);
+  let jobs = {};
+  globalThis.chrome = { storage: { local: { get: async () => ({ [key]: { policy: approved, jobs } }) } } };
+  t.after(() => { delete globalThis.chrome; });
+  const transaction = {};
+  assert.equal(await stageShoppingPurchase(workspace, "shopping-save", { id, purchase }, transaction),
+    "shoppingPurchaseCreditConsentRequired");
+  assert.deepEqual(transaction, {});
+
+  jobs = { [id]: { mode: purchase.mode, policy: approved, limit: purchase.limit,
+    status: "prepared", rule: shoppingWatchKey(watch) } };
+  assert.equal(await stageShoppingPurchase(workspace, "shopping-save", { id, purchase }, transaction), undefined);
+  assert.deepEqual(transaction, {});
 });
 
 test("cart verification permits a partial quantity during setup and requires the exact quantity for checkout", () => {

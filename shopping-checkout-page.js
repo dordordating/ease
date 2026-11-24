@@ -53,7 +53,8 @@ export function digikalaCheckoutControl(intent, expected = {}) {
   const payment = expected.payment;
   const wallet = payment?.mode === "wallet";
   const credit = payment?.mode === "credit-one" || payment?.mode === "credit-four";
-  if (!payment?.title || (!wallet && !credit) || (credit && intent === "pay")) return null;
+  if (!payment?.title || (!wallet && !credit)) return null;
+  if (credit && intent === "pay" && expected.creditApproved !== true) return null;
   const title = canonical(payment.title);
   if (wallet && title !== "کیفپولدیجیپی") return null;
   if (credit && payment.group !== "اعتباریدیجیپی") return null;
@@ -81,7 +82,9 @@ export function digikalaCheckoutControl(intent, expected = {}) {
   if (intent === "payment-selected") return selected ? { selected } : null;
   const pay = control("payment-final-pay");
   if (!selected || !pay) return null;
-  if (payment.button && normalize(pay.textContent) !== normalize(payment.button)) return null;
+  const button = canonical(pay.textContent);
+  if (payment.button && button !== canonical(payment.button)) return null;
+  if (credit && intent === "pay" && !payment.button && button !== `پرداخت${title}`) return null;
 
   function parseToman(value) {
     const digits = normalize(value).replace(/[٠-٩۰-۹]/gu, digit => String(digit.codePointAt(0) & 15))

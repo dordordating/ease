@@ -198,6 +198,16 @@
   color: var(--positive);
 }
 
+.shopping-card[data-state="shoppingPurchased"] .shopping-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--positive-wash);
+  color: var(--positive);
+}
+
+.shopping-card[data-state="shoppingPurchased"] .shopping-status svg { inline-size: 12px; block-size: 12px; }
+
 .shopping-card:is([data-state="shoppingUnavailable"], [data-state="shoppingStoreBlocked"], [data-state="shoppingStoreConnection"]) .shopping-status {
   background: color-mix(in srgb, var(--danger) 10%, var(--surface));
   color: var(--danger);
@@ -492,8 +502,9 @@
 }
 
 .shopping-checkout-status[data-status="armed"] { color: var(--accent); }
+.shopping-checkout-status[data-status="paid"] { background: var(--positive-wash); }
 .shopping-checkout-status[data-status="review"],
 .shopping-checkout-status[data-status="unknown"] { background: var(--subtle); }
 .shopping-checkout-link { min-block-size: 25px; padding-block: 2px; }
-.shopping-checkout-actions { display: flex; align-items: center; gap: 4px; }
+.shopping-checkout-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .shopping-checkout-retry { inline-size: 25px; min-block-size: 25px; padding: 3px; }

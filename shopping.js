@@ -2,10 +2,10 @@ import { shoppingMessage } from "./shopping-background.js";
 import { shoppingHostPermission, shoppingNotificationPermission } from "./shopping-digikala.js";
 import {
   digikalaPrice, digikalaProductLink, digikalaProductUrl, digikalaSearchUrl, parseShoppingNumber,
-  offerFitsQuantity, shoppingNumberDigits, shoppingPollMinutes, shoppingQuantity, shoppingReadErrors, shoppingStatus, shoppingWatchKey
+  offerFitsQuantity, shoppingNumberDigits, shoppingPollMinutes, shoppingQuantity, shoppingReadErrors, shoppingWatchKey
 } from "./shopping-store.js";
 import { createShoppingSellerPicker } from "./shopping-sellers.js";
-import { canRetryShoppingPurchase, shoppingPurchaseStatus } from "./shopping-purchase-store.js";
+import { canRetryShoppingPurchase, isShoppingCreditMode, shoppingPurchaseStatus, shoppingWatchStatus } from "./shopping-purchase-store.js";
 import { openPurchaseSettings, purchaseEditor } from "./shopping-purchase-ui.js";
 import { createDatePicker } from "./date-picker.js";
 import { createTimePicker } from "./time-picker.js";
@@ -448,6 +448,7 @@ export function renderShopping(root, options) {
     sellerButton.setAttribute("aria-label", sellerName ? `${t("shoppingChooseSeller")} · ${sellerName}` : t("shoppingChooseSeller"));
     labels.append(sellerButton);
     const badge = node("span", "shopping-status", t(status));
+    if (status === "shoppingPurchased") badge.prepend(glyph("check"));
     head.append(thumb(quote?.image ?? watch.image), labels, badge);
 
     const footer = node("div", "shopping-card-footer");
@@ -504,7 +505,7 @@ export function renderShopping(root, options) {
         const edit = button(t("shoppingEdit"), "secondary-button shopping-checkout-link", { symbol: "edit", onClick: () => editWatch(watch) });
         edit.id = `shopping-checkout-${watch.id}`;
         checkout.append(edit);
-      } else if (["review", "prepared", "paid", "unknown"].includes(job.status)) {
+      } else if (["review", "prepared", "awaiting", "paid", "unknown"].includes(job.status)) {
         const controls = node("div", "shopping-checkout-actions");
         if (ready && canRetryShoppingPurchase(watch, job, purchases)) {
           const retry = button(t("shoppingPurchaseRetry"), "icon-button shopping-checkout-retry", { symbol: "refresh", iconOnly: true, onClick: async () => {
@@ -516,7 +517,15 @@ export function renderShopping(root, options) {
           retry.id = `shopping-checkout-retry-${watch.id}`;
           controls.append(retry);
         }
-        const open = button(t(job.status === "unknown" || job.status === "paid" ? "shoppingPurchaseOpenOrders" : "shoppingPurchaseOpenCheckout"),
+        if (job.status === "prepared" && isShoppingCreditMode(job.mode) && job.creditApproved !== true && ready) {
+          const approve = button(t("shoppingPurchaseApproveCredit"), "secondary-button shopping-checkout-link",
+            { symbol: "edit", onClick: () => editWatch(watch) });
+          approve.id = `shopping-checkout-approve-${watch.id}`;
+          controls.append(approve);
+        }
+        const openLabel = job.status === "awaiting" ? "shoppingPurchaseContinuePayment"
+          : job.status === "unknown" || job.status === "paid" ? "shoppingPurchaseOpenOrders" : "shoppingPurchaseOpenCheckout";
+        const open = button(t(openLabel),
           "secondary-button shopping-checkout-link", { symbol: "open-window", onClick: async () => {
             const result = await request("open-checkout", { id: watch.id });
             if (result?.error) reportError(result.error);
@@ -533,8 +542,8 @@ export function renderShopping(root, options) {
   function renderWatches() {
     const focus = list.contains(document.activeElement) ? document.activeElement.id : null;
     const rows = watches.map(watch => {
-      const status = shoppingStatus(watch, observations[watch.id]);
-      const needsAccess = !connected && !["shoppingPaused", "shoppingExpired"].includes(status);
+      const status = shoppingWatchStatus(watch, observations[watch.id], purchases.jobs[watch.id]);
+      const needsAccess = !connected && !["shoppingPaused", "shoppingExpired", "shoppingPurchased"].includes(status);
       return renderWatch(watch, needsAccess ? "shoppingConnect" : status);
     });
     rows.sort((left, right) => Number(right.dataset.state === "shoppingReady") - Number(left.dataset.state === "shoppingReady"));

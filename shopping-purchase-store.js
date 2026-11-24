@@ -1,4 +1,4 @@
-import { digikalaPrice, shoppingWatchKey } from "./shopping-store.js";
+import { digikalaPrice, shoppingStatus, shoppingWatchKey } from "./shopping-store.js";
 
 export const shoppingPaymentKey = "easeDigikalaPendingPayment";
 export const shoppingPurchasePrefix = "easeShoppingPurchases:";
@@ -42,11 +42,17 @@ export function canRetryShoppingPurchase(watch, job, state) {
   return job?.status === "review" && !state.payment && purchaseJobApplies(watch, job, state.policy);
 }
 
+export function shoppingWatchStatus(watch, observation, job) {
+  if (job?.status === "paid" && job.rule === shoppingWatchKey(watch)) return "shoppingPurchased";
+  return shoppingStatus(watch, observation);
+}
+
 export function shoppingPurchaseStatus(watch, job, policy) {
   if (!job) return null;
   if ((job.status === "armed" || job.status === "review") && !purchaseJobApplies(watch, job, policy)) return "shoppingPurchaseRearm";
   if (job.status === "submitting" || job.status === "running") return "shoppingPurchaseWorking";
   if (job.status === "paid") return "shoppingPurchasePaid";
+  if (job.status === "awaiting") return "shoppingPurchaseCreditAwaiting";
   if (job.status === "unknown") return "shoppingPurchaseUnknown";
   if (job.status === "prepared") return isShoppingCreditMode(job.mode) ? "shoppingPurchaseCreditPrepared" : "shoppingPurchasePrepared";
   if (job.status === "review") return job.reason ?? "shoppingPurchaseReview";
