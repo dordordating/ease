@@ -1175,7 +1175,8 @@ const moduleSearchSources = {
     entries: workspace.tabs.includes("shopping") ? shoppingViewState().watches.map(watch => {
       const quote = shoppingObservations[watch.id]?.quote;
       const title = quote?.title ?? watch.title;
-      const detail = [quote?.sellerName || watch.sellerName, watch.variantLabel || quote?.variantLabel].filter(Boolean).join(" · ");
+      const option = watch.optionLabel || quote?.optionLabel || watch.variantLabel || quote?.variantLabel;
+      const detail = [quote?.sellerName || watch.sellerName, option].filter(Boolean).join(" · ");
       return { id: `shopping-result-${watch.id}`, title, detail,
         keywords: [title, detail, watch.title, `DKP-${watch.productId}`, "Digikala", "دیجی‌کالا"],
         open() {

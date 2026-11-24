@@ -4,12 +4,13 @@ import { addDigikalaTabItem, waitForShopTab } from "./shopping-cart.js";
 import { digikalaCheckoutControl } from "./shopping-checkout-page.js";
 import {
   checkoutInvoiceKey, digikalaCartUrl, digikalaCheckoutStage, digikalaOrdersUrl, digikalaShippingUrl,
-  loadDigikalaCart, loadDigikalaInvoice, readDigikalaBuyer, readDigikalaReceipt, selectDigikalaDeliveryAddress
+  loadDigikalaCart, loadDigikalaInvoice, readDigikalaBuyer, readDigikalaReceipt, selectDigikalaDeliveryAddress, setDigikalaCartQuantity
 } from "./shopping-checkout-digikala.js";
 import { DigikalaCheckoutError, isDigikalaPage, withDigikalaTab } from "./shopping-digikala-session.js";
 import { readDigikalaProduct, quoteForWatch, shoppingHostPermission, shoppingNotificationPermission } from "./shopping-digikala.js";
 import {
-  checkoutCartIssue, checkoutCostIssue, checkoutItemsKey, purchaseJobApplies, readShoppingPurchases, shoppingPaymentKey, shoppingPurchasePolicy
+  canRetryShoppingPurchase, checkoutCartIssue, checkoutCostIssue, checkoutItemsKey, purchaseJobApplies, readShoppingPurchases,
+  shoppingPaymentKey, shoppingPurchasePolicy
 } from "./shopping-purchase-store.js";
 import { digikalaPrice, digikalaProductUrl, shoppingStatus, shoppingWatchKey } from "./shopping-store.js";
 
@@ -147,6 +148,42 @@ async function waitForCart(tabId, offer, initial) {
   throw new DigikalaCheckoutError("shoppingPurchaseCartChanged");
 }
 
+export async function fillDigikalaCart(tab, watch, offer, policy, authorized) {
+  const quantity = watch.quantity ?? 1;
+  requireCheckout(await authorized(), "shoppingConditionsChanged");
+  const initial = await loadDigikalaCart(tab.id);
+  const issue = checkoutCartIssue(initial, watch, offer, policy, { requireTarget: false, allowFewer: true });
+  if (issue) await chrome.tabs.update(tab.id, { url: digikalaCartUrl });
+  requireCheckout(!issue, issue);
+  let cart = initial;
+  let item = cart.items.find(entry => entry.variantId === offer.variantId);
+  if (!item) {
+    requireCheckout(await addDigikalaTabItem(tab, watch, offer, authorized), "shoppingPurchaseCartChanged");
+    cart = await waitForCart(tab.id, offer, initial);
+    item = cart.items.find(entry => entry.variantId === offer.variantId);
+  }
+  const cartIssue = checkoutCartIssue(cart, watch, offer, policy, { allowFewer: true });
+  requireCheckout(!cartIssue, cartIssue);
+  if (item.quantity < quantity) {
+    requireCheckout(item.id && item.price === offer.price, "shoppingPurchaseCartChanged");
+    requireCheckout(await authorized(), "shoppingConditionsChanged");
+    await setDigikalaCartQuantity(tab.id, item.id, quantity);
+    const others = value => checkoutItemsKey({ items: value.items.filter(entry => entry.variantId !== offer.variantId) });
+    const originalId = cart.id;
+    const originalOthers = others(cart);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      cart = await loadDigikalaCart(tab.id);
+      const issue = checkoutCartIssue(cart, watch, offer, policy, { allowFewer: true });
+      requireCheckout(cart.id === originalId && others(cart) === originalOthers && !issue, "shoppingPurchaseCartChanged");
+      if (cart.items.find(entry => entry.variantId === offer.variantId).quantity === quantity) break;
+      if (attempt < 2) await pause();
+    }
+  }
+  const finalIssue = checkoutCartIssue(cart, watch, offer, policy);
+  requireCheckout(!finalIssue, finalIssue);
+  return cart;
+}
+
 async function notifyOutcome(id, watch, status, locale) {
   if (!chrome.notifications?.create || !await chrome.permissions.contains(shoppingNotificationPermission)) return;
   await chrome.notifications.create(noticePrefix + id, {
@@ -188,8 +225,8 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
     return true;
   }
 
-  async function runPurchase(owner, id) {
-    let context, watch, job, tabId;
+  async function runPurchase(owner, { id, retryToken }) {
+    let context, watch, job, tabId, previous;
     const start = await queueWorkspace(async () => {
       context = await currentShopping();
       if (context.owner !== owner || !context.enabled) return false;
@@ -197,10 +234,14 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
       const state = await readShoppingPurchases(owner);
       job = state.jobs[id];
       const observation = (await chrome.storage.local.get(context.key))[context.key]?.[id];
-      if (!watch || job?.status !== "armed" || !purchaseJobApplies(watch, job, state.policy)
-        || shoppingStatus(watch, observation) !== "shoppingReady") return false;
+      if (!watch || !purchaseJobApplies(watch, job, state.policy) || shoppingStatus(watch, observation) !== "shoppingReady") return false;
+      if (retryToken) {
+        if (retryToken !== job.token || !canRetryShoppingPurchase(watch, job, state)) return false;
+        previous = job;
+      } else if (job.status !== "armed") return false;
+      job = { ...job, policy: state.policy, status: "running", reason: null, tabId: null, cartId: null,
+        token: retryToken ? crypto.randomUUID() : job.token };
       inProgress.add(job.token);
-      job = { ...job, policy: state.policy, status: "running", tabId: null };
       await chrome.storage.local.set(changeJob(state, id, job));
       return true;
     });
@@ -227,6 +268,13 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
     };
     try {
       requireCheckout(await authorized(), "shoppingConditionsChanged");
+      const oldTab = Number.isInteger(previous?.tabId) ? await chrome.tabs.get(previous.tabId).catch(() => null) : null;
+      if ([oldTab?.url, oldTab?.pendingUrl].some(url => digikalaCheckoutStage(url) === "receipt")) {
+        const receipt = previous.cartId && !oldTab.incognito && oldTab.status === "complete"
+          ? await readDigikalaReceipt(oldTab.id, oldTab.url, previous.cartId).catch(() => null) : null;
+        await setJob(owner, id, job.token, { tabId: oldTab.id, ...(receipt ?? {}), status: receipt ? "paid" : "unknown" });
+        return;
+      }
       if (job.mode === "wallet") {
         requireCheckout(!(await readShoppingPurchases(owner)).payment, "shoppingPurchasePending");
         requireCheckout(job.buyer?.addressId, "shoppingPurchaseChooseAddress");
@@ -236,10 +284,12 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
         await setJob(owner, id, job.token, { status: "armed" });
         return;
       }
-      requireCheckout(offer.singleItem && offer.variantId && offer.sellerId, "shoppingConditionsChanged");
-      if (job.limit !== null) requireCheckout(offer.price <= job.limit, "shoppingPurchaseOverLimit");
+      requireCheckout(offer.variantId && offer.sellerId, "shoppingConditionsChanged");
+      if (job.limit !== null) requireCheckout(offer.price * (watch.quantity ?? 1) <= job.limit, "shoppingPurchaseOverLimit");
       requireCheckout(await authorized(), "shoppingConditionsChanged");
-      const tab = await chrome.tabs.create({ active: false, url: digikalaProductUrl(watch.productId, offer.variantId) });
+      const url = digikalaProductUrl(watch.productId, offer.variantId);
+      const reuse = oldTab && !oldTab.active && !oldTab.incognito && digikalaCheckoutStage(oldTab.url) === "cart";
+      const tab = reuse ? await chrome.tabs.update(oldTab.id, { url }) : await chrome.tabs.create({ active: false, url });
       tabId = tab.id;
       requireCheckout(Number.isInteger(tabId) && !tab.incognito);
       await setJob(owner, id, job.token, { tabId });
@@ -249,17 +299,8 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
         requireCheckout(buyer.accountId === job.buyer.accountId, "shoppingPurchaseSignIn");
         requireCheckout(buyer.addressKey === job.buyer.addressKey, "shoppingPurchaseAddressChanged");
       }
-      const initial = await loadDigikalaCart(tabId);
-      const issue = checkoutCartIssue(initial, watch, offer, job.policy, { requireTarget: false });
-      const alreadyInCart = initial.items.some(item => item.variantId === offer.variantId);
-      if (issue) await chrome.tabs.update(tabId, { url: digikalaCartUrl });
-      requireCheckout(!issue, issue);
-      let cart = initial;
-      if (!alreadyInCart) {
-        requireCheckout(await addDigikalaTabItem(tab, watch, offer, authorized), "shoppingPurchaseCartChanged");
-        cart = await waitForCart(tabId, offer, initial);
-      }
-      requireCheckout(!checkoutCartIssue(cart, watch, offer, job.policy), "shoppingPurchaseCartChanged");
+      const cart = await fillDigikalaCart(tab, watch, offer, job.policy, authorized);
+      await setJob(owner, id, job.token, { cartId: cart.id });
       requireCheckout(await authorized(), "shoppingConditionsChanged");
       if (job.buyer) await selectDigikalaDeliveryAddress(tabId, job.buyer.addressId, authorized);
       requireCheckout(await openShipping(tabId, authorized), "shoppingPurchaseDelivery");
@@ -372,8 +413,8 @@ export function shoppingPurchases(queueWorkspace, currentShopping, openShopping)
   return {
     queue: serialize,
     recover: () => serialize(recover),
-    run: (owner, ids) => serialize(async () => {
-      for (const id of ids) await runPurchase(owner, id);
+    run: (owner, attempts) => serialize(async () => {
+      for (const attempt of attempts) await runPurchase(owner, attempt);
     }),
     async open(id) {
       const { owner, enabled } = await currentShopping();

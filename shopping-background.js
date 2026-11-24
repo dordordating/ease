@@ -2,16 +2,16 @@ import { translate } from "./locales.js";
 import { defaultWorkspace, moduleAvailable, storageKey } from "./workspace-data.js";
 import { workspaceOwnerKey } from "./workspace-accounts.js";
 import {
-  digikalaProductLink, restoreShopping, shoppingObservationKey, shoppingPollMinutes, shoppingStatus, shoppingWatchKey
+  digikalaProductLink, digikalaProductUrl, restoreShopping, shoppingObservationKey, shoppingPollMinutes, shoppingStatus, shoppingWatchKey
 } from "./shopping-store.js";
 import {
   readDigikalaProduct, quoteForWatch, searchDigikala, ShoppingLookupError, shoppingHostPermission, shoppingNotificationPermission
 } from "./shopping-digikala.js";
-import { prepareDigikalaCart } from "./shopping-cart.js";
+import { prepareDigikalaCart, waitForShopTab } from "./shopping-cart.js";
 import { readDigikalaDeliveryChoices } from "./shopping-checkout-digikala.js";
-import { DigikalaCheckoutError, withDigikalaTab } from "./shopping-digikala-session.js";
-import { purchaseJobApplies, readShoppingPurchases, shoppingPurchasePrefix } from "./shopping-purchase-store.js";
-import { shoppingPurchases } from "./shopping-purchases.js";
+import { DigikalaCheckoutError, isDigikalaPage, withDigikalaTab } from "./shopping-digikala-session.js";
+import { canRetryShoppingPurchase, purchaseJobApplies, readShoppingPurchases, shoppingPurchasePrefix } from "./shopping-purchase-store.js";
+import { fillDigikalaCart, shoppingPurchases } from "./shopping-purchases.js";
 
 export const shoppingMessage = "ease-shopping";
 const alarmName = "ease-shopping-check";
@@ -96,13 +96,13 @@ function showAlert(watch, quote, locale, alertedAt) {
   });
 }
 
-async function reconcile(force, queueWorkspace) {
+async function reconcile(force, queueWorkspace, retry, id) {
   const context = await currentShopping();
   const permitted = await chrome.permissions.contains(shoppingHostPermission);
   const observations = await readObservations(context.key);
   const now = Date.now();
   const pending = permitted && context.enabled ? context.watches.filter(watch =>
-    active(watch, now) && (force || watch.startAt === null || watch.startAt <= now)
+    (!id || watch.id === id) && active(watch, now) && (force || watch.startAt === null || watch.startAt <= now)
     && (force || nextCheck(watch, observations, now) <= now + 1000)) : [];
   if (!pending.length) {
     await scheduleAlarm(context, observations, permitted);
@@ -116,12 +116,13 @@ async function reconcile(force, queueWorkspace) {
     const allowed = await chrome.permissions.contains(shoppingHostPermission);
     const notify = allowed && await canNotify();
     const newest = await readObservations(context.key);
-    const { jobs, policy } = await readShoppingPurchases(context.owner);
+    const purchaseState = await readShoppingPurchases(context.owner);
+    const { jobs, policy } = purchaseState;
     const next = {};
     const checked = new Map(pending.map(watch => [watch.id, shoppingWatchKey(watch)]));
     const checkedAt = Date.now();
     const notices = [];
-    const purchaseIds = [];
+    const attempts = [];
     const updated = latest.watches.map(watch => {
       const rule = shoppingWatchKey(watch);
       const previous = newest[watch.id]?.rule === rule ? newest[watch.id] : null;
@@ -135,7 +136,10 @@ async function reconcile(force, queueWorkspace) {
       if (shoppingStatus(watch, sample, checkedAt) === "shoppingReady") {
         const job = jobs[watch.id];
         if (job?.status === "armed" && purchaseJobApplies(watch, job, policy)) {
-          purchaseIds.push(watch.id);
+          attempts.push({ id: watch.id });
+          sample.alertedAt ??= checkedAt;
+        } else if (retry && canRetryShoppingPurchase(watch, job, purchaseState)) {
+          attempts.push({ id: watch.id, retryToken: job.token });
           sample.alertedAt ??= checkedAt;
         } else if (notify && !sample.alertedAt && !job) {
           sample.alertedAt = checkedAt;
@@ -153,7 +157,7 @@ async function reconcile(force, queueWorkspace) {
     if (Object.keys(changes).length) await chrome.storage.local.set(changes);
     await scheduleAlarm(latest, next, allowed);
     await Promise.allSettled(notices.map(({ watch, quote }) => showAlert(watch, quote, latest.locale, checkedAt)));
-    return { owner: latest.owner, purchaseIds };
+    return { owner: latest.owner, attempts };
   });
 }
 
@@ -177,9 +181,9 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
   let notificationListeners = false;
   const cartRequests = new Map();
   const purchases = shoppingPurchases(queueWorkspace, currentShopping, openShopping);
-  const run = (force = false) => {
-    const check = pending.then(() => reconcile(force, queueWorkspace)).then(ready => {
-      if (ready?.purchaseIds.length) void purchases.run(ready.owner, ready.purchaseIds).catch(() => {});
+  const run = (force = false, { retry = false, id } = {}) => {
+    const check = pending.then(() => reconcile(force, queueWorkspace, retry, id)).then(ready => {
+      if (ready?.attempts.length) void purchases.run(ready.owner, ready.attempts).catch(() => {});
     });
     pending = check.catch(() => {});
     return check;
@@ -225,6 +229,14 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
         void refresh();
         return { error: "shoppingConditionsChanged" };
       }
+      if (watch.quantity > 1) {
+        const tab = await chrome.tabs.create({ url: digikalaProductUrl(watch.productId, quote.variantId) });
+        if (!Number.isInteger(tab.id) || tab.incognito || !await waitForShopTab(tab.id, isDigikalaPage)) {
+          return { error: "shoppingPurchaseConnection" };
+        }
+        await fillDigikalaCart(tab, watch, quote, { cart: "include" }, authorized);
+        return { ok: true, clicked: true };
+      }
       const clicked = await prepareDigikalaCart(watch, quote, authorized);
       return { ok: true, clicked };
     } catch (error) {
@@ -251,7 +263,7 @@ export function registerShoppingHandlers(queueWorkspace, fromWorkspacePage) {
         return ok ? { ok } : { error: action === "connect" ? "shoppingAccessDenied" : "shoppingNotificationDenied" };
       });
     } else if (action === "refresh") {
-      result = run(true).then(() => ({ ok: true }));
+      result = run(true, { retry: true, id }).then(() => ({ ok: true }));
     } else if (action === "cart") {
       result = requestCart(id);
     } else if (action === "open-checkout") {

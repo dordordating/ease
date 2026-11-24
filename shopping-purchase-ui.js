@@ -61,7 +61,7 @@ function deliveryAddressField({ node, button, t, request }, initialId, onChange)
     const placeholder = node("option", "", t(mode === "prepare" ? "shoppingPurchaseUseDefaultAddress" : "shoppingPurchaseChooseAddress"));
     placeholder.value = "";
     select.replaceChildren(placeholder, ...choices.map(choice => {
-      const option = node("option", "", choice.title || choice.detail);
+      const option = node("option", "", choice.title && choice.title !== choice.detail ? `${choice.title} · ${choice.detail}` : choice.detail);
       option.value = choice.id;
       return option;
     }));
@@ -131,6 +131,7 @@ export function purchaseEditor({ node, button, t, numberField, priceText, readAm
     ? t("shoppingPurchaseShippingAgreed", { price: priceText(state.policy.shippingLimit) })
     : t(deliveries[state.policy.delivery])));
   const consent = confirmation(node, t(job?.status === "paid" ? "shoppingPurchaseConsentAgain" : "shoppingPurchaseConsent"));
+  orderLimit.addEventListener("input", () => { consent.input.checked = false; });
   const address = deliveryAddressField({ node, button, t, request }, job?.buyer?.addressId, () => { consent.input.checked = false; });
   wallet.append(terms, node("small", "shopping-field-hint", t("shoppingPurchaseWalletHint")), consent.label);
   const hint = node("small", "shopping-field-hint");
@@ -149,6 +150,7 @@ export function purchaseEditor({ node, button, t, numberField, priceText, readAm
   root.append(fields);
   return {
     root,
+    invalidateConsent() { consent.input.checked = false; },
     read() {
       const value = mode.read();
       const payload = { mode: value };

@@ -1,4 +1,4 @@
-import { digikalaProductLink, digikalaProductUrl } from "./shopping-store.js";
+import { digikalaProductLink, digikalaProductUrl, offerFitsQuantity } from "./shopping-store.js";
 
 export function waitForShopTab(tabId, matches) {
   return new Promise(resolve => {
@@ -46,7 +46,7 @@ export async function clickDigikalaAdd({ productId, variantId, price, deadline }
 }
 
 export async function addDigikalaTabItem(tab, watch, quote, authorize) {
-  if (!quote.singleItem || !quote.variantId || !Number.isInteger(tab.id) || !chrome.tabs.onUpdated?.removeListener) return false;
+  if (!offerFitsQuantity(quote, watch.quantity) || !quote.variantId || !Number.isInteger(tab.id) || !chrome.tabs.onUpdated?.removeListener) return false;
   if (!await waitForShopTab(tab.id, url => digikalaProductLink(url)?.productId === watch.productId) || !await authorize()) return false;
   try {
     const [result] = await chrome.scripting.executeScript({

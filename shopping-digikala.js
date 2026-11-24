@@ -1,4 +1,6 @@
-import { digikalaId, digikalaImage, digikalaPrice, shoppingPriceStatus, shoppingTitle } from "./shopping-store.js";
+import {
+  digikalaId, digikalaImage, digikalaPrice, offerFitsQuantity, shoppingPriceStatus, shoppingQuantity, shoppingTitle
+} from "./shopping-store.js";
 
 const api = "https://api.digikala.com";
 export const shoppingHostPermission = { origins: [`${api}/*`, "https://www.digikala.com/*"] };
@@ -28,22 +30,44 @@ function pricesFor(raw, productStatus) {
   const reference = digikalaPrice(raw?.price?.rrp_price);
   const status = raw?.status ?? productStatus;
   const discount = current && reference ? Math.max(0, Math.floor((reference - current) * 100 / reference)) : null;
-  const minQuantity = raw?.price?.min_order_limit ?? raw?.min_order_limit ?? 1;
+  const minQuantity = shoppingQuantity(raw?.price?.min_order_limit ?? raw?.min_order_limit) ?? 1;
+  const stock = raw?.price?.marketable_stock ?? raw?.marketable_stock;
+  const orderLimit = raw?.price?.order_limit ?? raw?.order_limit;
+  const maxQuantity = Math.min(shoppingQuantity(stock) ?? Infinity, shoppingQuantity(orderLimit) ?? Infinity);
   const unavailable = unavailableStatuses.has(status) || unavailableStatuses.has(productStatus)
-    || raw?.price?.marketable_stock === 0 || raw?.price?.is_locked_for_digiplus === true;
+    || stock === 0 || raw?.price?.is_locked_for_digiplus === true;
   const available = unavailable ? false : current && availableStatuses.has(status) ? true : null;
   return { price: available ? current : null, reference: available ? reference : null,
-    discount: available ? discount : null, available, singleItem: minQuantity === 1 };
+    discount: available ? discount : null, available, minQuantity, maxQuantity: Number.isFinite(maxQuantity) ? maxQuantity : null };
+}
+
+function offerOption(raw) {
+  const dimensions = new Map();
+  function add(type, value) {
+    const title = text(typeof value === "string" ? value : value?.title_fa ?? value?.title ?? value?.name, 75);
+    const id = digikalaId(value?.id);
+    if (type && title && !dimensions.has(type)) dimensions.set(type, { id: id ?? title, title });
+  }
+  add("color", raw.color);
+  add("size", raw.size);
+  add("model", raw.model);
+  for (const theme of (Array.isArray(raw.themes) ? raw.themes.slice(0, 5) : [])) {
+    add(text(theme?.type, 30), theme?.value);
+  }
+  if (!dimensions.size) return { optionKey: null, optionLabel: "" };
+  const key = [...dimensions.keys()].sort().map(type => [type, dimensions.get(type).id]);
+  return { optionKey: JSON.stringify(key), optionLabel: [...dimensions.values()].map(item => item.title).join(" · ").slice(0, 240) };
 }
 
 function offerFor(raw, productStatus) {
   const id = digikalaId(raw?.id ?? raw?.variant_id);
   if (!id) return null;
-  const label = [raw.color?.title, raw.size?.title, raw.warranty?.title]
+  const option = offerOption(raw);
+  const label = [option.optionLabel, raw.warranty?.title_fa ?? raw.warranty?.title]
     .map(value => text(value, 90)).filter(Boolean).join(" · ");
   const sellerId = digikalaId(raw.seller?.id);
   const sellerName = text(raw.seller?.title, 120);
-  return { id, label, sellerId, sellerName, ...pricesFor(raw, productStatus) };
+  return { id, label, ...option, sellerId, sellerName, ...pricesFor(raw, productStatus) };
 }
 
 function productSummary(raw) {
@@ -114,23 +138,28 @@ export async function searchDigikala(query) {
 }
 
 export function quoteForWatch(product, watch) {
-  const { variantId } = watch;
+  const { variantId, optionKey } = watch;
+  const options = optionKey ? product.offers.filter(item => item.optionKey === optionKey) : product.offers;
   let offer;
   let noEligibleSeller = false;
-  let availability = product.unavailable || (variantId && product.hasVariants) ? false : null;
-  if (variantId) offer = product.offers.find(item => item.id === variantId);
-  else if (!watch.allSellers) offer = product.main;
+  let availability = product.unavailable || ((variantId || optionKey) && product.hasVariants) ? false : null;
+  if (variantId) offer = options.find(item => item.id === variantId);
+  else if (!watch.allSellers) {
+    offer = !optionKey || product.main?.optionKey === optionKey ? product.main : undefined;
+  }
   else {
-    const excluded = new Set(watch.excludedSellers);
-    const eligible = product.offers.filter(item => excluded.size === 0 || (item.sellerId && !excluded.has(item.sellerId)));
+    const excluded = new Set(watch.excludedSellers ?? []);
+    const eligible = options.filter(item => excluded.size === 0 || (item.sellerId && !excluded.has(item.sellerId)));
     const available = eligible.filter(item => item.available).sort((a, b) => a.price - b.price);
-    offer = available.find(item => shoppingPriceStatus(watch, item) === "shoppingReady") ?? available[0];
-    noEligibleSeller = !product.unavailable && product.hasVariants && eligible.length === 0 && excluded.size > 0;
+    offer = available.find(item => shoppingPriceStatus(watch, item) === "shoppingReady")
+      ?? available.find(item => offerFitsQuantity(item, watch.quantity)) ?? available[0];
+    noEligibleSeller = !product.unavailable && options.length > 0 && eligible.length === 0 && excluded.size > 0;
     if (product.hasVariants && eligible.length && eligible.every(item => item.available === false)) availability = false;
   }
   return { title: product.title, image: product.image, variantId: offer?.id ?? variantId,
     variantLabel: offer?.label ?? "", sellerId: offer?.sellerId ?? null, sellerName: offer?.sellerName ?? "",
+    optionKey: offer?.optionKey ?? optionKey ?? null, optionLabel: offer?.optionLabel || watch.optionLabel || "",
     price: offer?.price ?? null, reference: offer?.reference ?? null,
     available: offer ? offer.available : availability, ...(noEligibleSeller ? { noEligibleSeller } : {}),
-    singleItem: offer?.singleItem ?? false, discount: offer?.discount ?? null };
+    minQuantity: offer?.minQuantity ?? 1, maxQuantity: offer?.maxQuantity ?? null, discount: offer?.discount ?? null };
 }

@@ -22,6 +22,7 @@ export async function readDigikalaFromPage(kind, option) {
   const addressHeaders = { ...gateway, "X-Client": "web", "Accept-Language": "fa" };
   const addresses = "/address/v2/addresses";
   const validId = value => typeof value === "string" && /^[a-z\d][a-z\d_-]{0,79}$/iu.test(value);
+  const apiId = value => Number.isSafeInteger(Number(value)) && String(Number(value)) === value ? Number(value) : value;
 
   async function request(path, headers = {}, method = "GET", data) {
     const settings = { method, credentials: "include", cache: "no-store", redirect: "manual",
@@ -64,11 +65,12 @@ export async function readDigikalaFromPage(kind, option) {
   }
   if (kind === "default-address") return request(addresses + "/default", addressHeaders);
   if (kind === "select-address" && validId(option)) {
-    const number = Number(option);
-    const addressId = Number.isSafeInteger(number) && String(number) === option ? number : option;
-    return request(addresses + "/default", addressHeaders, "POST", { addressId });
+    return request(addresses + "/default", addressHeaders, "POST", { addressId: apiId(option) });
   }
   if (kind === "cart") return request("/checkout/v1/carts", gateway);
+  if (kind === "cart-quantity" && validId(option?.id) && Number.isSafeInteger(option.quantity) && option.quantity > 0) {
+    return request("/checkout/v1/carts/items", gateway, "PATCH", { cartItemId: apiId(option.id), quantity: option.quantity });
+  }
   if (kind === "invoice") return request("/checkout/v1/payments", gateway);
   if (kind === "legacy-invoice") return request("/v3/payment/", gateway);
   if (kind === "receipt" && validId(option?.id) && validId(option?.code)) {

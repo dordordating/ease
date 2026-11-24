@@ -2,14 +2,14 @@ import { shoppingMessage } from "./shopping-background.js";
 import { shoppingHostPermission, shoppingNotificationPermission } from "./shopping-digikala.js";
 import {
   digikalaPrice, digikalaProductLink, digikalaProductUrl, digikalaSearchUrl, parseShoppingNumber,
-  shoppingNumberDigits, shoppingPollMinutes, shoppingReadErrors, shoppingStatus, shoppingWatchKey
+  offerFitsQuantity, shoppingNumberDigits, shoppingPollMinutes, shoppingQuantity, shoppingReadErrors, shoppingStatus, shoppingWatchKey
 } from "./shopping-store.js";
 import { createShoppingSellerPicker } from "./shopping-sellers.js";
-import { shoppingPurchaseStatus } from "./shopping-purchase-store.js";
+import { canRetryShoppingPurchase, shoppingPurchaseStatus } from "./shopping-purchase-store.js";
 import { openPurchaseSettings, purchaseEditor } from "./shopping-purchase-ui.js";
 import { createDatePicker } from "./date-picker.js";
 import { createTimePicker } from "./time-picker.js";
-import { localTaskDay } from "./todo-store.js";
+import { localTaskDay, taskTimestamp } from "./todo-store.js";
 
 const request = (action, data) => chrome.runtime.sendMessage({ type: shoppingMessage, action, ...data })
   .catch(() => ({ error: "shoppingUnavailable" }));
@@ -252,14 +252,23 @@ export function renderShopping(root, options) {
     const productId = watch?.productId ?? product.id;
     const sample = watch && observations[watch.id];
     const currentQuote = sample && sample.rule === shoppingWatchKey(watch) ? sample.quote : null;
+    const liveQuote = currentQuote && !sample.error && Date.now() - sample.checkedAt <= 3 * shoppingPollMinutes * 60_000 ? currentQuote : null;
     let title = product?.title ?? currentQuote?.title ?? watch?.title;
     let image = product?.image ?? currentQuote?.image ?? watch?.image;
     const pickers = [];
+    let action;
+    const changed = () => action?.invalidateConsent();
     const fields = openEditor(t(watch ? "shoppingEdit" : "shoppingNew"), t("save"), async () => {
       const limit = cap.value.trim() ? readAmount(cap) : null;
       const discount = percent.value.trim() ? parseShoppingNumber(percent.value) : null;
-      const startAt = starts();
-      const endAt = ends();
+      const count = readQuantity();
+      const startAt = starts.read();
+      const endAt = ends.read();
+      if (!count) {
+        quantity.focus();
+        reportError("shoppingInvalidQuantity");
+        return false;
+      }
       if ((limit !== null && !digikalaPrice(limit)) || (discount !== null && (!Number.isInteger(discount) || discount < 1 || discount > 99))) {
         reportError("shoppingInvalidThreshold");
         return false;
@@ -276,7 +285,7 @@ export function renderShopping(root, options) {
         return false;
       }
       const saved = await mutate("shopping-save", {
-        id: watch?.id, productId, title, image, ...picker.selection(), priceLimit: limit, discount, startAt, endAt,
+        id: watch?.id, productId, title, image, ...picker.selection(), quantity: count, priceLimit: limit, discount, startAt, endAt,
         purchase: checkout.payload
       });
       if (saved) {
@@ -295,17 +304,32 @@ export function renderShopping(root, options) {
     const headingName = titleOf(title, "shopping-product-title");
     offerCopy.append(headingName, preview);
     heading.append(thumb(image), offerCopy);
-    let main = product?.main ?? product;
-    const picker = createShoppingSellerPicker({ node, t, locale, watch, variantId: selected, offers: product?.offers,
-      onChange(offer, mode) {
-        const observed = offer && currentQuote?.variantId === offer.id ? currentQuote : null;
-        const value = offer?.price ?? observed?.price ?? (mode === "default" ? main?.price : null);
-        preview.replaceChildren(...(value ? [price(value)] : []));
-      }
-    });
-    const thresholds = node("div", "shopping-field-row");
+    const thresholds = node("div", "shopping-field-row shopping-thresholds");
     const cap = numberField(thresholds, t("shoppingCeiling"), watch?.priceLimit ? watch.priceLimit / 10 : null);
     const percent = numberField(thresholds, t("shoppingDiscount"), watch?.discount, false);
+    const quantity = numberField(thresholds, t("shoppingQuantity"), watch?.quantity ?? 1, false);
+    quantity.placeholder = numbers.format(1);
+    const readQuantity = () => shoppingQuantity(parseShoppingNumber(quantity.value));
+    let customCap = watch?.priceLimit != null;
+    cap.addEventListener("input", () => { customCap = true; changed(); });
+    percent.addEventListener("input", changed);
+    const picker = createShoppingSellerPicker({ node, t, locale, watch, variantId: selected, product, readQuantity, onEdit: changed,
+      onChange(offer, catalogReady) {
+        const observed = (offer ? liveQuote?.variantId === offer.id : !catalogReady) ? liveQuote : null;
+        const value = offer?.price ?? (offer?.available === false ? null : observed?.price);
+        if (!customCap) cap.value = value ? amounts.format(Math.ceil(value / 10)) : "";
+        const labels = [];
+        const model = offer?.optionLabel || offer?.label || observed?.optionLabel || observed?.variantLabel;
+        const seller = offer?.sellerName || observed?.sellerName;
+        if (model) labels.push(node("bdi", "", model));
+        if (seller) labels.push(node("bdi", "", seller));
+        if (value) labels.push(price(value));
+        if (offer?.available === false) labels.push(node("span", "", t("shoppingOutOfStock")));
+        else if (offer && !offerFitsQuantity(offer, readQuantity() ?? 1)) labels.push(node("span", "", t("shoppingWaitingQuantity")));
+        preview.replaceChildren(...labels);
+      }
+    });
+    quantity.addEventListener("input", () => { picker.refresh(); changed(); });
     const ruleHint = node("small", "shopping-field-hint", t("shoppingRuleHint"));
     ruleHint.id = "shopping-rule-hint";
     cap.setAttribute("aria-describedby", ruleHint.id);
@@ -316,39 +340,59 @@ export function renderShopping(root, options) {
     const dates = node("div", "snippet-advanced-fields");
     schedule.append(node("summary", "", t("shoppingSchedule")), dates);
 
-    function dateTime(label, timestamp, defaultTime) {
+    const clockText = date => [date.getHours(), date.getMinutes()].map(unit => String(unit).padStart(2, "0")).join(":");
+    let customEnd = watch?.endAt != null;
+    function suggestEnd() {
+      if (customEnd) return;
+      const value = starts.read();
+      ends.set(starts.time.value && Number.isFinite(value) ? new Date(value + 60 * 60_000) : null);
+    }
+
+    function dateTime(label, timestamp, isStart, onEdit) {
       const instant = timestamp ? new Date(timestamp) : undefined;
       const row = node("div", "shopping-field-row shopping-datetime");
-      const timeText = instant ? `${String(instant.getHours()).padStart(2, "0")}:${String(instant.getMinutes()).padStart(2, "0")}` : "";
+      let dateSelected = Boolean(instant);
       const calendar = createDatePicker({
-        dateLocale, firstDay, label: t(label), t, icon, value: instant ? localTaskDay(0, instant) : "",
+        dateLocale, firstDay, label: t(label), t, icon, value: instant ? localTaskDay(0, instant) : isStart ? localTaskDay() : "",
+        onChange() { dateSelected = Boolean(calendar.value); onEdit(); changed(); },
         onOpen(panel) { for (const other of pickers) if (other.panel !== panel) other.close(); }
       });
       pickers.push(calendar);
-      const time = createTimePicker({ locale, label: t("todoTime"), t, value: timeText });
+      const time = createTimePicker({ locale, label: t("todoTime"), t, value: instant ? clockText(instant) : "" });
+      time.element.addEventListener("input", () => { onEdit(); changed(); });
       const timeWrapper = node("div", "field");
       timeWrapper.append(node("span", "", t("todoTime")), time.element);
       row.append(calendar.field, timeWrapper, calendar.panel);
       dates.append(row);
-      return () => calendar.value ? new Date(`${calendar.value}T${time.value || defaultTime}:00`).getTime() : (time.value ? NaN : null);
+      return {
+        time,
+        read() {
+          if (!time.value && !dateSelected) return null;
+          return taskTimestamp(calendar.value, time.value || (isStart ? "00:00" : "23:59")) ?? NaN;
+        },
+        set(date) {
+          dateSelected = Boolean(date);
+          calendar.setValue(date ? localTaskDay(0, date) : "");
+          time.value = date ? clockText(date) : "";
+        }
+      };
     }
-    const starts = dateTime("shoppingStarts", watch?.startAt, "00:00");
-    const ends = dateTime("shoppingEnds", watch?.endAt, "23:59");
-    const action = purchaseEditor({ node, button, t, numberField, priceText, readAmount, request }, purchases, purchases.jobs[watch?.id]);
+    const starts = dateTime("shoppingStarts", watch?.startAt, true, suggestEnd);
+    const ends = dateTime("shoppingEnds", watch?.endAt, false, () => { customEnd = true; });
+    action = purchaseEditor({ node, button, t, numberField, priceText, readAmount, request }, purchases, purchases.jobs[watch?.id]);
     fields.append(heading, picker.root, thresholds, ruleHint, schedule, action.root);
     editor.showModal();
     if (focusSeller) picker.focus();
     else cap.focus();
     if (connected && !product?.offers && !product?.fromLink) request("lookup", { input: digikalaProductUrl(productId, selected) }).then(response => {
       if (editor.open && fields.isConnected && response?.product) {
-        main = response.product.main;
         title = response.product.title;
         headingName.textContent = title;
         if (response.product.image) {
           image = response.product.image;
           heading.firstElementChild.replaceWith(thumb(image));
         }
-        picker.update(response.product.offers);
+        picker.update(response.product);
       }
     });
   }
@@ -385,7 +429,7 @@ export function renderShopping(root, options) {
     card.dataset.state = status;
     const head = node("div", "shopping-card-heading");
     const labels = node("div", "shopping-card-title");
-    const variant = watch.variantLabel || quote?.variantLabel;
+    const variant = watch.optionLabel || quote?.optionLabel || watch.variantLabel || quote?.variantLabel;
     labels.append(titleOf(name, "shopping-product-title"));
     const sellerName = quote?.sellerName || watch.sellerName;
     if (variant) {
@@ -415,6 +459,7 @@ export function renderShopping(root, options) {
     const terms = node("div", "shopping-terms");
     if (watch.priceLimit) terms.append(node("span", "", t("shoppingTarget", { price: priceText(watch.priceLimit) })));
     if (watch.discount) terms.append(node("span", "", t("shoppingTargetDiscount", { discount: percentages.format(watch.discount / 100) })));
+    if (watch.quantity > 1) terms.append(node("span", "", t("shoppingQuantityBadge", { count: numbers.format(watch.quantity) })));
     if (watch.startAt && status === "shoppingScheduled") terms.append(node("span", "", dates.format(watch.startAt)));
     if (terms.childElementCount) values.append(terms);
     if (liveSample?.checkedAt) values.append(node("small", "shopping-checked", t("shoppingCheckedAt", { date: dates.format(liveSample.checkedAt) })));
@@ -443,18 +488,30 @@ export function renderShopping(root, options) {
       const statusText = node("span", "", job.orderId ? t("shoppingPurchaseOrder", { order: job.orderId }) : t(purchaseStatus));
       if (job.status === "running" || job.status === "submitting") checkout.setAttribute("role", "status");
       checkout.append(statusText);
-      if (["review", "prepared", "paid", "unknown"].includes(job.status)) {
+      if (purchaseStatus === "shoppingPurchaseRearm") {
+        const edit = button(t("shoppingEdit"), "secondary-button shopping-checkout-link", { symbol: "edit", onClick: () => editWatch(watch) });
+        edit.id = `shopping-checkout-${watch.id}`;
+        checkout.append(edit);
+      } else if (["review", "prepared", "paid", "unknown"].includes(job.status)) {
+        const controls = node("div", "shopping-checkout-actions");
+        if (ready && canRetryShoppingPurchase(watch, job, purchases)) {
+          const retry = button(t("shoppingPurchaseRetry"), "icon-button shopping-checkout-retry", { symbol: "refresh", iconOnly: true, onClick: async () => {
+            retry.disabled = true;
+            const result = await request("refresh", { id: watch.id });
+            retry.disabled = false;
+            if (result?.error) reportError(result.error);
+          }});
+          retry.id = `shopping-checkout-retry-${watch.id}`;
+          controls.append(retry);
+        }
         const open = button(t(job.status === "unknown" || job.status === "paid" ? "shoppingPurchaseOpenOrders" : "shoppingPurchaseOpenCheckout"),
           "secondary-button shopping-checkout-link", { symbol: "open-window", onClick: async () => {
             const result = await request("open-checkout", { id: watch.id });
             if (result?.error) reportError(result.error);
           }});
         open.id = `shopping-checkout-${watch.id}`;
-        checkout.append(open);
-      } else if (purchaseStatus === "shoppingPurchaseRearm") {
-        const edit = button(t("shoppingEdit"), "secondary-button shopping-checkout-link", { symbol: "edit", onClick: () => editWatch(watch) });
-        edit.id = `shopping-checkout-${watch.id}`;
-        checkout.append(edit);
+        controls.append(open);
+        checkout.append(controls);
       }
       card.append(checkout);
     }

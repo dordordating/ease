@@ -1,10 +1,16 @@
 import { normalizeSearchText } from "./workspace-search.js";
+import { offerFitsQuantity } from "./shopping-store.js";
 
-export function createShoppingSellerPicker({ node, t, locale, watch, variantId, offers, onChange }) {
+export function createShoppingSellerPicker({ node, t, locale, watch, variantId, product, readQuantity, onChange, onEdit }) {
   const numbers = new Intl.NumberFormat(locale);
   const excluded = new Set(watch?.excludedSellers);
   const offeredSellers = new Map();
+  const options = new Map();
   const root = node("div", "shopping-seller-picker");
+  const productField = node("label", "field");
+  const productOptions = node("select", "shopping-product-options");
+  productOptions.id = "shopping-product-option";
+  productField.append(node("span", "", t("shoppingProductOption")), productOptions);
   const sellerField = node("label", "field");
   const sellers = node("select", "shopping-seller-select");
   sellers.id = "shopping-seller";
@@ -29,18 +35,23 @@ export function createShoppingSellerPicker({ node, t, locale, watch, variantId, 
   filter.append(filterHeading, filterBody);
   filter.open = excluded.size > 0;
   const hint = node("small", "shopping-field-hint", t("shoppingSellerListPending"));
-  root.append(sellerField, optionField, filter, hint);
+  root.append(productField, sellerField, optionField, filter, hint);
 
   let catalog = [];
   let catalogReady = false;
   let activeOffer;
+  let main;
+  let items = [];
+  let known = new Set();
   const selection = () => ({
     allSellers: sellers.value === "all",
     excludedSellers: sellers.value === "all" ? [...excluded] : [],
     variantId: activeOffer?.id ?? null,
     variantLabel: activeOffer?.label ?? "",
     sellerId: activeOffer?.sellerId ?? null,
-    sellerName: activeOffer?.sellerName ?? ""
+    sellerName: activeOffer?.sellerName ?? "",
+    optionKey: activeOffer ? null : productOptions.value || null,
+    optionLabel: activeOffer ? "" : options.get(productOptions.value) ?? ""
   });
 
   function renderCount() {
@@ -64,6 +75,8 @@ export function createShoppingSellerPicker({ node, t, locale, watch, variantId, 
         if (choice.checked) excluded.delete(group.id);
         else excluded.add(group.id);
         renderCount();
+        updateOffer();
+        onEdit();
       });
       label.append(choice, name);
       return label;
@@ -86,21 +99,23 @@ export function createShoppingSellerPicker({ node, t, locale, watch, variantId, 
     updateOffer();
   }
 
-  function updateOffer() {
-    activeOffer = offeredSellers.get(sellers.value)?.offers.find(item => item.id === variants.value);
-    onChange(activeOffer, sellers.value);
+  function currentItems() {
+    return productOptions.value ? items.filter(offer => offer.optionKey === productOptions.value) : items;
   }
 
-  function update(nextOffers, desired = selection()) {
-    offeredSellers.clear();
-    catalogReady = Array.isArray(nextOffers);
-    const items = nextOffers ? [...nextOffers] : [];
-    if (desired.variantId && !items.some(item => item.id === desired.variantId)) items.push({
-      id: desired.variantId, label: desired.variantLabel, sellerId: desired.sellerId, sellerName: desired.sellerName
-    });
+  function updateOffer() {
+    activeOffer = offeredSellers.get(sellers.value)?.offers.find(item => item.id === variants.value);
+    const eligible = currentItems().filter(item => item.available && !excluded.has(item.sellerId))
+      .sort((a, b) => a.price - b.price);
+    const best = eligible.find(item => offerFitsQuantity(item, readQuantity())) ?? eligible[0];
+    const offer = activeOffer ?? (sellers.value === "default" ? main : best ?? (!catalogReady ? main : null));
+    onChange(offer, catalogReady);
+  }
 
+  function renderSellers(desired, previousSeller) {
+    offeredSellers.clear();
     let preferred;
-    for (const item of items) {
+    for (const item of currentItems()) {
       const key = item.sellerId ? `seller-${item.sellerId}` : `offer-${item.id}`;
       if (!offeredSellers.has(key)) offeredSellers.set(key, {
         id: item.sellerId, name: item.sellerName || item.label || t("shoppingLinkedOffer"), offers: []
@@ -108,24 +123,51 @@ export function createShoppingSellerPicker({ node, t, locale, watch, variantId, 
       offeredSellers.get(key).offers.push(item);
       if (item.id === desired.variantId) preferred = key;
     }
-    const known = new Set((nextOffers ?? []).filter(item => item.sellerId && item.sellerName).map(item => item.sellerId));
     catalog = [...offeredSellers.values()].filter(group => known.has(group.id));
+    const showMain = !productOptions.value || productOptions.value === main?.optionKey;
+    const preserveSeller = previousSeller && offeredSellers.has(previousSeller);
     sellers.replaceChildren(
       new Option(t("shoppingAllowedSellers"), "all"),
-      new Option(t("shoppingDefaultOffer"), "default"),
+      ...(showMain ? [new Option(t("shoppingDefaultOffer"), "default")] : []),
       ...[...offeredSellers].map(([key, group]) => new Option(group.name, key))
     );
-    sellers.value = preferred ?? (desired.allSellers ? "all" : "default");
+    sellers.value = preferred ?? (preserveSeller ? previousSeller : desired.allSellers || !showMain || desired.variantId ? "all" : "default");
     showOptions(desired.variantId);
     renderFilter();
   }
 
+  function update(next, desired = selection(), desiredOption = productOptions.value) {
+    main = next?.main ?? next;
+    catalogReady = Array.isArray(next?.offers);
+    items = [...(next?.offers ?? [])];
+    known = new Set(items.filter(item => item.sellerId && item.sellerName).map(item => item.sellerId));
+    if (desired.variantId && !items.some(item => item.id === desired.variantId)) items.push({
+      id: desired.variantId, label: desired.variantLabel, sellerId: desired.sellerId, sellerName: desired.sellerName,
+      optionKey: desiredOption, optionLabel: desired.optionLabel, available: catalogReady ? false : undefined
+    });
+    options.clear();
+    for (const offer of items) if (offer.optionKey) options.set(offer.optionKey, offer.optionLabel || t("shoppingOffer"));
+    if (desiredOption && !options.has(desiredOption)) options.set(desiredOption, desired.optionLabel || t("shoppingOffer"));
+    const selected = desiredOption || items.find(item => item.id === desired.variantId)?.optionKey || "";
+    productOptions.replaceChildren(new Option(t("shoppingAnyProductOption"), ""),
+      ...[...options].map(([id, label]) => new Option(label, id)));
+    productOptions.value = selected;
+    productField.hidden = !options.size;
+    renderSellers(desired);
+  }
+
+  productOptions.addEventListener("change", () => {
+    const desired = selection();
+    renderSellers(desired, sellers.value);
+    onEdit();
+  });
   sellers.addEventListener("change", () => {
     if (sellers.value === "all") filter.open = true;
     showOptions();
+    onEdit();
   });
-  variants.addEventListener("change", updateOffer);
+  variants.addEventListener("change", () => { updateOffer(); onEdit(); });
   search.addEventListener("input", renderFilter);
-  update(offers, watch ?? { variantId, allSellers: !variantId });
-  return { root, update, selection, focus: () => sellers.focus() };
+  update(product, watch ?? { variantId, allSellers: !variantId }, watch?.optionKey);
+  return { root, update, selection, refresh: updateOffer, focus: () => sellers.focus() };
 }

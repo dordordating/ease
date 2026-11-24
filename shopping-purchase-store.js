@@ -30,9 +30,13 @@ export function purchaseJobApplies(watch, job, policy) {
   return job?.rule === shoppingWatchKey(watch) && (job.mode === "prepare" || JSON.stringify(job.policy) === JSON.stringify(policy));
 }
 
+export function canRetryShoppingPurchase(watch, job, state) {
+  return job?.status === "review" && !state.payment && purchaseJobApplies(watch, job, state.policy);
+}
+
 export function shoppingPurchaseStatus(watch, job, policy) {
   if (!job) return null;
-  if (job.status === "armed" && !purchaseJobApplies(watch, job, policy)) return "shoppingPurchaseRearm";
+  if ((job.status === "armed" || job.status === "review") && !purchaseJobApplies(watch, job, policy)) return "shoppingPurchaseRearm";
   if (job.status === "submitting" || job.status === "running") return "shoppingPurchaseWorking";
   if (job.status === "paid") return "shoppingPurchasePaid";
   if (job.status === "unknown") return "shoppingPurchaseUnknown";
@@ -41,12 +45,14 @@ export function shoppingPurchaseStatus(watch, job, policy) {
   return job.status === "armed" ? "shoppingPurchaseArmed" : null;
 }
 
-export function checkoutCartIssue(cart, watch, offer, policy, { requireTarget = true } = {}) {
+export function checkoutCartIssue(cart, watch, offer, policy, { requireTarget = true, allowFewer = false } = {}) {
   if (!cart || cart.extraServices) return "shoppingPurchaseReview";
   const matching = cart.items.filter(item => item.variantId === offer.variantId);
   if (matching.length > 1 || (requireTarget && matching.length !== 1)) return "shoppingPurchaseCartChanged";
   const target = matching[0];
-  if (target && (target.quantity !== 1 || (target.productId && target.productId !== watch.productId)
+  const quantity = watch.quantity ?? 1;
+  if (target && ((allowFewer ? target.quantity > quantity : target.quantity !== quantity)
+    || (target.productId && target.productId !== watch.productId)
     || (target.sellerId && target.sellerId !== offer.sellerId) || (target.price !== null && target.price !== offer.price))) {
     return "shoppingPurchaseCartChanged";
   }

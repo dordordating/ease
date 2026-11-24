@@ -31,13 +31,20 @@ export function readCheckoutCart(data, raw = data?.cart_data ?? data?.cart, rawI
     if (raw.total_quantity !== 0) return null;
     rawItems = [];
   }
-  const items = rawItems.map(row => ({
-    variantId: digikalaId(row?.variant_id ?? row?.variant?.id),
-    productId: digikalaId(row?.product?.id),
-    sellerId: digikalaId(row?.variant?.seller?.id),
-    quantity: row?.quantity,
-    price: digikalaPrice(row?.price?.selling_price ?? row?.variant?.price?.selling_price)
-  }));
+  const items = rawItems.map(row => {
+    const id = opaqueId(row?.id);
+    const unit = digikalaPrice(row?.variant?.price?.selling_price);
+    const amount = digikalaPrice(row?.price?.selling_price);
+    const price = unit && amount === unit * row.quantity ? unit : amount ?? unit;
+    return {
+      ...(id ? { id } : {}),
+      variantId: digikalaId(row?.variant_id ?? row?.variant?.id),
+      productId: digikalaId(row?.product?.id),
+      sellerId: digikalaId(row?.variant?.seller?.id),
+      quantity: row?.quantity,
+      price
+    };
+  });
   const id = opaqueId(raw.id);
   if ((items.length && !id) || items.some(row => !row.variantId || !Number.isSafeInteger(row.quantity) || row.quantity < 1)
     || items.reduce((sum, row) => sum + row.quantity, 0) !== raw.total_quantity) return null;
@@ -59,6 +66,14 @@ export async function loadDigikalaCart(tabId) {
   const cart = readCheckoutCart(data);
   if (!cart) throw new DigikalaCheckoutError("shoppingPurchaseReview");
   return cart;
+}
+
+export async function setDigikalaCartQuantity(tabId, itemId, quantity) {
+  const result = await readDigikalaInTab(tabId, "cart-quantity", { id: itemId, quantity });
+  if (result.status === 400 || result.status === 409 || result.status === 422) {
+    throw new DigikalaCheckoutError("shoppingWaitingQuantity");
+  }
+  requireResponse(result);
 }
 
 async function readDigikalaAccount(tabId) {

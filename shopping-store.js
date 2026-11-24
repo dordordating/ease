@@ -71,6 +71,14 @@ export function digikalaPrice(value) {
   return Number.isSafeInteger(value) && value > 0 && value <= maxPriceRials ? value : null;
 }
 
+export function shoppingQuantity(value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+export function offerFitsQuantity(offer, quantity = 1) {
+  return quantity >= (offer.minQuantity ?? 1) && quantity <= (offer.maxQuantity ?? Infinity);
+}
+
 export function shoppingAvailable(locale, {
   timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone,
   languages = [...(globalThis.navigator?.languages ?? []), globalThis.chrome?.i18n?.getUILanguage?.()]
@@ -113,12 +121,16 @@ function normalizeWatch(source) {
   const discount = source.discount ?? null;
   const startAt = source.startAt ?? null;
   const endAt = source.endAt ?? null;
+  const quantity = shoppingQuantity(source.quantity ?? 1);
+  const optionKey = source.optionKey ?? null;
+  const optionLabel = optionKey ? watchText(source.optionLabel, 240) : "";
   const sellerId = variantId && digikalaId(source.sellerId);
   const sellerName = variantId ? watchText(source.sellerName, 120) : "";
   const allSellers = !variantId && source.allSellers === true;
   const exclusions = allSellers ? source.excludedSellers ?? [] : [];
   if (!Array.isArray(exclusions) || exclusions.length > 500 || exclusions.some(id => !digikalaId(id))) return null;
-  if ((source.variantId != null && !variantId) || (source.priceLimit != null && !priceLimit)
+  if (!quantity || (optionKey !== null && (typeof optionKey !== "string" || !optionKey || optionKey.length > 1400))
+    || (source.variantId != null && !variantId) || (source.priceLimit != null && !priceLimit)
     || (discount !== null && (!Number.isInteger(discount) || discount < 1 || discount > 99))
     || (startAt !== null && !timestamp(startAt)) || (endAt !== null && !timestamp(endAt))
     || (startAt !== null && endAt !== null && endAt <= startAt)) return null;
@@ -128,6 +140,8 @@ function normalizeWatch(source) {
     variantLabel: variantId ? watchText(source.variantLabel, 180) : "",
     image: digikalaImage(source.image),
     paused: source.paused === true,
+    ...(quantity !== 1 ? { quantity } : {}),
+    ...(optionKey ? { optionKey, optionLabel } : {}),
     ...(sellerId ? { sellerId } : {}),
     ...(sellerName ? { sellerName } : {}),
     ...(allSellers ? { allSellers, excludedSellers: [...new Set(exclusions.map(digikalaId))].sort() } : {})
@@ -151,6 +165,8 @@ export function restoreShopping(value) {
 export function shoppingWatchKey(watch) {
   const terms = [watch.productId, watch.variantId, watch.priceLimit, watch.discount, watch.startAt, watch.endAt];
   if (watch.allSellers) terms.push(watch.excludedSellers);
+  // Keep existing one-unit approvals and observations usable after the upgrade.
+  if (watch.optionKey || (watch.quantity ?? 1) !== 1) terms.push({ option: watch.optionKey ?? null, quantity: watch.quantity ?? 1 });
   return JSON.stringify(terms);
 }
 
@@ -195,6 +211,7 @@ export function shoppingStatus(watch, observation, now = Date.now()) {
 }
 
 export function shoppingPriceStatus(watch, quote) {
+  if (!offerFitsQuantity(quote, watch.quantity)) return "shoppingWaitingQuantity";
   if (watch.priceLimit !== null && quote.price > watch.priceLimit) return "shoppingWaitingPrice";
   if (watch.discount !== null && (quote.discount === null || quote.discount < watch.discount)) {
     return "shoppingWaitingDiscount";

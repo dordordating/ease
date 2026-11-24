@@ -4,10 +4,11 @@ import {
   checkoutInvoice, readCheckoutCart, readDigikalaDeliveryChoices, readDigikalaBuyer, selectDigikalaDeliveryAddress
 } from "../shopping-checkout-digikala.js";
 import { readDigikalaFromPage } from "../shopping-digikala-session.js";
+import { quoteForWatch, readDigikalaProduct } from "../shopping-digikala.js";
 import {
-  checkoutCartIssue, checkoutCostIssue, checkoutItemsKey, purchaseJobApplies, shoppingPurchasePolicy
+  canRetryShoppingPurchase, checkoutCartIssue, checkoutCostIssue, checkoutItemsKey, purchaseJobApplies, shoppingPurchasePolicy
 } from "../shopping-purchase-store.js";
-import { parseShoppingNumber, shoppingAvailable, shoppingWatchKey } from "../shopping-store.js";
+import { parseShoppingNumber, shoppingAvailable, shoppingPriceStatus, shoppingWatchKey, updateShopping } from "../shopping-store.js";
 
 const watch = {
   productId: "123", variantId: "216", priceLimit: 890_000, discount: 10,
@@ -52,6 +53,60 @@ test("wallet approval binds the watch and purchase settings", () => {
   assert.ok(!purchaseJobApplies(watch, job, policy("include", "max", 140_000)));
   assert.ok(!purchaseJobApplies(watch, job, policy("review", "separate")));
   assert.ok(!purchaseJobApplies({ ...watch, discount: 15 }, job, approved));
+  assert.ok(!purchaseJobApplies({ ...watch, quantity: 2 }, job, approved));
+  assert.ok(!purchaseJobApplies({ ...watch, optionKey: "blue" }, job, approved));
+});
+
+test("a refreshed checkout can retry an eligible review before payment", () => {
+  const approved = policy("review");
+  const job = { status: "review", mode: "wallet", rule: shoppingWatchKey(watch), policy: approved };
+  const state = { policy: approved };
+  assert.equal(canRetryShoppingPurchase(watch, job, state), true);
+  assert.equal(canRetryShoppingPurchase(watch, job, { ...state, payment: { token: "pending" } }), false);
+  assert.equal(canRetryShoppingPurchase(watch, job, { policy: policy("include") }), false);
+  for (const status of ["paid", "unknown", "prepared", "submitting", "armed"]) {
+    assert.equal(canRetryShoppingPurchase(watch, { ...job, status }, state), false);
+  }
+});
+
+test("cart verification permits a partial quantity during setup and requires the exact quantity for checkout", () => {
+  const three = { ...watch, quantity: 3 };
+  const approved = policy("review");
+  assert.equal(checkoutCartIssue(cart(item), three, offer, approved, { allowFewer: true }), null);
+  assert.equal(checkoutCartIssue(cart(item), three, offer, approved), "shoppingPurchaseCartChanged");
+  assert.equal(checkoutCartIssue(cart({ ...item, quantity: 3 }), three, offer, approved), null);
+  assert.equal(checkoutCartIssue(cart({ ...item, quantity: 4 }), three, offer, approved, { allowFewer: true }), "shoppingPurchaseCartChanged");
+});
+
+test("available sellers are constrained to the chosen product option and quantity", async t => {
+  const variant = (id, color, seller, price, stock, maximum) => ({
+    id, color, seller: { id: seller, title: `Seller ${seller}` }, status: "marketable",
+    price: { selling_price: price, rrp_price: 1_100_000, marketable_stock: stock, order_limit: maximum }
+  });
+  const blue = { id: 4, title: "Blue" };
+  const black = { id: 7, title: "Black" };
+  const product = {
+    id: 123, title_fa: "Sample", status: "marketable",
+    default_variant: variant(216, black, 441, 500_000, 30, 7),
+    variants: [variant(217, blue, 442, 650_000, 6, 1), variant(218, blue, 443, 730_000, 4, 7)]
+  };
+  t.mock.method(globalThis, "fetch", async () => Response.json({ data: { product } }));
+  const details = await readDigikalaProduct("123");
+  const option = details.offers[1];
+  const rule = { ...watch, variantId: null, allSellers: true,
+    optionKey: option.optionKey, optionLabel: option.optionLabel, quantity: 3 };
+  assert.ok(option.optionKey);
+  assert.equal(option.optionLabel, "Blue");
+  assert.equal(quoteForWatch(details, rule).sellerId, "443");
+  assert.equal(quoteForWatch(details, { ...rule, quantity: 1 }).sellerId, "442");
+  const excluded = { ...rule, excludedSellers: ["443"] };
+  assert.equal(shoppingPriceStatus(excluded, quoteForWatch(details, excluded)), "shoppingWaitingQuantity");
+  assert.equal(quoteForWatch(details, { ...rule, variantId: "216" }).available, false);
+  const workspace = { shopping: [] };
+  assert.equal(updateShopping(workspace, "shopping-save", rule), undefined);
+  assert.equal(workspace.shopping[0].quantity, 3);
+  assert.equal(workspace.shopping[0].optionKey, option.optionKey);
+  assert.equal(updateShopping(workspace, "shopping-save", { ...rule, quantity: 0 }), "shoppingInvalidRule");
 });
 
 test("wallet invoices require a consistent cart and identifiable shipping", () => {
@@ -69,6 +124,9 @@ test("wallet invoices require a consistent cart and identifiable shipping", () =
     price_types_cart_data: { wallet: { ...raw, payable_price: 980_000, items: [row] } }
   };
   assert.deepEqual(readCheckoutCart({ cart: raw, packages: [{ cart_items: [row] }] }).items, [item]);
+  const line = { ...row, quantity: 2, price: { selling_price: 1_700_000 },
+    variant: { ...row.variant, price: { selling_price: 850_000 } } };
+  assert.equal(readCheckoutCart({ cart: { ...raw, total_quantity: 2 }, cart_items: [line] }).items[0].price, 850_000);
   assert.equal(readCheckoutCart({ cart: raw, cart_items: [] }), null);
   const invoice = checkoutInvoice(data, true);
   assert.equal(invoice.total, 980_000);
@@ -114,6 +172,22 @@ test("Digikala session reads recognize a bare profile and use the store's renewa
   globalThis.location.origin = "https://example.com";
   assert.equal(await readDigikalaFromPage("profile"), null);
   assert.equal(requests.length, 4);
+});
+
+test("cart quantity uses Digikala's exact cart item update", async t => {
+  globalThis.location = { origin: "https://www.digikala.com" };
+  t.after(() => { delete globalThis.location; });
+  let count = 0;
+  t.mock.method(globalThis, "fetch", async (url, params) => {
+    count += 1;
+    assert.equal(url, "https://api.digikala.com/checkout/v1/carts/items");
+    assert.equal(params.method, "PATCH");
+    assert.deepEqual(JSON.parse(params.body), { cartItemId: 123, quantity: 3 });
+    return new Response(null, { status: 204 });
+  });
+  assert.equal((await readDigikalaFromPage("cart-quantity", { id: "123", quantity: 3 })).status, 204);
+  assert.equal(await readDigikalaFromPage("cart-quantity", { id: "123", quantity: 0 }), null);
+  assert.equal(count, 1);
 });
 
 test("checkout can bind and verify a non-default saved address from the next page", async t => {

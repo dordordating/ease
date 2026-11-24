@@ -73,7 +73,14 @@ export const shoppingMessages = {
     shoppingTomanPrice: "{amount} toman",
     shoppingTarget: "Up to {price}",
     shoppingTargetDiscount: "At least {discount} off",
-    shoppingNotification: "Your watch conditions are met. Product price {price}."
+    shoppingNotification: "Your watch conditions are met. Product price {price}.",
+    shoppingProductOption: "Color or model",
+    shoppingAnyProductOption: "Any color or model",
+    shoppingQuantity: "Quantity",
+    shoppingQuantityBadge: "Qty {count}",
+    shoppingInvalidQuantity: "Enter a whole quantity of at least one.",
+    shoppingWaitingQuantity: "Waiting for the requested quantity",
+    shoppingPurchaseRetry: "Recheck and continue checkout"
   },
   fa: {
     shopping: "دستیار خرید",
@@ -149,7 +156,14 @@ export const shoppingMessages = {
     shoppingTomanPrice: "{amount} تومان",
     shoppingTarget: "تا {price}",
     shoppingTargetDiscount: "حداقل {discount} تخفیف",
-    shoppingNotification: "شرط‌های خرید برقرار شد. قیمت کالا {price}."
+    shoppingNotification: "شرط‌های خرید برقرار شد. قیمت کالا {price}.",
+    shoppingProductOption: "رنگ یا مدل",
+    shoppingAnyProductOption: "هر رنگ یا مدل",
+    shoppingQuantity: "تعداد کالا",
+    shoppingQuantityBadge: "تعداد {count}",
+    shoppingInvalidQuantity: "تعداد کالا را به‌صورت عدد صحیح و حداقل یک وارد کنید.",
+    shoppingWaitingQuantity: "در انتظار موجودی به تعداد درخواستی",
+    shoppingPurchaseRetry: "بررسی و ادامهٔ خرید"
   },
   es: {
     shopping: "Asistente de compras",
@@ -225,7 +239,14 @@ export const shoppingMessages = {
     shoppingTomanPrice: "{amount} tom.",
     shoppingTarget: "Hasta {price}",
     shoppingTargetDiscount: "Mínimo {discount} de descuento",
-    shoppingNotification: "Se cumplieron las condiciones. Precio del producto {price}."
+    shoppingNotification: "Se cumplieron las condiciones. Precio del producto {price}.",
+    shoppingProductOption: "Color o modelo",
+    shoppingAnyProductOption: "Cualquier color o modelo",
+    shoppingQuantity: "Cantidad",
+    shoppingQuantityBadge: "Cant. {count}",
+    shoppingInvalidQuantity: "Introduce una cantidad entera de al menos uno.",
+    shoppingWaitingQuantity: "Esperando la cantidad solicitada",
+    shoppingPurchaseRetry: "Volver a comprobar y seguir con la compra"
   },
   fr: {
     shopping: "Assistant d’achat",
@@ -301,7 +322,14 @@ export const shoppingMessages = {
     shoppingTomanPrice: "{amount} tomans",
     shoppingTarget: "Jusqu’à {price}",
     shoppingTargetDiscount: "Au moins {discount} de remise",
-    shoppingNotification: "Vos conditions sont remplies. Prix du produit {price}."
+    shoppingNotification: "Vos conditions sont remplies. Prix du produit {price}.",
+    shoppingProductOption: "Couleur ou modèle",
+    shoppingAnyProductOption: "Toutes les couleurs et tous les modèles",
+    shoppingQuantity: "Quantité",
+    shoppingQuantityBadge: "Qté {count}",
+    shoppingInvalidQuantity: "Saisissez une quantité entière supérieure ou égale à un.",
+    shoppingWaitingQuantity: "En attente de la quantité demandée",
+    shoppingPurchaseRetry: "Vérifier et reprendre l’achat"
   },
   "pt-BR": {
     shopping: "Assistente de compras",
@@ -377,7 +405,14 @@ export const shoppingMessages = {
     shoppingTomanPrice: "{amount} tomans",
     shoppingTarget: "Até {price}",
     shoppingTargetDiscount: "Pelo menos {discount} de desconto",
-    shoppingNotification: "As condições foram atendidas. Preço do produto {price}."
+    shoppingNotification: "As condições foram atendidas. Preço do produto {price}.",
+    shoppingProductOption: "Cor ou modelo",
+    shoppingAnyProductOption: "Qualquer cor ou modelo",
+    shoppingQuantity: "Quantidade",
+    shoppingQuantityBadge: "Qtd. {count}",
+    shoppingInvalidQuantity: "Informe uma quantidade inteira de pelo menos uma unidade.",
+    shoppingWaitingQuantity: "Aguardando a quantidade solicitada",
+    shoppingPurchaseRetry: "Verificar e continuar a compra"
   },
   ar: {
     shopping: "مساعد التسوق",
@@ -453,7 +488,14 @@ export const shoppingMessages = {
     shoppingTomanPrice: "{amount} تومان",
     shoppingTarget: "حتى {price}",
     shoppingTargetDiscount: "خصم {discount} على الأقل",
-    shoppingNotification: "تحققت شروط المتابعة. سعر المنتج {price}."
+    shoppingNotification: "تحققت شروط المتابعة. سعر المنتج {price}.",
+    shoppingProductOption: "اللون أو الطراز",
+    shoppingAnyProductOption: "أي لون أو طراز",
+    shoppingQuantity: "الكمية",
+    shoppingQuantityBadge: "الكمية {count}",
+    shoppingInvalidQuantity: "أدخل كمية صحيحة لا تقل عن واحد.",
+    shoppingWaitingQuantity: "بانتظار توفر الكمية المطلوبة",
+    shoppingPurchaseRetry: "إعادة التحقق ومتابعة الشراء"
   },
   de: {
     shopping: "Einkaufsassistent",
@@ -529,7 +571,14 @@ export const shoppingMessages = {
     shoppingTomanPrice: "{amount} Toman",
     shoppingTarget: "Bis {price}",
     shoppingTargetDiscount: "Mindestens {discount} Rabatt",
-    shoppingNotification: "Die Bedingungen sind erfüllt. Produktpreis {price}."
+    shoppingNotification: "Die Bedingungen sind erfüllt. Produktpreis {price}.",
+    shoppingProductOption: "Farbe oder Modell",
+    shoppingAnyProductOption: "Beliebige Farbe oder beliebiges Modell",
+    shoppingQuantity: "Menge",
+    shoppingQuantityBadge: "Menge {count}",
+    shoppingInvalidQuantity: "Gib eine ganze Menge von mindestens eins ein.",
+    shoppingWaitingQuantity: "Warten auf die gewünschte Menge",
+    shoppingPurchaseRetry: "Erneut prüfen und Kauf fortsetzen"
   },
   ja: {
     shopping: "買い物アシスタント",
@@ -605,6 +654,13 @@ export const shoppingMessages = {
     shoppingTomanPrice: "{amount} トマン",
     shoppingTarget: "上限 {price}",
     shoppingTargetDiscount: "{discount} 以上の割引",
-    shoppingNotification: "追跡条件を満たしました。商品価格 {price}。"
+    shoppingNotification: "追跡条件を満たしました。商品価格 {price}。",
+    shoppingProductOption: "色またはモデル",
+    shoppingAnyProductOption: "すべての色とモデル",
+    shoppingQuantity: "数量",
+    shoppingQuantityBadge: "数量 {count}",
+    shoppingInvalidQuantity: "1 以上の整数を入力してください。",
+    shoppingWaitingQuantity: "希望数量の入荷待ち",
+    shoppingPurchaseRetry: "再確認して購入を続ける"
   }
 };
