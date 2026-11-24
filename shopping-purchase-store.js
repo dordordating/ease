@@ -30,6 +30,14 @@ export function purchaseJobApplies(watch, job, policy) {
   return job?.rule === shoppingWatchKey(watch) && (job.mode === "prepare" || JSON.stringify(job.policy) === JSON.stringify(policy));
 }
 
+export function isShoppingCreditMode(mode) {
+  return mode === "credit-one" || mode === "credit-four";
+}
+
+export function isShoppingPaymentMode(mode) {
+  return mode === "wallet" || isShoppingCreditMode(mode);
+}
+
 export function canRetryShoppingPurchase(watch, job, state) {
   return job?.status === "review" && !state.payment && purchaseJobApplies(watch, job, state.policy);
 }
@@ -40,7 +48,7 @@ export function shoppingPurchaseStatus(watch, job, policy) {
   if (job.status === "submitting" || job.status === "running") return "shoppingPurchaseWorking";
   if (job.status === "paid") return "shoppingPurchasePaid";
   if (job.status === "unknown") return "shoppingPurchaseUnknown";
-  if (job.status === "prepared") return "shoppingPurchasePrepared";
+  if (job.status === "prepared") return isShoppingCreditMode(job.mode) ? "shoppingPurchaseCreditPrepared" : "shoppingPurchasePrepared";
   if (job.status === "review") return job.reason ?? "shoppingPurchaseReview";
   return job.status === "armed" ? "shoppingPurchaseArmed" : null;
 }

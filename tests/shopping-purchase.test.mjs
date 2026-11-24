@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  checkoutInvoice, previewDigikalaInvoice, readCheckoutCart, readDigikalaDeliveryChoices, readDigikalaBuyer, selectDigikalaDeliveryAddress
+  checkoutInvoice, invoiceAddressIssue, previewDigikalaInvoice, readCheckoutCart, readDigikalaDeliveryChoices,
+  readDigikalaBuyer, selectDigikalaDeliveryAddress
 } from "../shopping-checkout-digikala.js";
 import { readDigikalaFromPage } from "../shopping-digikala-session.js";
 import { quoteForWatch, readDigikalaProduct } from "../shopping-digikala.js";
@@ -128,12 +129,12 @@ test("wallet invoices require a consistent cart and identifiable shipping", () =
     variant: { ...row.variant, price: { selling_price: 850_000 } } };
   assert.equal(readCheckoutCart({ cart: { ...raw, total_quantity: 2 }, cart_items: [line] }).items[0].price, 850_000);
   assert.equal(readCheckoutCart({ cart: raw, cart_items: [] }), null);
-  const invoice = checkoutInvoice(data, true);
+  const invoice = checkoutInvoice(data, "wallet");
   assert.equal(invoice.total, 980_000);
   assert.equal(invoice.shipping, 140_000);
-  assert.equal(invoice.walletBalance, 1_000_000);
-  assert.deepEqual(invoice.addressIds, ["28"]);
-  assert.equal(checkoutInvoice({ ...data, cart_shipments: [{ is_cash_on_delivery: true }] }, true).shipping, null);
+  assert.equal(invoice.payment.balance, 1_000_000);
+  assert.equal(invoice.destinations[0].id, "28");
+  assert.equal(checkoutInvoice({ ...data, cart_shipments: [{ is_cash_on_delivery: true }] }, "wallet").shipping, null);
 });
 
 test("the current payment layout can provide only shipment items and a wallet price type", () => {
@@ -150,27 +151,50 @@ test("the current payment layout can provide only shipment items and a wallet pr
     ] }],
     price_type_cart: { wallet: { payable_price: "6125600" } }
   };
-  const invoice = checkoutInvoice(payment, true);
+  const invoice = checkoutInvoice(payment, "wallet");
   assert.equal(invoice.total, 6_125_600);
   assert.equal(invoice.shipping, 2_500_000);
-  assert.equal(invoice.walletBalance, 10_000_000);
-  assert.equal(invoice.walletSelectable, true);
-  assert.equal(invoice.walletButton, "پرداخت با کیف پول");
+  assert.equal(invoice.payment.balance, 10_000_000);
+  assert.equal(invoice.payment.selectable, true);
+  assert.equal(invoice.payment.button, "پرداخت با کیف پول");
   const verified = cart({ ...item, quantity: 4 });
   assert.ok(checkoutCartsMatch(verified, invoice.cart));
   assert.equal(invoice.cart.extraServices, false);
-  assert.equal(checkoutInvoice({ ...payment, cart: { ...payment.cart, id: "another-cart" } }, true), null);
-  assert.equal(checkoutInvoice({ ...payment, cart_shipments: [{ ...payment.cart_shipments[0], is_drop_off: true }] }, true).addressIds[0], null);
+  assert.equal(checkoutInvoice({ ...payment, cart: { ...payment.cart, id: "another-cart" } }, "wallet"), null);
+  const pickup = checkoutInvoice({ ...payment, cart_shipments: [{ ...payment.cart_shipments[0], is_drop_off: true }] }, "wallet");
+  assert.equal(invoiceAddressIssue(pickup, { addressId: "28", delivery: {} }), "shoppingPurchaseAddressMismatch");
   assert.equal(checkoutCartsMatch(verified, cart({ ...item, quantity: 1 })), false);
   assert.equal(checkoutCartsMatch(verified, cart({ ...item, quantity: 4, sellerId: "99" })), false);
+});
+
+test("credit is recognized only under DigiPay and preserves the full order amount for budget checks", () => {
+  const row = { variant_id: 216, cart_id: "cart-1", quantity: 1 };
+  const one = { title: "یک قسطه", is_clickable: true, source_id: 32, price_type: "one" };
+  const four = { title: "۴ قسطه", is_clickable: false, source_id: 33, price_type: "four", info: { title: "Unavailable" } };
+  const other = { ...four, is_clickable: true, source_id: 99, info: null };
+  const group = { title: "اعتباری دیجی‌پی", sources: [one, four] };
+  const data = {
+    cart: { id: "cart-1", payable_price: 990_000, shipping_cost: 140_000 },
+    cart_shipments: [{ cart_items: [row] }],
+    payment_types: [{ title: "سایر اقساطی و اعتباری‌ها", sources: [other] }, group],
+    price_type_cart: { one: { payable_price: 900_000 } }
+  };
+  const invoice = checkoutInvoice(data, "credit-one");
+  assert.deepEqual(invoice.payment.identity, [null, 32, "one"]);
+  assert.equal(invoice.payment.selectable, true);
+  assert.equal(invoice.total, 900_000);
+  assert.equal(checkoutCostIssue(invoice.orderCost, 950_000, policy("review")), "shoppingPurchaseOverLimit");
+  assert.equal(checkoutInvoice(data, "credit-four").payment.selectable, false);
+  assert.equal(checkoutInvoice({ ...data, payment_types: [data.payment_types[0]] }, "credit-four").payment, null);
+  assert.equal(checkoutInvoice({ ...data, payment_types: [{ ...group, sources: [one, one] }] }, "credit-one").payment, null);
 });
 
 test("the address preview reads a matching checkout without changing the cart or shipping address", async t => {
   const row = { variant_id: 216, product: { id: 123 }, variant: { seller: { id: 441 } },
     quantity: 1, price: { selling_price: 850_000 } };
-  const shippingAddress = { id: 28, name: "Work", address: "Second street" };
+  const shippingAddress = { id: 28, name: "Work", address: "خيابان دوم، پلاک ۲", city: "تهران", postCode: "۱۲۰۳۴۵۶۷۸۹" };
   const totals = { id: "cart-1", total_quantity: 1, payable_price: 990_000, shipping_cost: 140_000 };
-  let invoiceAddress = 28;
+  let destinations = [{ address_id: 28 }];
   const calls = [];
   globalThis.chrome = {
     tabs: { query: async () => [{ id: 35, status: "complete", url: "https://www.digikala.com/checkout/payment/" }] },
@@ -181,7 +205,7 @@ test("the address preview reads a matching checkout without changing the cart or
         addresses: { addresses: { items: [shippingAddress] } },
         "default-address": shippingAddress,
         cart: { cart: totals, cart_items: [row] },
-        invoice: { cart: totals, cart_shipments: [{ address_id: invoiceAddress, cart_items: [row] }] }
+        invoice: { cart: totals, cart_items: [row], cart_shipments: destinations }
       };
       calls.push(kind);
       assert.ok(Object.hasOwn(data, kind));
@@ -193,7 +217,16 @@ test("the address preview reads a matching checkout without changing the cart or
   const draft = { ...offer, productId: "123", quantity: 1,
     address: { id: "28", accountId: buyer.accountId, key: buyer.addressKey } };
   assert.deepEqual(await previewDigikalaInvoice(draft), { total: 990_000, shipping: 140_000 });
-  invoiceAddress = 77;
+  const alias = { id: "shipment-77", address: "تهران، خیابان دوم پلاک 2", postal_code: "1203456789" };
+  destinations = [{ address: alias }];
+  assert.deepEqual(await previewDigikalaInvoice(draft), { total: 990_000, shipping: 140_000 });
+  for (const address of [{ ...alias, postal_code: "1203456889" }, { ...alias, address: "خیابان سوم" }]) {
+    destinations = [{ address }, { address_id: 28 }];
+    assert.equal(await previewDigikalaInvoice(draft), null);
+  }
+  destinations = [{}];
+  assert.equal(await previewDigikalaInvoice(draft), null);
+  destinations = [{ address_id: 77 }];
   assert.equal(await previewDigikalaInvoice(draft), null);
   assert.ok(calls.includes("cart") && calls.includes("invoice"));
 });

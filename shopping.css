@@ -426,8 +426,8 @@
   accent-color: var(--accent);
 }
 
-.shopping-wallet-fields, .shopping-payment-review { display: grid; gap: 7px; }
-.shopping-wallet-fields[hidden] { display: none; }
+.shopping-payment-fields, .shopping-payment-review { display: grid; gap: 7px; }
+.shopping-payment-fields[hidden], .shopping-purchase-consent[hidden] { display: none; }
 
 .shopping-delivery-address {
   display: grid;

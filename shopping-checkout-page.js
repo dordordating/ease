@@ -8,13 +8,26 @@ export function digikalaCheckoutControl(intent, expected = {}) {
   const control = name => [...document.querySelectorAll(`button[data-cro-id="${name}"], dds-button[data-cro-id="${name}"]`)].find(usable);
   const dialogs = [...document.querySelectorAll('dialog[open], [role="dialog"][aria-modal="true"]')].filter(visible);
   const normalize = value => (value ?? "").replace(/[\s\p{Cf}\p{M}]/gu, "").replace(/ي/gu, "ی").replace(/ك/gu, "ک");
+  const canonical = value => normalize((value ?? "").normalize("NFKC").toLowerCase()).replace(/\p{P}/gu, "")
+    .replace(/[٠-٩۰-۹]/gu, digit => String(digit.codePointAt(0) & 15));
 
   if (intent.startsWith("shipping")) {
     if (path !== "/checkout/shipping") return null;
     const next = control("shipping-continue");
     if (next && !dialogs.length) {
+      let result = "continue";
+      if (expected.addressLabels?.length) {
+        const heading = canonical("ارسال به آدرس انتخاب شده");
+        const addresses = [...document.querySelectorAll("div")].filter(label => !label.children.length && visible(label)
+          && canonical(label.textContent) === heading)
+          .map(label => label.parentElement.nextElementSibling).filter(visible)
+          .map(address => canonical(address.textContent)).filter(Boolean);
+        if (addresses.includes(canonical("آدرس تحویل را انتخاب کنید"))) return "waiting";
+        if (addresses.some(address => !expected.addressLabels.includes(address))) return "address-mismatch";
+        if (addresses.length) result = "address-verified";
+      }
       if (intent === "shipping-continue") next.click();
-      return "continue";
+      return result;
     }
     if (dialogs.length > 1 || (dialogs.length && !normalize(dialogs[0].textContent).includes("انتخاببازهزمانی"))) return "review";
     const scope = dialogs.length === 1 ? dialogs[0] : document;
@@ -37,28 +50,38 @@ export function digikalaCheckoutControl(intent, expected = {}) {
   }
 
   if (path !== "/checkout/payment" || dialogs.length) return null;
-  const walletName = "کیفپولدیجیپی";
+  const payment = expected.payment;
+  const wallet = payment?.mode === "wallet";
+  const credit = payment?.mode === "credit-one" || payment?.mode === "credit-four";
+  if (!payment?.title || (!wallet && !credit) || (credit && intent === "pay")) return null;
+  const title = canonical(payment.title);
+  if (wallet && title !== "کیفپولدیجیپی") return null;
+  if (credit && payment.group !== "اعتباریدیجیپی") return null;
   const modernRows = [...document.querySelectorAll("dds-selectable-row[aria-label]")].filter(visible);
-  const rows = [...modernRows, ...document.querySelectorAll('label[data-cro-id="payment-pay-by-wallet"]')];
-  const options = rows.filter(row => usable(row) && (normalize(row.getAttribute("aria-label")) === walletName
-    || [...row.querySelectorAll("p")].some(label => normalize(label.textContent) === walletName)));
+  const options = modernRows.filter(row => usable(row) && canonical(row.getAttribute("aria-label")) === title
+    && (!credit || canonical(row.closest("section")?.querySelector(':scope > dds-title-row [slot="title"]')?.textContent) === payment.group));
+  if (wallet) {
+    for (const row of document.querySelectorAll('label[data-cro-id="payment-pay-by-wallet"]')) {
+      if (usable(row) && [...row.querySelectorAll("p")].some(label => canonical(label.textContent) === title)) options.push(row);
+    }
+  }
   if (options.length !== 1) return null;
-  const [wallet] = options;
-  const modern = wallet.matches("dds-selectable-row");
-  const radio = wallet.querySelector('input[type="radio"]');
+  const [option] = options;
+  const modern = option.matches("dds-selectable-row");
+  const radio = option.querySelector('input[type="radio"]');
   if (!modern && (!radio || radio.disabled)) return null;
   const rowSelected = row => row.selected === true || (row.hasAttribute("selected") && row.getAttribute("selected") !== "false")
     || row.getAttribute("aria-pressed") === "true" || row.getAttribute("aria-selected") === "true";
   // The modern card contains a read-only radio. Its native handler runs on the card itself.
-  const selected = modern ? rowSelected(wallet) && !modernRows.some(row => row !== wallet && rowSelected(row)) : radio.checked;
-  if (intent === "select-wallet") {
-    if (!selected) (modern ? wallet : radio).click();
+  const selected = modern ? rowSelected(option) && !modernRows.some(row => row !== option && rowSelected(row)) : radio.checked;
+  if (intent === "select-payment") {
+    if (!selected) (modern ? option : radio).click();
     return { selected };
   }
-  if (intent === "wallet-selected") return selected ? { selected } : null;
+  if (intent === "payment-selected") return selected ? { selected } : null;
   const pay = control("payment-final-pay");
   if (!selected || !pay) return null;
-  if (expected.walletButton && normalize(pay.textContent) !== normalize(expected.walletButton)) return null;
+  if (payment.button && normalize(pay.textContent) !== normalize(payment.button)) return null;
 
   function parseToman(value) {
     const digits = normalize(value).replace(/[٠-٩۰-۹]/gu, digit => String(digit.codePointAt(0) & 15))

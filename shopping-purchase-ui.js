@@ -1,7 +1,11 @@
 import { digikalaAddressesUrl, digikalaOrdersUrl } from "./shopping-checkout-digikala.js";
+import { isShoppingCreditMode, isShoppingPaymentMode } from "./shopping-purchase-store.js";
 import { digikalaPrice } from "./shopping-store.js";
 
-const modes = { notify: "shoppingPurchaseNotifyMode", prepare: "shoppingPurchasePrepareMode", wallet: "shoppingPurchaseWalletMode" };
+const modes = {
+  notify: "shoppingPurchaseNotifyMode", prepare: "shoppingPurchasePrepareMode", wallet: "shoppingPurchaseWalletMode",
+  "credit-one": "shoppingPurchaseCreditOne", "credit-four": "shoppingPurchaseCreditFour"
+};
 const carts = { review: "shoppingPurchaseCartReview", include: "shoppingPurchaseCartInclude" };
 const deliveries = { include: "shoppingPurchaseDeliveryInclude", separate: "shoppingPurchaseDeliverySeparate", max: "shoppingPurchaseDeliveryMax" };
 
@@ -54,7 +58,7 @@ function deliveryAddressField({ node, button, t, request }, initialId, onChange,
 
   function render() {
     const choices = response?.choices ?? [];
-    if (!id && !initialId && mode === "wallet" && choices.some(choice => choice.id === response?.defaultId)) {
+    if (!id && !initialId && isShoppingPaymentMode(mode) && choices.some(choice => choice.id === response?.defaultId)) {
       id = response.defaultId;
     }
     const selected = choices.find(choice => choice.id === id);
@@ -146,7 +150,7 @@ function currentInvoicePreview({ node, t, priceText, request }) {
 
   return {
     root,
-    update(offer, address, wallet) {
+    update(offer, address, method) {
       clearTimeout(timeout);
       const stamp = ++version;
       const subtotal = digikalaPrice(offer?.price * offer?.quantity);
@@ -156,7 +160,7 @@ function currentInvoicePreview({ node, t, priceText, request }) {
       if (!offer.variantId || !offer.sellerId) return;
       timeout = setTimeout(async () => {
         if (!root.isConnected || !root.closest("dialog")?.open) return;
-        const result = await request("invoice-preview", { input: { ...offer, address, wallet } });
+        const result = await request("invoice-preview", { input: { ...offer, address, method } });
         if (stamp === version && root.isConnected && result?.quote) show(subtotal, result.quote);
       }, 180);
     }
@@ -168,9 +172,9 @@ export function purchaseEditor({ node, button, t, numberField, priceText, readAm
   root.open = Boolean(job);
   root.append(node("summary", "", t("shoppingPurchaseAction")));
   const fields = node("div", "snippet-advanced-fields");
-  const wallet = node("div", "shopping-wallet-fields");
+  const paymentFields = node("div", "shopping-payment-fields");
   const addressNote = node("small", "shopping-field-hint", t("shoppingPurchaseAddressHint"));
-  const orderLimit = numberField(wallet, t("shoppingPurchaseBudget"), job?.limit ? job.limit / 10 : null);
+  const orderLimit = numberField(paymentFields, t("shoppingPurchaseBudget"), job?.limit ? job.limit / 10 : null);
   orderLimit.placeholder = "";
   const terms = node("ul", "shopping-purchase-terms");
   terms.append(node("li", "", t(carts[state.policy.cart])));
@@ -181,23 +185,26 @@ export function purchaseEditor({ node, button, t, numberField, priceText, readAm
   orderLimit.addEventListener("input", () => { consent.input.checked = false; });
   const quote = currentInvoicePreview({ node, t, priceText, request });
   let offer;
-  const updateQuote = () => quote.update(offer, mode.read() === "notify" ? null : address.selection(), mode.read() === "wallet");
+  const updateQuote = () => quote.update(offer, mode.read() === "notify" ? null : address.selection(), mode.read());
   const address = deliveryAddressField({ node, button, t, request }, job?.buyer?.addressId,
     () => { consent.input.checked = false; }, updateQuote);
-  wallet.append(terms, node("small", "shopping-field-hint", t("shoppingPurchaseWalletHint")), consent.label);
+  const walletHint = node("small", "shopping-field-hint", t("shoppingPurchaseWalletHint"));
+  paymentFields.append(terms, walletHint, consent.label);
   const hint = node("small", "shopping-field-hint");
   const mode = choices(node, t, "shoppingPurchaseAction", "shopping-purchase-mode", modes, job?.mode ?? "notify", update);
   mode.group.classList.add("shopping-purchase-modes");
   function update(value) {
-    wallet.hidden = value !== "wallet";
-    hint.hidden = value !== "prepare";
-    hint.textContent = value === "prepare" ? t("shoppingPurchasePrepareHint") : "";
+    paymentFields.hidden = !isShoppingPaymentMode(value);
+    walletHint.hidden = consent.label.hidden = value !== "wallet";
+    const hintKey = value === "prepare" ? "shoppingPurchasePrepareHint" : isShoppingCreditMode(value) ? "shoppingPurchaseCreditHint" : null;
+    hint.hidden = !hintKey;
+    hint.textContent = hintKey ? t(hintKey) : "";
     consent.input.checked = false;
     addressNote.hidden = value === "notify";
     address.update(value);
   }
   update(mode.read());
-  fields.append(mode.group, hint, address.root, quote.root, addressNote, wallet);
+  fields.append(mode.group, hint, address.root, quote.root, addressNote, paymentFields);
   root.append(fields);
   return {
     root,
@@ -207,14 +214,14 @@ export function purchaseEditor({ node, button, t, numberField, priceText, readAm
       const value = mode.read();
       const payload = { mode: value };
       if (value !== "notify") payload.address = address.selection();
-      if (value === "wallet") {
+      if (isShoppingPaymentMode(value)) {
         payload.limit = readAmount(orderLimit);
         if (!digikalaPrice(payload.limit)) { orderLimit.focus(); return { error: "shoppingPurchaseInvalidBudget" }; }
-        if (!payload.address && (!job?.buyer || consent.input.checked)) {
+        if (!payload.address && (!job?.buyer || job.mode !== value || consent.input.checked)) {
           address.focus();
           return { error: address.error() };
         }
-        payload.confirm = consent.input.checked;
+        if (value === "wallet") payload.confirm = consent.input.checked;
         payload.policy = state.policy;
       }
       return { payload };
