@@ -27,6 +27,7 @@ const paths = {
   settings: '<circle cx="12" cy="12" r="3"/><path d="m9 3-.8 2.6-2 1.2-2.7-.5L2 9l1.8 2v2L2 15l1.5 2.7 2.7-.5 2 1.2L9 21h6l.8-2.6 2-1.2 2.7.5L22 15l-1.8-2v-2L22 9l-1.5-2.7-2.7.5-2-1.2L15 3Z"/>',
   panel: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16m3-11v6"/>',
   spaces: '<path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v1"/><rect x="6" y="7" width="16" height="14" rx="2.5"/><path d="M6 11h16m-12 4h4m-4 3h7"/>',
+  shopping: '<path d="M3 4h2.6l2.2 10.2a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.55L21 8H6.5"/><circle cx="10" cy="20" r="1"/><circle cx="18" cy="20" r="1"/>',
   "open-window": '<path d="M13 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8M14 3h7v7m0-7-9 9"/>',
   search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',

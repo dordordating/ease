@@ -26,6 +26,8 @@ import { registerFlashcardReminderHandlers } from "./flashcard-reminders.js";
 import { registerTodoHandlers } from "./todo-background.js";
 import { forgetSpaceWindow, registerSpaceHandlers } from "./spaces-browser.js";
 import { registerSpaceOmnibox } from "./spaces-omnibox.js";
+import { registerShoppingHandlers } from "./shopping-background.js";
+import { updateShopping } from "./shopping-store.js";
 import { updateSpaces } from "./spaces-store.js";
 import { taskAction } from "./todo-store.js";
 import { registerTranslatorSelectionHandlers } from "./translator-selection.js";
@@ -58,6 +60,7 @@ registerFlashcardReminderHandlers();
 registerTodoHandlers(queueWorkspace);
 registerSpaceHandlers(queueWorkspace);
 registerSpaceOmnibox();
+registerShoppingHandlers(queueWorkspace, fromWorkspacePage);
 registerMarketAlertHandlers();
 registerMailHandlers();
 registerWorkspaceSyncHandlers(queueWorkspace);
@@ -380,6 +383,10 @@ async function updateWorkspace(workspace, action, data, transaction) {
     case "space-add-links":
     case "space-favorite":
       return updateSpaces(workspace, action, data);
+    case "shopping-save":
+    case "shopping-pause":
+    case "shopping-remove":
+      return updateShopping(workspace, action, data);
     case "todo-preferences":
     case "save-todo-label":
     case "remove-todo-label":

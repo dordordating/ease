@@ -1,4 +1,5 @@
 import { homeMessages } from "./home-locales.js";
+import { shoppingMessages } from "./shopping-locales.js";
 
 export const localeNames = Object.freeze({
   en: "English",
@@ -20,7 +21,9 @@ export function translate(locale, key, values = {}) {
   const home = homeMessages[locale] ?? homeMessages.en;
   const fallback = Object.hasOwn(messages.en, key) ? messages.en[key]
     : Object.hasOwn(homeMessages.en, key) ? homeMessages.en[key] : key;
-  const message = Object.hasOwn(catalog, key) ? catalog[key] : Object.hasOwn(home, key) ? home[key] : fallback;
+  const shopping = shoppingMessages[locale] ?? shoppingMessages.en;
+  const message = Object.hasOwn(catalog, key) ? catalog[key]
+    : Object.hasOwn(home, key) ? home[key] : Object.hasOwn(shopping, key) ? shopping[key] : fallback;
   return message.replace(/\{(\w+)\}/g, (placeholder, name) => (
     Object.hasOwn(values, name) ? String(values[name]) : placeholder
   ));

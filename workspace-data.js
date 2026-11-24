@@ -2,6 +2,7 @@ import { defaultFlashcards } from "./flashcard-store.js";
 import { defaultMarkets } from "./markets-store.js";
 import { defaultTodo } from "./todo-store.js";
 import { defaultHome, normalizeHome } from "./home-store.js";
+import { defaultShopping } from "./shopping-store.js";
 
 export const storageKey = "easeWorkspace";
 
@@ -13,7 +14,8 @@ export const modules = [
   { id: "translate", icon: "translate", color: "#69d5fa", released: true },
   { id: "flashcards", icon: "flashcards", color: "#82b9ac", released: true },
   { id: "todo", icon: "todo", color: "#a0c98b", released: true },
-  { id: "spaces", icon: "spaces", color: "#a999f5", released: true }
+  { id: "spaces", icon: "spaces", color: "#a999f5", released: true },
+  { id: "shopping", icon: "shopping", color: "#69c49b", released: true }
 ];
 
 const releasedModulesById = new Map(modules.filter(({ released }) => released).map((module) => [module.id, module]));
@@ -90,6 +92,7 @@ export const defaultWorkspace = {
   markets: defaultMarkets,
   todo: defaultTodo,
   spaces: [],
+  shopping: defaultShopping,
   events: [],
   holidays: []
 };

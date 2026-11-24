@@ -24,6 +24,9 @@ import { selectableLanguage, translationLanguagePreferences, translatorLanguages
 import { takeTranslatorSelection, translatorSelectionKey } from "./translator-selection.js";
 import { renderTranslatorSites } from "./translator-sites-ui.js";
 import { readTranslationHistory, translationHistoryKey, translationHistoryMessage } from "./translation-history-store.js";
+import { renderShopping } from "./shopping.js";
+import { digikalaProductUrl, restoreShopping, shoppingObservationKey, shoppingStatus } from "./shopping-store.js";
+import { workspaceOwnerKey } from "./workspace-accounts.js";
 import { renderTranslationHistory } from "./translation-history-view.js";
 import { clipboardHistoryKey, clipboardHistoryMessage, loadClipboardHistory } from "./clipboard-history-store.js";
 import { initClipboardHistoryView } from "./clipboard-history-view.js";
@@ -105,6 +108,10 @@ const collapsedTodo = new Set();
 let marketsController;
 let marketsLocale;
 let marketAlertState = {};
+let shoppingController;
+let shoppingLocale;
+let shoppingOwner = null;
+let shoppingObservations = {};
 let mailAccounts = [];
 let mailController;
 let mailLocale;
@@ -319,6 +326,28 @@ function updateModuleBadge(tab, count, numbers) {
   }
 }
 
+function shoppingViewState() {
+  return { watches: restoreShopping(workspace.shopping) ?? [], observations: shoppingObservations };
+}
+
+function updateShoppingBadge(tab) {
+  if (!tab) return;
+  const { watches, observations } = shoppingViewState();
+  const ready = watches.filter(watch => shoppingStatus(watch, observations[watch.id]) === "shoppingReady").length;
+  updateModuleBadge(tab, ready, new Intl.NumberFormat(workspace.locale, { useGrouping: false }));
+}
+
+async function readShoppingObservations(owner) {
+  const key = shoppingObservationKey(owner);
+  return (await chrome.storage.local.get(key))[key] ?? {};
+}
+
+function refreshShoppingView() {
+  updateShoppingBadge(document.getElementById("tab-shopping"));
+  if (query) render();
+  else shoppingController?.update(shoppingViewState());
+}
+
 function renderTabs() {
   const focused = tabBar.contains(document.activeElement) ? document.activeElement.id : null;
   clearModuleDrag();
@@ -344,6 +373,7 @@ function renderTabs() {
     if (displayed.length > 1 && displayed.includes(module)) bindModuleReorder(item, module.id);
     if (module.id === "calendar") updateCalendarTab(item);
     if (module.id === "mail") updateMailBadge(item);
+    if (module.id === "shopping") updateShoppingBadge(item);
     return item;
   }));
   if (focused) document.getElementById(focused)?.focus({ preventScroll: true });
@@ -824,7 +854,7 @@ function openWorkspaceMenu(anchor, point, label, populate) {
       }
     });
     item.setAttribute("role", "menuitem");
-    if (["deleteFolder", "clipboardHistoryClear", "mailDelete", "spaceDelete"].includes(key)) item.dataset.action = "delete";
+    if (["deleteFolder", "clipboardHistoryClear", "mailDelete", "spaceDelete", "shoppingRemove"].includes(key)) item.dataset.action = "delete";
     group.append(item);
   }
 
@@ -1134,6 +1164,21 @@ const moduleSearchSources = {
     })) : []
   }),
   markets: marketSearchSource,
+  shopping: () => ({
+    label: "shopping",
+    entries: workspace.tabs.includes("shopping") ? shoppingViewState().watches.map(watch => {
+      const quote = shoppingObservations[watch.id]?.quote;
+      const title = quote?.title ?? watch.title;
+      const detail = watch.variantLabel || quote?.variantLabel;
+      return { id: `shopping-result-${watch.id}`, title, detail,
+        keywords: [title, detail, watch.title, `DKP-${watch.productId}`, "Digikala", "دیجی‌کالا"],
+        open() {
+          switchTo("shopping", false);
+          shoppingController?.focusWatch(watch.id);
+        }
+      };
+    }) : []
+  }),
   mail: () => ({
     label: "mail",
     entries: workspace.tabs.includes("mail") ? [...inboxMessages(mailAccounts), ...inboxMessages(mailAccounts, "sent")].map(message => ({
@@ -1338,6 +1383,10 @@ function render() {
     marketsController.update({ state: workspace.markets, alertState: marketAlertState });
     return;
   }
+  if (!query && activePage === "shopping" && shoppingController && shoppingLocale === dateLocale) {
+    shoppingController.update(shoppingViewState());
+    return;
+  }
   if (!query && activePage === "mail" && mailController && mailLocale === dateLocale && !pendingMailReply) {
     mailController.update(mailAccounts);
     return;
@@ -1362,6 +1411,8 @@ function render() {
   spacesController = undefined;
   marketsController?.dispose();
   marketsController = undefined;
+  shoppingController?.dispose();
+  shoppingController = undefined;
   mailController?.dispose();
   mailController = undefined;
   calendarController = undefined;
@@ -1539,6 +1590,24 @@ function render() {
       onWatchlistMenu: (anchor, label, populate) => bindWorkspaceMenu(anchor, (point) => openWorkspaceMenu(anchor, point, label, populate)),
       onAddAlert: createMarketAlert,
       onRemoveAlert: (id) => mutate("markets-remove-alert", { id })
+    });
+  } else if (activePage === "shopping") {
+    const refreshButton = button(t("shoppingRefresh"), "icon-button", { symbol: "refresh", iconOnly: true });
+    refreshButton.id = "shopping-refresh";
+    refreshButton.disabled = true;
+    const notifyButton = button(t("shoppingEnableNotifications"), "icon-button", { symbol: "bell", iconOnly: true });
+    notifyButton.id = "shopping-notifications";
+    notifyButton.hidden = true;
+    const actions = node("div", "module-title-actions");
+    actions.append(refreshButton, notifyButton);
+    section(t("shopping"), undefined, actions);
+    const body = node("section", "shopping-module");
+    view.append(body);
+    shoppingLocale = dateLocale;
+    shoppingController = renderShopping(body, {
+      ...shoppingViewState(), node, glyph, button, t, icon, locale: workspace.locale,
+      dateLocale, firstDay: workspace.calendar?.firstDay, editor, openEditor, reportError, showToast, mutate,
+      refreshButton, notifyButton, openMenu: (anchor, populate) => openWorkspaceMenu(anchor, undefined, t("shoppingActions"), populate)
     });
   } else if (activePage === "mail") {
     const mailSettings = button(t("mailAccounts"), "icon-button", { symbol: "mail-settings", iconOnly: true });
@@ -3261,6 +3330,22 @@ chrome.storage.onChanged.addListener((changes, area) => {
     marketAlertState = changes[marketAlertStateKey].newValue ?? {};
     marketsController?.update({ state: workspace.markets, alertState: marketAlertState });
   }
+  if (changes[workspaceOwnerKey]) {
+    shoppingOwner = changes[workspaceOwnerKey].newValue ?? null;
+    const owner = shoppingOwner;
+    shoppingObservations = {};
+    readShoppingObservations(owner).then(samples => {
+      if (owner === shoppingOwner) {
+        shoppingObservations = samples;
+        refreshShoppingView();
+      }
+    }).catch(() => {});
+  }
+  const shoppingChange = changes[shoppingObservationKey(shoppingOwner)];
+  if (shoppingChange) {
+    shoppingObservations = shoppingChange.newValue ?? {};
+    refreshShoppingView();
+  }
   if (changes[translationHistoryKey]) {
     translationHistory = changes[translationHistoryKey].newValue ?? { enabled: false, entries: [] };
     if (query || activePage === "translate") render();
@@ -3298,16 +3383,22 @@ if (inPanel) chrome.runtime.onMessage?.addListener((message, sender) => {
 });
 const initialTranslationSelection = await takeTranslatorSelection();
 if (initialTranslationSelection !== null) activePage = "translate";
-const [initialAccount, initialHistory, initialMarketAlerts, rememberedTab, savedCollapse] = await Promise.all([
+const [initialAccount, initialHistory, initialMarketAlerts, rememberedTab, savedCollapse, savedShopping] = await Promise.all([
   getGoogleAccount().catch(() => null), readTranslationHistory().catch(() => null), readMarketAlertState().catch(() => ({})),
   chrome.storage.local.get(lastWorkspaceTabKey).then(saved => saved[lastWorkspaceTabKey]).catch(() => undefined),
   chrome.storage.local.get(taskSections.map(collapsedTaskKey)).catch(() => ({})),
+  chrome.storage.local.get(workspaceOwnerKey).then(async result => {
+    const owner = result[workspaceOwnerKey] ?? null;
+    return { owner, observations: await readShoppingObservations(owner) };
+  }).catch(() => ({ owner: null, observations: {} })),
   refreshClipboardHistory()
 ]);
 for (const section of taskSections) if (savedCollapse[collapsedTaskKey(section)]) collapsedTodo.add(section);
 translatorAccountId = initialAccount?.id ?? null;
 if (initialHistory) translationHistory = initialHistory;
 marketAlertState = initialMarketAlerts;
+shoppingOwner = savedShopping.owner;
+shoppingObservations = savedShopping.observations;
 lastWorkspaceTab = rememberedTab ?? home.id;
 await refreshWorkspace(undefined, initialTranslationSelection === null ? lastWorkspaceTab : undefined);
 workspaceInitialized = true;
@@ -3321,6 +3412,13 @@ if (initialTranslationSelection !== null) {
   await focusQuickTask();
 } else if (workspaceRoute.get("open") === "todo" && savedTabAvailable("todo")) {
   switchTo("todo", false);
+} else if (workspaceRoute.get("open") === "shopping") {
+  switchTo(savedTabAvailable("shopping") ? "shopping" : "library", false);
+  const product = digikalaProductUrl(workspaceRoute.get("product"), workspaceRoute.get("variant"));
+  if (product) shoppingController?.fill(product);
+  if (workspaceRoute.has("watch")) shoppingController?.focusWatch(workspaceRoute.get("watch"));
+  const issue = workspaceRoute.get("shoppingIssue");
+  if (["shoppingConditionsChanged", "shoppingUnavailable", "shoppingConnect", "shoppingRuleMissing"].includes(issue)) reportError(issue);
 } else if (workspaceRoute.get("open") === home.id) {
   switchTo(home.id, false);
 } else if (workspaceRoute.get("open") === "spaces") {

@@ -4,6 +4,7 @@ import { getGoogleAccount, googleAccountStorageKey } from "./providers.js";
 import { vaultSessionStorageKey } from "./vault-session.js";
 import { defaultTodo, restoreTodo } from "./todo-store.js";
 import { restoreSpaces } from "./spaces-store.js";
+import { restoreShopping } from "./shopping-store.js";
 import { defaultHome, normalizeHome } from "./home-store.js";
 import { importedGuestWorkspace, legacyWorkspaceSyncStorageKey, workspaceStore } from "./workspace-accounts.js";
 import {
@@ -51,6 +52,7 @@ function portableWorkspace(workspace) {
   snapshot.todo = { ...tasks, ...(labels?.length ? { labels } : {}), ...(layout === "stacked" ? { layout } : {}) };
   if (!tasks.items.length && !tasks.dailyTime && !tasks.retentionDays && !labels?.length && layout !== "stacked") delete snapshot.todo;
   if (!snapshot.spaces.length) delete snapshot.spaces;
+  if (!snapshot.shopping.length) delete snapshot.shopping;
   if (snapshot.calendar.showTasks === true) {
     const { showTasks, ...calendar } = snapshot.calendar;
     snapshot.calendar = calendar;
@@ -100,8 +102,9 @@ function readSnapshot(value) {
     || value.holidays.some((day) => typeof day !== "string")) invalid();
   const todo = restoreTodo(value.todo);
   const spaces = restoreSpaces(value.spaces);
-  if (!todo || !spaces) invalid();
-  return portableWorkspace({ ...value, todo, spaces });
+  const shopping = restoreShopping(value.shopping);
+  if (!todo || !spaces || !shopping) invalid();
+  return portableWorkspace({ ...value, todo, spaces, shopping });
 }
 
 function localWorkspace(snapshot, current) {
@@ -112,7 +115,8 @@ function localWorkspace(snapshot, current) {
     return { ...folder, vault: { ...folder.vault, device: previous.device } };
   });
   const { inlineEnabled, inlineSites } = { ...defaultWorkspace.translator, ...current.translator };
-  return { ...snapshot, spaces: snapshot.spaces ?? [], todo: snapshot.todo ?? defaultTodo, home: normalizeHome(snapshot.home), folders,
+  return { ...snapshot, spaces: snapshot.spaces ?? [], shopping: snapshot.shopping ?? [],
+    todo: snapshot.todo ?? defaultTodo, home: normalizeHome(snapshot.home), folders,
     translator: { ...snapshot.translator, inlineEnabled, inlineSites } };
 }
 
